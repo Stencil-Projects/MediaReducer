@@ -304,6 +304,46 @@ for (const w of [320, 360, 390]) {
   }
   await ctx.close();
 }
+// ── A ghosted checkbox's label does not react to the pointer ────────────────
+// The Explorer under the Plex-only fixture has one of each: "Don't delete
+// unplayed movies" is live, and the Jellyfin favorites toggle is disabled
+// because Jellyfin isn't connected. The disabled one used to recolor on hover
+// anyway, which reads as clickable on a control that does nothing.
+{
+  const p = await b.newPage();
+  try {
+    await p.goto(BASE + '/explorer', { waitUntil: 'networkidle', timeout: 20000 });
+    const label = id => `label.filter-score-toggle-row[for="${id}"] .form-check-label`;
+    const colorOf = id => p.evaluate(s => getComputedStyle(document.querySelector(s)).color, label(id));
+
+    // Park the pointer away from both rows so neither starts out hovered.
+    await p.mouse.move(0, 0);
+    await p.waitForTimeout(250);
+    const restLive = await colorOf('c-unplayed');
+    const restDead = await colorOf('c-jf-fav');
+
+    await p.hover(label('c-unplayed'));
+    await p.waitForTimeout(250);                 // the color transition is .15s
+    const hotLive = await colorOf('c-unplayed');
+
+    await p.hover(label('c-jf-fav'));
+    await p.waitForTimeout(250);
+    const hotDead = await colorOf('c-jf-fav');
+
+    const disabled = await p.evaluate(() => document.getElementById('c-jf-fav')?.disabled);
+    // The live row proves the hover is real; without it, "disabled doesn't
+    // change" would also pass if hovering had quietly stopped working.
+    const ok = disabled === true && hotLive !== restLive && hotDead === restDead;
+    console.log(`${ok ? 'PASS' : 'FAIL'} a disabled toggle row's label ignores hover` +
+                (ok ? '' : ` — disabled=${disabled} live ${restLive}->${hotLive} dead ${restDead}->${hotDead}`));
+    pass = pass && ok;
+  } catch (e) {
+    console.log(`FAIL disabled toggle hover: ${e.message}`);
+    pass = false;
+  }
+  await p.close();
+}
+
 await b.close();
 console.log('RESULT:', pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

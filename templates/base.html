@@ -1303,8 +1303,15 @@
       color: var(--text-primary);
       cursor: pointer;
     }
-    .filter-score-toggle-row:hover .form-check-label {
+    /* Only the rows you can actually toggle react. A disabled checkbox (an
+       unconnected server, a run lock) left its label lighting up under the
+       pointer, which reads as clickable. Adjacent-sibling rather than :has(),
+       since the label always follows its input here. */
+    .filter-score-toggle-row:hover .form-check-input:not(:disabled) + .form-check-label {
       color: var(--text-accent);
+    }
+    .filter-score-toggle-row:has(.form-check-input:disabled) {
+      cursor: default;
     }
     .filter-score-toggle-row .form-check-input {
       flex: 0 0 auto;
@@ -2117,6 +2124,7 @@
         <div>
           <h5 class="modal-title" id="welcome-modal-title">Welcome to MediaReducer</h5>
           <div style="font-size:.78rem;color:var(--text-muted);">Automatic movie library cleanup for Plex and Jellyfin</div>
+          <div class="welcome-version">v{{ app_version }} &middot; early alpha, expect bugs</div>
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
@@ -2160,6 +2168,11 @@
   </div>
 </div>
 <style>
+  /* Quieter than the tagline above it: a version is for quoting in a bug
+     report, not for reading first. */
+  .welcome-version {
+    margin-top: 3px; font-size: .72rem; color: var(--text-muted); opacity: .85;
+  }
   .welcome-warning {
     border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
     font-size: .84rem; line-height: 1.55;

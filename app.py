@@ -407,9 +407,11 @@ def _time_zone_options() -> list[str]:
             options.append(zone)
     return options
 
-# Application version; surfaced in the debug report so bug reports name the
-# build. Bump on release.
-APP_VERSION = "1.0.0-beta.1"
+# Application version; shown in the welcome guide and the debug report so bug
+# reports name the build. Bump on release. SemVer pre-release: the number is the
+# release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
+# plain version when anything sorts them.
+APP_VERSION = "1.0.0-alpha.1"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -1635,6 +1637,7 @@ def _api_connection_error(cfg: dict | None = None) -> bool:
 def inject_display_time_settings():
     cfg = load_config()
     return {
+        "app_version": APP_VERSION,
         "display_time_format": cfg.get("DISPLAY_TIME_FORMAT", "12h"),
         "server_time_zone": _server_time_zone_name(),
         "host_time_zone": _host_time_zone_name(),

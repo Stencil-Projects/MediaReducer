@@ -80,6 +80,15 @@ for rel in ('rel="icon" type="image/svg+xml"', 'rel="icon" type="image/x-icon"',
             'rel="apple-touch-icon"'):
     check(f"the page declares {rel}", rel in _head)
 
+# ── The page names the build it is running ──────────────────────────────────
+# The welcome guide shows the version so a bug report can quote it. It has to
+# render from APP_VERSION: a number typed into the template is a second copy
+# that goes stale at the next release with nothing to catch it.
+check("the delivered page carries the running version", A.APP_VERSION in _head)
+check("...rendered from APP_VERSION, not hardcoded in a template",
+      not [t.name for t in (ROOT / "templates").glob("*.html")
+           if A.APP_VERSION in t.read_text()])
+
 r = client.get("/", headers=GZIP)
 check("the dashboard is gzipped", r.headers.get("Content-Encoding") == "gzip")
 body = gzip.decompress(r.get_data())
