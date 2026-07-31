@@ -1,0 +1,105 @@
+"""A cleanup tick whose Space Thresholds are no longer safe (e.g. the library
+grew past the cap's safety floor) pauses Automatic Cleanup with a reason instead of
+silently skipping ticks forever."""
+import sys
+import tempfile
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import app as A
+
+# Isolate the store: the stubbed configs below carry no OUTPUT_DIR, and a couple
+# of tick paths read the snapshot — keep those off any real /config mount.
+A.output_dir = lambda: Path(tempfile.mkdtemp(prefix="mr-autopause."))
+
+calls = {"clock": 0, "run": 0, "summary": 0}
+_state = {"cfg": {}}
+_threshold = {"ok_for_cleanup": True, "cleanup_tooltip": ""}
+
+A.load_config = lambda: dict(_state["cfg"])
+def _save(cfg, **k):
+    _state["cfg"] = dict(cfg)
+    return True
+A.save_config = _save
+A._refresh_connection_health_cache = lambda cfg, probe=True: {"critical_ok": True}
+A.run_summary_sync = lambda: (True, "ok", {"library_gb": 100.0})
+A.run_summary = lambda: (calls.__setitem__("summary", calls["summary"] + 1), (True, "ok"))[1]
+A.cached_disk_stats = lambda s=None: {"total_gb": 1000, "used_gb": 500, "free_gb": 500, "pct_used": 50}
+A._space_threshold_state = lambda cfg, disk, library_gb=None: dict(_threshold)
+A._deletion_limits_exceeded = lambda cfg, disk, lib: False
+A.run_script = lambda *a, **k: calls.__setitem__("run", calls["run"] + 1)
+A._restart_schedule_clock = lambda: calls.__setitem__("clock", calls["clock"] + 1)
+A._run_active = False
+A._summary_active = False
+# The tick skips daily-only breaches once today's window is used; these cases
+# test the launch flow itself, so hold the window open.
+A._headroom_window_used_today = lambda: False
+# These cases exercise the cleanup/pause flow, which only runs when something is
+# monitored — the empty-library short-circuit is covered elsewhere.
+A._has_monitored_dirs = lambda cfg=None: True
+# The tick also re-judges Scheduler Mode against the library database (a wiped
+# store rests the mode at Paused — covered in test_daily_maintenance_sim). These
+# cases are about threshold autopause, so hold the database fresh.
+A._library_db_fresh = lambda cfg=None: True
+
+ok = True
+def check(name, cond):
+    global ok
+    print(("PASS " if cond else "FAIL ") + name)
+    ok = ok and cond
+
+# 1. Automatic Cleanup + unsafe thresholds -> paused, with the tooltip as the reason,
+#    and the schedule clock reset (a transition into or out of Automatic Cleanup).
+_state["cfg"] = {"RUN_MODE": "headroom"}
+_threshold.update({"ok_for_cleanup": False,
+                   "cleanup_tooltip": "Library Size Cap would delete more than the safety percentage of the library."})
+A._scheduled_tick()
+check("unsafe tick pauses Automatic Cleanup",
+      _state["cfg"].get("RUN_MODE") == "paused")
+check("reason recorded for the UI",
+      "safety percentage" in _state["cfg"].get("_RUN_MODE_AUTOPAUSE_REASON", ""))
+check("clock reset on the forced transition", calls["clock"] == 1)
+check("no run was launched", calls["run"] == 0)
+
+# 2. Already paused: the unsafe state changes nothing (no reason churn).
+_state["cfg"] = {"RUN_MODE": "paused"}
+before = dict(_state["cfg"])
+A._scheduled_tick()
+check("paused mode untouched", _state["cfg"] == before)
+
+# 3. Automatic Cleanup + safe thresholds + limits satisfied -> stays armed, nothing runs.
+_state["cfg"] = {"RUN_MODE": "headroom"}
+_threshold.update({"ok_for_cleanup": True, "cleanup_tooltip": ""})
+A._scheduled_tick()
+check("safe satisfied tick keeps Automatic Cleanup armed",
+      _state["cfg"].get("RUN_MODE") == "headroom" and calls["run"] == 0)
+
+# 4. Automatic Cleanup + safe thresholds + limits exceeded -> run launches, still armed.
+A._deletion_limits_exceeded = lambda cfg, disk, lib: True
+A._scheduled_tick()
+check("safe breached tick launches the run", calls["run"] == 1
+      and _state["cfg"].get("RUN_MODE") == "headroom")
+
+# 5. Daily-only breach with today's window already used: the engine would only
+#    say "waiting until tomorrow", so the tick skips the launch entirely.
+A._headroom_window_used_today = lambda: True
+A._scheduled_tick()
+check("used window skips the pointless engine launch", calls["run"] == 1)
+
+# 6. Same used window, but Redline is breached (free 500 <= 600): redline
+#    ignores the window, so the run launches.
+_state["cfg"] = {"RUN_MODE": "headroom", "REDLINE_GB": 600}
+A._scheduled_tick()
+check("redline breach launches despite the used window", calls["run"] == 2)
+
+# 7. No monitored paths: the scheduler is truly idle — the tick launches nothing
+#    and runs no Summary, even with limits breached (there's nothing to scan).
+A._has_monitored_dirs = lambda cfg=None: False
+_runs_before, _summaries_before = calls["run"], calls["summary"]
+_state["cfg"] = {"RUN_MODE": "headroom", "REDLINE_GB": 600}
+A._headroom_window_used_today = lambda: False
+A._scheduled_tick()
+check("no monitored paths -> tick does nothing (no run, no summary)",
+      calls["run"] == _runs_before and calls["summary"] == _summaries_before)
+
+print("RESULT:", "PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)

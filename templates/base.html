@@ -1,0 +1,2998 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#171a1f" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#e7e4de" media="(prefers-color-scheme: light)">
+  <title>{% block title %}MediaReducer{% endblock %}</title>
+  {# Bootstrap and Inter are served from this container, not a CDN. Both are
+     render-blocking, so on a host with no outbound internet (a NAS on an
+     isolated LAN) every page load stalled on them until the connection timed
+     out. Locally they cost nothing and the app works fully offline. The latin
+     subset is preloaded because the UI chrome always needs it; the other
+     subsets stay behind their unicode-range rules. #}
+  {# The brand mark as a tab icon. SVG first for anything that takes it; the
+     .ico carries the small raster sizes for everything else, including the
+     bare /favicon.ico browsers fetch on their own. Both come from
+     tools/make_favicon.py. #}
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+        href="{{ url_for('static', filename='vendor/fonts/inter-latin.woff2') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-5.3.3.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/inter.css') }}">
+  <style>
+    /* ════════════════════════════════════════════════════════════════
+       THEME TOKENS
+       Dark is the default; light applies via :root[data-theme="light"].
+       Every surface/border/text color reads from these, so the toggle
+       re-skins the whole app from one place.
+       ════════════════════════════════════════════════════════════════ */
+    :root {
+      color-scheme: dark;
+      /* Shared motion tokens so same-purpose animations don't drift page by page. */
+      --pr-anim-in: .22s ease-out;
+      --pr-anim-out: .18s ease;
+      --pr-pulse-period: 1.5s;
+      --pr-spin-period: .8s;
+      /* Muted glass palette, paired to the light reference theme. */
+      --surface-0:     #12161d;  /* deepest inset surfaces */
+      --surface-1:     rgba(30,35,43,.88);  /* glass cards */
+      --surface-2:     rgba(39,45,55,.82);  /* headers, inputs, sub-panels */
+      --surface-3:     rgba(53,61,74,.78);  /* hover / raised */
+      --border:        rgba(124,119,108,.34);
+      --border-strong: rgba(160,153,139,.48);
+      --border-accent: #8ea3ce;  /* steel blue */
+      --border-danger: #b36a6f;
+      --border-warning:#b98968;   /* clay */
+      --text-primary:  #ece8df;
+      --text-secondary:#c9c3b8;
+      --text-muted:    #938d82;
+      --text-accent:   #a8b8dc;   /* muted steel blue */
+      --text-warning:  #d2a77f;
+      --text-danger:   #e7a0a3;
+      --accent:        #8ea3ce;
+      --bg-accent:        rgba(110,132,183,.16);
+      --bg-accent-strong: rgba(110,132,183,.26);
+      --bg-warning:       rgba(185,137,104,.16);
+      --bg-danger:        rgba(179,106,111,.16);
+      --bg-neutral:       rgba(201,195,184,.10);
+      --bg-sage:          rgba(126,155,132,.16);
+      --popup-bg:         #20262f;
+      --popup-bg-2:       #29313b;
+      --toast-info-bg:    color-mix(in srgb, var(--popup-bg) 88%, var(--text-accent) 12%);
+      --toast-success-bg: color-mix(in srgb, var(--popup-bg) 84%, var(--accent) 16%);
+      --toast-warning-bg: color-mix(in srgb, var(--popup-bg) 82%, var(--text-warning) 18%);
+      --toast-danger-bg:  color-mix(in srgb, var(--popup-bg) 82%, var(--text-danger) 18%);
+      /* Single shared tinted control surface (outline buttons, neutral/accent
+         pills, mode badge, input add-ons, focused fields) so the tint can't
+         drift; color-mix resolves per-theme at use time, like the toasts above. */
+      --surface-tint: color-mix(in srgb, var(--surface-2) 82%, var(--bg-accent) 18%);
+      /* Pressed fills: each button family settles into its own border color a
+         shade darker, so a click reads as the control seating instead of a stock
+         Bootstrap accent flashing through. Declared once — the var()s resolve
+         against whichever theme is on :root, like --surface-tint above. The
+         neutral family borrows --text-muted, the opaque sibling of the same warm
+         gray: --border/--border-strong are translucent, and a see-through press
+         washes out over the light theme's pale surfaces. */
+      /* Each pressed fill keeps a little transparency (the 86% step) so the
+         blur behind the button still reads — a fully opaque fill would look
+         like a flat chip sitting on the glass rather than part of it. */
+      --press-accent:  color-mix(in srgb, color-mix(in srgb, var(--border-accent) 68%, #000) 86%, transparent);
+      --press-warning: color-mix(in srgb, color-mix(in srgb, var(--border-warning) 68%, #000) 86%, transparent);
+      --press-neutral: color-mix(in srgb, color-mix(in srgb, var(--text-muted) 68%, #000) 86%, transparent);
+      --press-danger:  color-mix(in srgb, var(--text-danger) 86%, transparent);
+      /* Glass: a light edge along the top fading to a shadow at the bottom,
+         and shadows that lift on hover then sink under the press. */
+      --btn-sheen: linear-gradient(180deg, rgba(255,255,255,.15), rgba(255,255,255,.03) 45%, rgba(0,0,0,.06));
+      --btn-shadow:       inset 0 1px 0 rgba(255,255,255,.16), 0 1px 2px rgba(0,0,0,.22);
+      --btn-shadow-hover: inset 0 1px 0 rgba(255,255,255,.22), 0 3px 8px rgba(0,0,0,.26);
+      --btn-shadow-press: inset 0 2px 5px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.05);
+      /* Fields are the same material as the buttons, lit the other way: a
+         button is raised (highlight on top, shadow beneath), a field is sunk
+         (shadow along the top inner edge, a hair of light along the bottom).
+         That pairing is what makes a field and its add-on button read as one
+         object instead of two things parked together. */
+      --field-inset: inset 0 1px 2px rgba(0,0,0,.26), inset 0 -1px 0 rgba(255,255,255,.045);
+      --press-text:    #f6f4ef;
+      /* Hover is the exact midpoint between a button's resting fill and its
+         pressed one, so hovering reads as the button already moving toward the
+         press rather than as a third unrelated color. Each mixes that family's
+         OWN resting fill — a tinted outline button, a solid Save, a transparent
+         Stop all rest differently, so one formula cannot serve them all. */
+      --surface-tint-warning: color-mix(in srgb, var(--surface-2) 82%, var(--bg-warning) 18%);
+      --hover-primary: color-mix(in srgb, var(--surface-tint) 50%, var(--press-accent));
+      --hover-save:    color-mix(in srgb, var(--bg-accent) 50%, var(--press-accent));
+      --hover-warning: color-mix(in srgb, var(--surface-tint-warning) 50%, var(--press-warning));
+      --hover-neutral: color-mix(in srgb, var(--surface-tint) 50%, var(--press-neutral));
+      --hover-revert:  color-mix(in srgb, var(--bg-warning) 50%, var(--press-warning));
+      --hover-danger:  color-mix(in srgb, var(--bg-danger) 50%, var(--press-danger));
+      --hover-stop:    color-mix(in srgb, transparent 50%, var(--press-danger));
+      /* A midpoint fill lands mid-tone by definition, which is the one place a
+         near-white label struggles. The hover label therefore follows the THEME
+         rather than the press: light-on-dark here, dark-on-light below. */
+      --hover-text:    var(--press-text);
+
+      --page-bg:   #171a1f;
+      /* Fields/tracks inside a raised sub-panel ("bubble") take the outer
+         card's tone so bubble contents read as windows back to the main card. */
+      --bubble-field-bg: var(--surface-1);
+      --term-bg:   #151922;
+      --term-text: #d7d1c7;
+      --shadow:    0 18px 42px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04);
+      --glass-blur: blur(16px) saturate(118%);
+
+      --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-mono: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      /* Dimmed-stone counterpart of the dark palette: same hues (steel blue /
+         clay / sage) and tonal ladder — page darkest, cards raised, insets sunk —
+         luminance pulled down so nothing glares. */
+      --surface-0:     #cdc8bd;  /* deepest inset surfaces */
+      --surface-1:     rgba(233,230,222,.88);  /* glass cards */
+      --surface-2:     rgba(225,221,212,.85);  /* headers, inputs, sub-panels */
+      --surface-3:     rgba(214,209,198,.85);  /* hover / raised */
+      --border:        rgba(148,141,129,.50);
+      --border-strong: rgba(120,113,101,.62);
+      --border-accent: #5f75a7;  /* steel blue */
+      --border-danger: #b3706c;
+      --border-warning:#a8794f;  /* clay */
+      --text-primary:  #242c35;  /* deep slate */
+      --text-secondary:#4c565f;
+      --text-muted:    #67665e;
+      --text-accent:   #54689a;  /* steel blue */
+      --text-warning:  #8f6244;
+      --text-danger:   #a25458;
+      --accent:        #5f75a7;
+      --bg-accent:        rgba(95,117,167,.16);
+      --bg-accent-strong: rgba(95,117,167,.26);
+      --bg-warning:       rgba(168,121,79,.16);
+      --bg-danger:        rgba(162,84,88,.14);
+      --bg-neutral:       rgba(90,86,78,.12);
+      --bg-sage:          rgba(106,135,112,.18);
+      --popup-bg:         #e9e6df;
+      --popup-bg-2:       #ded9d0;
+      --toast-info-bg:    color-mix(in srgb, var(--popup-bg) 88%, var(--text-accent) 12%);
+      --toast-success-bg: color-mix(in srgb, var(--popup-bg) 84%, var(--accent) 16%);
+      --toast-warning-bg: color-mix(in srgb, var(--popup-bg) 82%, var(--text-warning) 18%);
+      --toast-danger-bg:  color-mix(in srgb, var(--popup-bg) 82%, var(--text-danger) 18%);
+
+      /* A shade deeper than --text-primary: the neutral midpoint is the
+         lightest hover fill of the set, and the body text color lands
+         just under 4.5:1 on it. */
+      --hover-text: color-mix(in srgb, var(--text-primary) 88%, #000);
+      /* The light theme's glass is lit from a paler surface: a brighter top
+         edge, and shadows in the palette's warm brown rather than black. */
+      --btn-sheen: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,.12) 45%, rgba(60,54,44,.07));
+      --btn-shadow:       inset 0 1px 0 rgba(255,255,255,.6), 0 1px 2px rgba(60,54,44,.16);
+      --btn-shadow-hover: inset 0 1px 0 rgba(255,255,255,.7), 0 3px 8px rgba(60,54,44,.2);
+      --btn-shadow-press: inset 0 2px 5px rgba(60,54,44,.26), inset 0 1px 0 rgba(255,255,255,.28);
+      --field-inset: inset 0 1px 2px rgba(60,54,44,.13), inset 0 -1px 0 rgba(255,255,255,.55);
+      --page-bg:   #d8d4ca;
+      --bubble-field-bg: var(--surface-1);
+      --term-bg:   rgba(233,230,222,.92);
+      --term-text: #242c35;
+      --shadow:    0 18px 42px rgba(60,54,44,.18), 0 1px 0 rgba(255,255,255,.5) inset;
+      --glass-blur: blur(16px) saturate(112%);
+    }
+    /* Gentle lift and glass treatment so panels feel tactile without changing layout. */
+    :root[data-theme="light"] .card,
+    :root[data-theme="light"] .accordion-item,
+    :root[data-theme="light"] .config-status-box,
+    :root[data-theme="light"] .subcard,
+    :root[data-theme="light"] .scoreblock {
+      box-shadow: var(--shadow);
+    }
+
+    /* clip, not hidden — hidden would break position:sticky — so full-bleed
+       strips (e.g. the Config save bar) can span 100vw without a horizontal
+       scrollbar. */
+    html { overflow-x: clip; }
+    /* Theme scrollbars site-wide so every page matches (terminals override). */
+    * { scrollbar-color: var(--border-strong) var(--surface-0); }
+    /* Base page color on html; the hue washes live on a VIEWPORT-FIXED layer
+       (body::before) so they render identically on every page — painted on the
+       body itself they sized to the page's height, and a tall page (Config)
+       showed visibly stretched/diluted washes next to a short one. */
+    html { background: var(--page-bg); }
+    body {
+      background: transparent;
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+    }
+    /* Light glow mirrors dark's — same three hue washes (steel blue / clay /
+       sage) in the same corners, a touch stronger so they read on stone. */
+    body::before {
+      content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background:
+        radial-gradient(circle at 18% 0%, rgba(110,132,183,.16), transparent 28%),
+        radial-gradient(circle at 80% 0%, rgba(185,137,104,.12), transparent 30%),
+        radial-gradient(circle at 78% 92%, rgba(126,155,132,.12), transparent 32%);
+    }
+    :root:not([data-theme="light"]) body::before {
+      background:
+        radial-gradient(circle at 18% 0%, rgba(110,132,183,.10), transparent 28%),
+        radial-gradient(circle at 80% 0%, rgba(185,137,104,.08), transparent 30%),
+        radial-gradient(circle at 78% 92%, rgba(126,155,132,.08), transparent 32%);
+    }
+    /* Re-skin smoothly when the theme flips, but never animate layout. html
+       carries the page color now (the washes moved to body::before). */
+    html, body, .site-header, .card, .card-header, .form-control,
+    .accordion-item, .accordion-button, .log-term {
+      transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+    }
+    /* Only the elements listed above ease; every other surface, border and
+       label repaints instantly. That is fine when a color changes on its own,
+       but a THEME flip changes all of them at once — and for the 150ms the
+       listed ones spend easing, the page is wearing both palettes: a light
+       hairline drawn over a still-dark header, a card that has already flipped
+       carrying text that has not. prSetTheme adds this class for the duration
+       of the swap so the whole page changes in one frame instead. Transitions
+       only — animations (toasts, progress) are left to finish. */
+    :root.pr-theme-swap,
+    :root.pr-theme-swap *,
+    :root.pr-theme-swap *::before,
+    :root.pr-theme-swap *::after {
+      transition: none !important;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; animation: none !important; }
+    }
+
+    /* Page entrance: the content area fades in with a slight rise, once per
+       load, so switching between pages eases in instead of popping. The header
+       is identical on every page and stays static, reading as one continuous
+       surface across navigations. Only a `from` keyframe + backwards fill: the
+       animation eases INTO the element's natural style and leaves no animated
+       transform behind once it ends (a lingering identity transform would make
+       #main the containing block for any fixed-position descendant).
+       (Reduced-motion users get none of this via the kill switch above.) */
+    @keyframes pr-page-enter {
+      from { opacity: 0; transform: translateY(6px); }
+    }
+    #main { animation: pr-page-enter .28s ease-out backwards; }
+
+    /* Cross-document view transitions (Chromium/Safari; others fall back to
+       the entrance fade above): navigating between pages cross-fades the old
+       page into the new one instead of flashing blank, and the header — named
+       as its own transition group, pixel-identical on every page — simply
+       stays put. A pagereveal handler below skips the entrance fade when a
+       view transition is animating the same navigation. */
+    @view-transition { navigation: auto; }
+    .site-header { view-transition-name: site-header; }
+    ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .22s; }
+    ::view-transition-group(site-header) { animation-duration: .01s; }
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-group(*), ::view-transition-image-pair(*),
+      ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+    }
+
+    /* ════════════════════════════════════════
+       HEADER — mobile: two rows, desktop: one
+       ════════════════════════════════════════ */
+    .site-header {
+      background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      box-shadow: 0 1px 0 rgba(255,255,255,.06) inset;
+    }
+    .header-inner { display: flex; flex-direction: column; }
+
+    /* Row 1 — brand */
+    /* The mark's square is drawn inset in its viewBox (units 2-22 of 24, stroke
+       included), so the box is sized 24/20 of the text block for the VISIBLE
+       square to match the text's height, and the left padding is 16px minus the
+       2/24 bleed so the visible edge sits on the tab underline's 16px. */
+    .header-brand { padding: 6px 20px 5px 13px; flex-shrink: 0; display: flex; align-items: center; }
+    .header-brand a { text-decoration: none; display: inline-flex; flex-direction: row; align-items: center; gap: 9px; }
+    .brand-text { display: inline-flex; flex-direction: column; line-height: 1.2; }
+    .brand-mark { width: 39px; height: 39px; flex-shrink: 0; color: var(--text-warning); }
+    .brand-name { font-size: 1.05rem; font-weight: 700; color: var(--text-warning); letter-spacing: -.01em; }
+    .brand-sub  { font-size: .58rem; font-weight: 500; color: var(--text-muted);
+                  letter-spacing: .08em; text-transform: uppercase; margin-top: 1px; }
+
+    /* Header running badge — geometry from .pr-pill; here we add only the fade
+       and default-hide. Hide is scoped to .site-header so it beats the base
+       .pr-pill display. Color is the shared .pr-pill--state tone that
+       prSetHeaderRunning applies, so the badge, the dashboard's run pill and
+       the Last Run pill name the same run in the same color. */
+    .header-run-badge { animation: pr-pulse var(--pr-pulse-period) ease-in-out infinite; }
+    .site-header .header-run-badge { display: none; }
+    a.header-run-badge { text-decoration: none; }
+    @keyframes pr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+    /* Mobile: badge sits next to the brand instead of competing with the theme toggle. */
+    .run-badge-mobile { margin-left: 12px; margin-right: 56px; }
+    .site-header.is-running .run-badge-mobile { display: inline-flex; }
+
+    /* Row 2 — tabs (compact). The row scrolls sideways itself on screens too
+       narrow for all three tabs — never the whole page. */
+    .header-tabs {
+      position: relative;
+      display: flex; gap: 2px; padding: 0 16px;
+      border-top: 1px solid var(--surface-2);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .header-tabs::-webkit-scrollbar { display: none; }
+    /* JS-added sliding underline (hover-capable pointers only): one bar glides
+       to whichever tab is hovered and returns on leave. The static per-tab
+       underline is the fallback everywhere else. */
+    .header-tab-indicator {
+      position: absolute; height: 2px; border-radius: 2px;
+      background: var(--text-accent); pointer-events: none;
+      transition: left .22s cubic-bezier(.4, 0, .2, 1), width .22s cubic-bezier(.4, 0, .2, 1),
+                  top .22s ease, background-color .15s ease, opacity .15s ease;
+    }
+    /* Beat the per-theme underline colors, which carry :root specificity. */
+    .header-tabs.has-indicator a.active,
+    :root[data-theme="light"] .header-tabs.has-indicator a.active,
+    :root:not([data-theme="light"]) .header-tabs.has-indicator a.active,
+    :root[data-theme="light"] .header-tabs.has-indicator a.active.config-needs-onboarding,
+    :root:not([data-theme="light"]) .header-tabs.has-indicator a.active.config-needs-onboarding {
+      border-bottom-color: transparent;
+    }
+    .header-tabs a {
+      font-size: .78rem; font-weight: 500; color: var(--text-muted);
+      text-decoration: none; padding: 7px 14px; white-space: nowrap;
+      border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    .header-tabs a:hover  { color: var(--text-secondary); }
+    .header-tabs a.active { color: var(--text-accent); border-bottom-color: var(--text-accent); }
+    /* Small phones (e.g. 360px-wide Pixels, iPhone SE/mini): tighter tab
+       padding so all three tabs fit without scrolling. */
+    @media (max-width: 400px) {
+      .header-tabs { padding: 0 8px; }
+      .header-tabs a { padding: 7px 9px; }
+      /* Keep the mark's visible edge on the underline's edge here too. */
+      .header-brand { padding-left: 5px; }
+    }
+    @keyframes pr-config-tab-pulse {
+      0%, 100% {
+        color: var(--text-danger);
+        background: color-mix(in srgb, var(--bg-danger) 42%, transparent);
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--text-danger) 24%, transparent);
+      }
+      50% {
+        color: var(--text-danger);
+        background: color-mix(in srgb, var(--bg-danger) 64%, transparent);
+        box-shadow: 0 0 0 6px color-mix(in srgb, var(--text-danger) 0%, transparent);
+      }
+    }
+    .header-tabs a.config-needs-onboarding {
+      color: var(--text-danger);
+      border-bottom-color: var(--text-danger);
+      border-radius: 9px 9px 0 0;
+      animation: pr-config-tab-pulse var(--pr-pulse-period) ease-in-out infinite;
+    }
+    .header-tabs a.config-needs-onboarding:hover {
+      color: var(--text-danger);
+      background: color-mix(in srgb, var(--bg-danger) 70%, transparent);
+    }
+    /* Click feedback on tab navigation: the clicked tab takes the underline
+       immediately and a single quick wave ripples up from it; the underline
+       then stays on until the next page arrives, so a slow (VPN) load still
+       reads as "in progress" after the wave finishes. The ripple is drawn
+       from currentColor, so the red attention tab keeps its red identity
+       while navigating. */
+    .header-tabs a { position: relative; overflow: hidden; }
+    .header-tabs a.is-navigating {
+      color: var(--text-accent);
+      border-bottom-color: currentColor;
+    }
+    .header-tabs a.config-needs-onboarding.is-navigating { color: var(--text-danger); }
+    /* .is-arriving replays the REMAINDER of the wave on the next page: a fast
+       (LAN) load swaps documents mid-ripple, and since the header is pinned
+       across the view transition, finishing the wave over here reads as one
+       continuous animation instead of a cut-off. --pr-wave-offset is the
+       negative delay for however much already played on the previous page. */
+    .header-tabs a.is-navigating::after,
+    .header-tabs a.is-arriving::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 100%;
+      background: linear-gradient(to top,
+        color-mix(in srgb, currentColor 48%, transparent),
+        color-mix(in srgb, currentColor 16%, transparent) 65%,
+        transparent 100%);
+      transform-origin: bottom;
+      animation: pr-tab-ripple .32s ease-out 1 both;
+      animation-delay: var(--pr-wave-offset, 0ms);
+      pointer-events: none;
+    }
+    @keyframes pr-tab-ripple {
+      0%   { transform: scaleY(0); opacity: 1; }
+      60%  { transform: scaleY(1); opacity: .55; }
+      100% { transform: scaleY(1); opacity: 0; }
+    }
+    /* Reduced motion: the global kill switch stops the wave animation, which
+       would leave the overlay's STATIC state (a full-strength gradient) stuck
+       on screen with no animationend to clean it up — hide the overlay
+       entirely. The persistent navigating underline remains as the
+       motion-free feedback. */
+    @media (prefers-reduced-motion: reduce) {
+      .header-tabs a.is-navigating::after,
+      .header-tabs a.is-arriving::after { display: none !important; }
+    }
+
+    /* Desktop: collapse into one row */
+    @media (min-width: 768px) {
+      .header-inner {
+        flex-direction: row; align-items: stretch; height: 52px;
+        max-width: 1280px; margin: 0 auto; width: 100%;  /* align with #main */
+      }
+      .header-brand {
+        padding: 0 20px 0 24px; display: flex; align-items: center;
+        border-right: 1px solid var(--border); border-bottom: none;
+      }
+      .header-tabs {
+        border-top: none; padding: 0 12px;
+        align-items: stretch;
+      }
+      .header-tabs a { display: flex; align-items: center; padding: 0 16px; }
+      .run-badge-mobile { display: none !important; }
+      .run-badge-desktop { align-self: center; margin-left: 4px; }
+      .site-header.is-running .run-badge-desktop { display: inline-flex; }
+    }
+
+    /* ═══════ Content ═══════ */
+    #main { max-width: 1280px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ═══════ Cards ═══════
+       No backdrop-filter here, deliberately. A card is 88% opaque over the page
+       background and its own fixed gradient wash, so blurring the remaining 12%
+       of an already-smooth backdrop changes almost nothing — measured at 0.06
+       of 255 mean difference. What it does do is make every card its own
+       composited layer, and a browser's "capture page" feature, which flattens
+       a scrolling page in pieces, smears each of those layers at its bottom
+       edge. Glass is kept where it is actually doing work: the sticky header
+       and title bar, which really do sit over moving content, and the buttons. */
+    .card {
+      background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden; background-clip: padding-box; isolation: isolate;
+    }
+    .card-header {
+      background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 86%, white 6%), var(--surface-2));
+      border-bottom: 1px solid var(--border);
+      border-radius: 16px 16px 0 0 !important; font-size: .88rem; font-weight: 600; padding: 12px 16px;
+    }
+
+    /* ═══════ Stat cards ═══════ */
+    .stat-card {
+      padding: 18px 22px;
+      min-height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(145deg, var(--surface-1), color-mix(in srgb, var(--surface-2) 70%, transparent));
+      background-clip: padding-box;
+    }
+    .stat-card .label { font-size: .68rem; font-weight: 500; color: var(--text-muted);
+                        text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; }
+    .stat-card .value { font-size: 1.55rem; font-weight: 700; line-height: 1.15; }
+    .stat-card .value .unit { font-size: 1rem; font-weight: 400; color: var(--text-muted); }
+    .stat-card .sub   { font-size: .78rem; color: var(--text-muted); margin-top: 3px; }
+    /* Storage bar: media library is the brand-colored segment of the used fill
+       (rest of used neutral, free is the track), right-aligned by JS to the used
+       edge. Markers show the Headroom/Redline free targets and the used edge if
+       the library is trimmed to its cap. left/width are set per frame in
+       _positionStorageBar; values here are just the start state. */
+    .disk-bar { position: relative; height: 8px; margin-top: 10px; overflow: visible; }
+    .disk-bar-clip { position: absolute; inset: 0; border-radius: 3px; overflow: hidden;
+                     background: var(--surface-3); }
+    .disk-bar-fill { position: absolute; left: 0; top: 0; height: 100%;
+                     background: color-mix(in srgb, var(--text-muted) 42%, var(--surface-3));
+                     transition: width .5s; }
+    .disk-bar-library { position: absolute; left: 0; top: 0; height: 100%;
+                        background: linear-gradient(90deg, var(--text-accent), #7e9b84);
+                        transition: width .5s, left .5s; }
+    .disk-bar-mark { position: absolute; top: -3px; bottom: -3px; width: 2px;
+                     transform: translateX(-50%); border-radius: 1px; z-index: 2; }
+    .disk-bar-mark[hidden] { display: none; }
+    .disk-bar-mark--headroom { background: var(--text-warning); }
+    .disk-bar-mark--redline  { background: var(--text-danger); }
+    /* Cap marker is accent blue like the library it measures, so it would blend
+       into the gradient's blue end; a hairline keeps it legible. */
+    .disk-bar-mark--cap      { background: var(--text-accent);
+                               box-shadow: 0 0 0 1px color-mix(in srgb, var(--page-bg) 78%, transparent); }
+    .disk-bar-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px;
+                       font-size: .6rem; letter-spacing: .04em; text-transform: uppercase;
+                       color: var(--text-muted); }
+    .disk-bar-legend .dbl-item { display: inline-flex; align-items: center; gap: 5px; }
+    .disk-bar-legend .dbl-item[hidden] { display: none; }
+    .dbl-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+    .dbl-key--library  { background: linear-gradient(90deg, var(--text-accent), #7e9b84); }
+    .dbl-key--headroom { width: 2px; height: 11px; border-radius: 1px; background: var(--text-warning); }
+    .dbl-key--redline  { width: 2px; height: 11px; border-radius: 1px; background: var(--text-danger); }
+    .dbl-key--cap      { width: 2px; height: 11px; border-radius: 1px; background: var(--text-accent); }
+
+    /* ═══════ Pills / badges — one shared family ═══════
+       Buttons, pills, and badges share the theme-toggle geometry; color
+       variants still mark meaningful states. */
+    .pr-pill {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px; vertical-align: middle;
+      height: 32px; min-height: 32px; padding: 0 12px; border-radius: 10px; white-space: nowrap;
+      font-family: inherit; font-size: .74rem; font-weight: 600; line-height: 1;
+      letter-spacing: .01em; text-transform: none;
+      border: 1px solid transparent;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
+    }
+    .pr-pill[hidden] { display: none; }
+    /* Status dot: a real circle (not the ● glyph, whose baseline sits off-center)
+       so it aligns cleanly with the label. Inherits the pill's text color. */
+    .pr-pill-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    /* Phones: pills shrink to label size, but interactive ones (links, jump
+       targets) keep a finger-sized tap area via an invisible ::after, without
+       growing visually. */
+    @media (max-width: 640px) {
+      .pr-pill {
+        height: 24px; min-height: 24px; padding: 0 9px;
+        font-size: .68rem; border-radius: 8px; gap: 5px;
+      }
+      .pr-pill-dot { width: 6px; height: 6px; }
+      a.pr-pill, .pr-pill[onclick], .pr-pill[role="button"] { position: relative; }
+      a.pr-pill::after, .pr-pill[onclick]::after, .pr-pill[role="button"]::after {
+        content: ""; position: absolute; left: -4px; right: -4px; top: -9px; bottom: -9px;
+      }
+    }
+    .pr-pill--neutral {
+      border-color: var(--border);
+      color: var(--text-secondary);
+      background: var(--surface-tint);
+    }
+    .pr-pill--accent  { border-color: var(--border-accent);  color: var(--text-accent);    background: var(--surface-tint); }
+    .pr-pill--warning { border-color: var(--border-warning); color: var(--text-warning);   background: var(--bg-warning); }
+
+    /* ── Status pills: the header badge, Last Run's mode pill, the run pill ──
+       All three answer "what is happening, or what is armed", and each one
+       borrows the color of the BUTTON that does that thing, so the meaning is
+       learnable in one place: red is the Cleanup button, blue is the primary
+       action button (Open Configuration), neutral is Simulate.
+
+       Flat, not glassy — the inset highlight belongs to things you press, and
+       on a pill it read as a small button. For the same reason hover and press
+       move the BORDER only: these are status, and one that filled in under the
+       pointer looked clickable in a way that mattered.
+
+       .pr-pill--state carries the shape; one of the four tones carries the
+       color. Every tone is (border, text, dim fill) copied from its button's
+       rest state, and its hover and press borders come from that button's own
+       hover and press tokens, so a pill cannot drift from the button it names. */
+    .pr-pill--state { box-shadow: none; }
+    .pr-pill--state.is-danger  { border-color: var(--text-danger);    color: var(--text-danger);    background: var(--bg-danger); }
+    .pr-pill--state.is-accent  { border-color: var(--border-accent);  color: var(--text-accent);    background: var(--surface-tint); }
+    .pr-pill--state.is-neutral { border-color: var(--border);         color: var(--text-secondary); background: var(--surface-tint); }
+    .pr-pill--state.is-warning { border-color: var(--border-warning); color: var(--text-warning);   background: var(--surface-tint-warning); }
+    /* Only the interactive ones react: the Last Run pill and the header badge
+       are links, and the run pill takes a jump target in its error states. */
+    a.pr-pill--state.is-danger:hover,  a.pr-pill--state.is-danger:focus-visible,
+    .pr-pill--state.is-danger.log-jumpable:hover  { border-color: var(--hover-danger); }
+    a.pr-pill--state.is-accent:hover,  a.pr-pill--state.is-accent:focus-visible,
+    .pr-pill--state.is-accent.log-jumpable:hover  { border-color: var(--hover-primary); }
+    a.pr-pill--state.is-neutral:hover, a.pr-pill--state.is-neutral:focus-visible,
+    .pr-pill--state.is-neutral.log-jumpable:hover { border-color: var(--hover-neutral); }
+    a.pr-pill--state.is-warning:hover, a.pr-pill--state.is-warning:focus-visible,
+    .pr-pill--state.is-warning.log-jumpable:hover { border-color: var(--hover-warning); }
+    a.pr-pill--state.is-danger:active  { border-color: var(--press-danger); }
+    a.pr-pill--state.is-accent:active  { border-color: var(--press-accent); }
+    a.pr-pill--state.is-neutral:active { border-color: var(--press-neutral); }
+    a.pr-pill--state.is-warning:active { border-color: var(--press-warning); }
+
+
+    /* ═══════ Log terminal ═══════ */
+    .log-term {
+      background: var(--term-bg); color: var(--term-text);
+      font-family: var(--font-mono);
+      font-size: .76rem; line-height: 1.6; min-height: 200px; height: 440px;
+      overflow-y: auto; overflow-x: hidden;
+      padding: 14px 16px; margin: 0; border-radius: 0 0 16px 16px;
+      border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+      scrollbar-color: var(--border-strong) var(--term-bg);
+      /* Reaching the end of the log used to hand the rest of the wheel gesture
+         to the page, which scrolled 40px underneath the floating log window —
+         measured. The log is where the pointer is, so the scroll stops here. */
+      overscroll-behavior: contain;
+    }
+    /* Each log line is its own block: long lines wrap in place with a hanging
+       indent so continuations read as part of their line, and copying still
+       yields the original one-line-per-entry text — the indent is styling, not
+       characters, and each block copies as its own line. */
+    .log-term .log-line {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      padding-left: 2.25em;
+      text-indent: -2.25em;
+      /* One div per line means a big log is tens of thousands of boxes, and
+         laying them all out is what made opening one hang: 30,000 lines cost
+         2,443ms, mostly layout. Skipping the off-screen ones brings that to
+         556ms, and the 900-line live tail (re-rendered every 750ms during a
+         run) from 58ms to 5.7ms.
+
+         19.5px is this font-size times this line-height, so the scrollbar is
+         right for an ordinary single-line entry; `auto` lets the browser learn
+         the real height of a wrapped one. Verified that "jump to latest" still
+         lands exactly at the bottom and that selecting the log still copies
+         every line, since off-screen content stays in the DOM.
+
+         Ignored by browsers that don't support it, which then behave as before. */
+      content-visibility: auto;
+      contain-intrinsic-size: auto 19.5px;
+    }
+
+    /* ═══════ Accordion ═══════ */
+    .accordion-button {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--surface-2) 88%, var(--bg-accent) 12%), var(--surface-2));
+      color: var(--text-primary); font-weight: 600; font-size: .88rem;
+    }
+    .accordion-button:not(.collapsed) {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--surface-3) 78%, var(--bg-accent-strong) 22%), var(--surface-3));
+      color: var(--text-primary); box-shadow: none;
+    }
+    .accordion-button::after { filter: saturate(.75) opacity(.7); }
+    .accordion-item {
+      background: var(--surface-1); border-color: var(--border); border-radius: 16px;
+      box-shadow: var(--shadow); overflow: hidden; backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    }
+    .accordion-body  { padding-top: 20px; }
+
+    /* Config accordion: one connected tab stack instead of separate rounded pills. */
+    #cfg-accordion {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      background: var(--surface-1);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      isolation: isolate;
+    }
+    #cfg-accordion .accordion-item {
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0 !important;
+      box-shadow: none;
+      overflow: visible;
+      background: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    #cfg-accordion .accordion-item:last-child { border-bottom: 0; }
+    #cfg-accordion .accordion-header,
+    #cfg-accordion .accordion-button,
+    #cfg-accordion .accordion-collapse,
+    #cfg-accordion .accordion-body {
+      border-radius: 0 !important;
+    }
+    #cfg-accordion .accordion-button {
+      margin: 0;
+      border: 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    #cfg-accordion .accordion-item:first-child .accordion-button {
+      box-shadow: none;
+    }
+    #cfg-accordion .accordion-button:not(.collapsed) {
+      border-bottom: 1px solid var(--border);
+    }
+    #cfg-accordion .accordion-body {
+      background: color-mix(in srgb, var(--surface-1) 82%, var(--surface-0) 18%);
+    }
+    :root[data-theme="light"] #cfg-accordion .accordion-body {
+      background: color-mix(in srgb, var(--surface-1) 84%, white 5%);
+    }
+
+    /* ═══════ Form controls ═══════ */
+    /* Fields use the raised tone (--surface-3) — a step lighter than surrounding
+       panels in dark (darker in light), matching slider tracks — for contrast
+       inside sub-panels. */
+    .form-control {
+      background: color-mix(in srgb, var(--surface-3) 92%, transparent); border-color: var(--border);
+      color: var(--text-primary); font-size: .85rem; border-radius: 10px;
+    }
+    .form-control:focus {
+      background: var(--surface-3); border-color: var(--border-accent);
+      color: var(--text-primary); box-shadow: 0 0 0 2px var(--bg-accent);
+    }
+    /* Dropdown matched to the text fields with a custom caret. Self-contained
+       (no Bootstrap .form-select) so the caret shorthand can't override theming. */
+    .app-select {
+      display: block; width: 100%;
+      appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      font-size: .85rem; line-height: 1.5;
+      padding: .375rem 2.1rem .375rem .75rem;
+      color: var(--text-primary);
+      background-color: var(--surface-2);
+      border: 1px solid var(--border-strong); border-radius: 10px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b93a1' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right .7rem center; background-size: 14px 14px;
+      cursor: pointer;
+      text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+    }
+    .app-select:focus {
+      outline: none; border-color: var(--border-accent);
+      box-shadow: 0 0 0 2px var(--bg-accent);
+    }
+    .app-select:disabled { color: var(--text-muted); opacity: .72; cursor: default; }
+    /* Pager/toolbar variant: the same config-page dropdown look, but sized to
+       sit inline beside .btn-sm buttons instead of filling a form row. */
+    .app-select-inline {
+      display: inline-block; width: auto; min-height: 32px;
+      font-size: .78rem; font-weight: 600;
+      padding: .3rem 1.9rem .3rem .7rem;
+      background-position: right .6rem center;
+    }
+    .input-group-text { background: color-mix(in srgb, var(--surface-3) 92%, transparent); border-color: var(--border); color: var(--text-muted); border-radius: 10px; }
+    .input-group-text .form-check-input {
+      margin: 0;
+      flex: 0 0 auto;
+      align-self: center;
+    }
+
+    .app-form .form-control {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text-primary);
+    }
+    .app-form .form-control::placeholder {
+      color: var(--text-muted);
+      opacity: .88;
+    }
+    .app-form .form-control:focus {
+      background: var(--surface-2);
+      border-color: var(--border-accent);
+      color: var(--text-primary);
+      /* The focus ring is added TO the inset, not instead of it — dropping the
+         inset on focus made the field pop forward the moment it was clicked. */
+      box-shadow: var(--field-inset), 0 0 0 2px var(--bg-accent);
+    }
+    .app-form .form-control:disabled {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text-muted);
+      opacity: .72;
+    }
+    .app-form .input-group-text {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text-muted);
+    }
+
+    /* ── Fields, add-ons and buttons as one control ─────────────────────────
+       The sunk face goes on everything that is a FIELD — the text inputs, the
+       dropdowns, and the non-interactive add-ons like the "GB" ender and the
+       checkbox cap. The add-ons deliberately get the field's treatment and not
+       the button's: they carry the field's fill and its inset, no sheen and no
+       drop shadow, so they read as the end of the field rather than something
+       to press. The buttons keep their raised face; the contrast between the
+       two is what joins them. */
+    .app-form .form-control,
+    .app-form .input-group-text,
+    .app-form .app-select {
+      box-shadow: var(--field-inset);
+    }
+    /* Bootstrap already laps the borders inside a group, so only one line shows
+       at each seam; matching the colors keeps that line from changing tone
+       halfway along the control. */
+    .app-form .input-group > .btn {
+      border-color: var(--border-strong);
+    }
+    /* A disabled field is out of play, so it flattens rather than staying sunk. */
+    .app-form .form-control:disabled,
+    .app-form .app-select:disabled,
+    .app-form .input-group:has(.form-control:disabled) > .input-group-text {
+      box-shadow: none;
+    }
+    /* Fields inside a lighter bubble (filter cards, sub-panels, score blocks,
+       config cards) sink to the outer card's tone — see --bubble-field-bg. */
+    .app-form .filter-score-card .form-control,
+    .app-form .filter-score-card .input-group-text,
+    .app-form .subcard .form-control,
+    .app-form .subcard .input-group-text,
+    .app-form .scoreblock .form-control,
+    .app-form .scoreblock .input-group-text,
+    .app-form .config-card .form-control,
+    .app-form .config-card .input-group-text {
+      background: var(--bubble-field-bg);
+    }
+    .app-form .filter-score-card .form-control:focus,
+    .app-form .subcard .form-control:focus,
+    .app-form .scoreblock .form-control:focus,
+    .app-form .config-card .form-control:focus {
+      background: var(--bubble-field-bg);
+    }
+    .app-form .filter-score-card .form-control:disabled,
+    .app-form .subcard .form-control:disabled,
+    .app-form .scoreblock .form-control:disabled,
+    .app-form .config-card .form-control:disabled {
+      background: var(--surface-2);
+    }
+    /* Only the disabled look differs from the general .btn-outline-secondary
+       rules further down — an add-on button sits against a field, so it ghosts
+       a little less. Its resting and hover states are those rules' job. */
+    .app-form .input-group .btn-outline-secondary:disabled {
+      background: var(--surface-tint);
+      border-color: var(--border);
+      color: var(--text-muted);
+      opacity: .72;
+    }
+    .form-check-input:checked { background-color: var(--text-accent); border-color: var(--text-accent); }
+    .form-range::-webkit-slider-thumb { background: var(--text-accent); }
+    .form-text  { color: var(--text-muted); font-size: .78rem; }
+    /* Filesystem paths in help text are one unbreakable token — wrap anywhere
+       rather than pushing a narrow phone screen sideways. */
+    code { overflow-wrap: anywhere; }
+
+    /* ═══════ Buttons ═══════ */
+    /* Inherit the page font; touch-action lets controls act on every tap — no
+       double-tap-zoom eating the second tap of two-click confirmations. */
+    button, input, select { font: inherit; }
+    button, .btn, input[type=checkbox], select { touch-action: manipulation; }
+    /* Sliders: pan-y hands VERTICAL touch gestures to the page scroller, so
+       scrolling a finger down a slider-heavy page (Filtering & Scoring) can't
+       nudge the thumbs — only a horizontal drag (or a tap) adjusts a slider.
+       A JS guard near prCommaNum undoes the value jump some mobile browsers
+       apply on the initial touch before the scroll takes over. */
+    input[type=range] { touch-action: pan-y; }
+    /* Shared dirty-state affordance for Revert buttons (Config + Filtering). */
+    .btn-revert-active {
+      border-color: var(--border-warning) !important;
+      color: var(--text-warning) !important;
+      background: var(--bg-warning) !important;
+    }
+    .btn:not(.btn-close) {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: .74rem;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: .01em;
+      text-transform: none;
+    }
+    /* ═══════ Button glass ═══════
+       The same treatment the cards get: a translucent fill over a blur, a lit
+       top edge fading to a shadowed bottom, and a shadow that lifts on hover
+       then sinks under the press. The sheen is a pseudo-element, not a
+       background-image — three dozen rules set the `background` shorthand for
+       one state or another, and every one of them would reset an image.
+       isolation guarantees the stacking context that keeps the sheen above the
+       fill but behind the label, whether or not backdrop-filter is supported. */
+    .btn:not(.btn-close),
+    .btn-icon,
+    .theme-toggle {
+      position: relative;
+      isolation: isolate;
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      box-shadow: var(--btn-shadow);
+    }
+    /* `.btn:not(.btn-close)` outweighs a plain single-class selector, so the
+       position: relative above quietly overrode any button that positions
+       ITSELF — dropping it back into flow. That is what made the log's "Jump to
+       latest" pill grow to the full height of the log pane: as a flex child of
+       .log-window-body it stretched. A button with its own position already
+       gives the sheen the containing block it needs, so it just has to win the
+       property back. Any future self-positioning button belongs on this line. */
+    .btn.log-jump { position: absolute; }
+    .btn:not(.btn-close)::after,
+    .btn-icon::after,
+    .theme-toggle::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      pointer-events: none;
+      background: var(--btn-sheen);
+    }
+    .btn:not(.btn-close):hover,
+    .btn-icon:hover:not(:disabled),
+    .theme-toggle:hover {
+      box-shadow: var(--btn-shadow-hover);
+    }
+    .btn:not(.btn-close):active,
+    .btn-icon:active:not(:disabled),
+    .theme-toggle:active {
+      box-shadow: var(--btn-shadow-press);
+    }
+    /* A disabled button is not a surface you can press — it sits flat. */
+    .btn:not(.btn-close):disabled,
+    .btn:not(.btn-close).disabled,
+    .btn-icon:disabled {
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .btn-sm:not(.btn-close) {
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 10px;
+      font-size: .74rem;
+    }
+    .btn-success {
+      --bs-btn-color: var(--text-accent);
+      --bs-btn-bg: var(--bg-accent);
+      --bs-btn-border-color: var(--border-accent);
+      --bs-btn-hover-color: var(--text-accent);
+      --bs-btn-hover-bg: var(--bg-accent-strong);
+      --bs-btn-hover-border-color: var(--border-accent);
+      --bs-btn-focus-shadow-rgb: 110, 132, 183;
+      --bs-btn-active-color: var(--press-text);
+      --bs-btn-active-bg: var(--press-accent);
+      --bs-btn-active-border-color: var(--press-accent);
+      --bs-btn-disabled-color: var(--text-muted);
+      --bs-btn-disabled-bg: var(--surface-2);
+      --bs-btn-disabled-border-color: var(--border-strong);
+      background: var(--bg-accent);
+      border-color: var(--border-accent);
+      color: var(--text-accent);
+    }
+    .btn-success:hover,
+    .btn-success:focus {
+      background: var(--hover-save);
+      border-color: var(--hover-save);
+      color: var(--hover-text);
+    }
+    .btn-outline-primary { border-color: var(--border-accent); color: var(--text-accent); background: var(--surface-tint); }
+    .btn-outline-primary:hover {
+      background: var(--hover-primary);
+      border-color: var(--hover-primary);
+      color: var(--hover-text);
+    }
+    .btn-outline-warning {
+      border-color: var(--border-warning);
+      color: var(--text-warning);
+      background: var(--surface-tint-warning);
+    }
+    .btn-outline-warning:hover,
+    .btn-outline-warning:focus {
+      border-color: var(--hover-warning);
+      color: var(--hover-text);
+      background: var(--hover-warning);
+    }
+    /* One pressed treatment for every button family: fill with the button's own
+       --press-* tone (its border color, a shade darker) and label it in
+       --press-text. Bootstrap spreads its active state over several selectors of
+       differing specificity, so each family lists all of them and wins with
+       !important — otherwise a stock blue/gray/yellow fill flashes on click. */
+    .btn-success:active,
+    .btn-success.active,
+    .btn-success.show,
+    .btn-success:first-child:active,
+    .btn-outline-primary:active,
+    .btn-outline-primary.active,
+    .btn-outline-primary.show,
+    .btn-outline-primary:first-child:active {
+      background: var(--press-accent) !important;
+      border-color: var(--press-accent) !important;
+      color: var(--press-text) !important;
+    }
+    .btn-outline-warning:active,
+    .btn-outline-warning.active,
+    .btn-outline-warning.show,
+    .btn-outline-warning:first-child:active {
+      background: var(--press-warning) !important;
+      border-color: var(--press-warning) !important;
+      color: var(--press-text) !important;
+    }
+    .btn-outline-secondary:not(:disabled):not(.disabled):active,
+    .btn-outline-secondary:not(:disabled):not(.disabled).active,
+    .btn-outline-secondary:not(:disabled):not(.disabled).show,
+    .btn-outline-secondary:not(:disabled):not(.disabled):first-child:active,
+    .btn-icon:not(:disabled):active,
+    .theme-toggle:active {
+      background: var(--press-neutral) !important;
+      border-color: var(--press-neutral) !important;
+      color: var(--press-text) !important;
+    }
+    /* A dirty Revert wears the warning border via .btn-revert-active, so both
+       its hover and its press follow that color instead of its
+       .btn-outline-secondary family. !important is what carries them past the
+       neutral rules further down, which .btn-revert-active already outranks
+       the same way for its resting look. */
+    .btn.btn-revert-active:not(:disabled):hover,
+    .btn.btn-revert-active:not(:disabled):focus {
+      background: var(--hover-revert) !important;
+      border-color: var(--hover-revert) !important;
+      color: var(--hover-text) !important;
+    }
+    .btn.btn-revert-active:not(:disabled):active,
+    .btn.btn-revert-active:not(:disabled):first-child:active {
+      background: var(--press-warning) !important;
+      border-color: var(--press-warning) !important;
+      color: var(--press-text) !important;
+    }
+    .btn-danger-action {
+      --bs-btn-color: var(--text-danger);
+      --bs-btn-bg: var(--bg-danger);
+      --bs-btn-border-color: var(--text-danger);
+      --bs-btn-hover-color: var(--text-danger);
+      --bs-btn-hover-bg: var(--bg-danger);
+      --bs-btn-hover-border-color: var(--text-danger);
+      --bs-btn-focus-shadow-rgb: 179, 106, 111;
+      --bs-btn-active-color: #fff7f7;
+      --bs-btn-active-bg: var(--text-danger);
+      --bs-btn-active-border-color: var(--text-danger);
+      background: var(--bg-danger) !important;
+      border-color: var(--text-danger) !important;
+      color: var(--text-danger) !important;
+      font-weight: 700;
+    }
+    /* Hover fills solid red as an "armed and dangerous" cue, deeper than the
+       press so the button lightens under the click like every other family. */
+    .btn-danger-action:hover,
+    .btn-danger-action:focus {
+      background: var(--hover-danger) !important;
+      border-color: var(--hover-danger) !important;
+      color: var(--hover-text) !important;
+      filter: none;
+    }
+    /* Through the token like every other family, rather than a raw color with
+       a brightness filter: the filter dimmed the sheen and the label along with
+       the fill, and it left the pressed red outside the rest/hover/press
+       relationship the other buttons keep. */
+    .btn-danger-action:active,
+    .btn-danger-action.active,
+    .btn-danger-action:first-child:active {
+      background: var(--press-danger) !important;
+      border-color: var(--press-danger) !important;
+      color: #fff7f7 !important;
+      filter: none;
+    }
+    .btn-danger-action:disabled {
+      opacity: .38;
+      filter: grayscale(.35);
+      cursor: not-allowed;
+    }
+    .btn-icon {
+      box-sizing: border-box;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      padding: 0 !important;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-tint);
+      color: var(--text-secondary);
+      line-height: 1;
+      cursor: pointer;
+      transition: color .15s ease, border-color .15s ease, background .15s ease,
+                  box-shadow .15s ease, opacity .15s ease, filter .15s ease;
+    }
+    .btn-icon:hover:not(:disabled),
+    .btn-icon:focus:not(:disabled) {
+      color: var(--hover-text);
+      border-color: var(--hover-neutral);
+      background: var(--hover-neutral);
+    }
+    .btn-icon.is-active {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--surface-2);
+    }
+    .btn-icon:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+    a.btn-icon { text-decoration: none; }
+    /* Narrow screens: shrink the shared buttons and inline selects together so
+       toolbar/pager rows stay on one line instead of wrapping. Everything keeps
+       the same look — the whole control family just scales down in step. Must
+       sit AFTER the base .btn/.btn-sm/.btn-icon rules (equal specificity, last
+       wins). Deliberate touch-size overrides like the explorer's .ttop controls
+       still win on specificity and keep their larger tap targets. */
+    @media (max-width: 520px) {
+      .btn:not(.btn-close), .btn-sm:not(.btn-close) {
+        min-height: 28px; padding: 0 9px; font-size: .68rem;
+      }
+      .btn-icon { width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0 !important; }
+      .app-select-inline {
+        min-height: 28px; font-size: .7rem;
+        padding: .2rem 1.6rem .2rem .55rem;
+        background-position: right .5rem center;
+      }
+    }
+    @media (max-width: 390px) {
+      .btn:not(.btn-close), .btn-sm:not(.btn-close) {
+        min-height: 26px; padding: 0 7px; font-size: .64rem;
+      }
+      .btn-icon { width: 26px; height: 26px; min-width: 26px; min-height: 26px; padding: 0 !important; }
+      .app-select-inline {
+        min-height: 26px; font-size: .66rem;
+        padding: .15rem 1.45rem .15rem .5rem;
+        background-position: right .45rem center;
+      }
+    }
+
+    .btn-morph {
+      position: relative;
+      overflow: hidden;
+      white-space: nowrap;
+      transition:
+        width .18s cubic-bezier(.2, .8, .2, 1),
+        min-width .18s cubic-bezier(.2, .8, .2, 1),
+        background-color .16s ease,
+        border-color .16s ease,
+        color .16s ease,
+        box-shadow .16s ease;
+    }
+    .btn-morph .btn-morph-label {
+      display: inline-block;
+    }
+    /* Dependent blocks (protected collections, Radarr cleanup, Jellyfin favorites
+       filter) stay visible but ghosted when their API isn't connected; the
+       "Connect … to unlock" note stays fully readable. */
+    .connection-ghost > :not(.connection-unlock-note) {
+      opacity: .55;
+    }
+    .connection-ghost .btn,
+    .connection-ghost input,
+    .connection-ghost .form-check-input {
+      cursor: not-allowed;
+    }
+    /* A queued/in-flight button drops to the disabled ghost look until it
+       resolves, overriding any lit accent state it carried when clicked. */
+    .btn.btn-busy,
+    .btn.btn-pending-ellipsis,
+    .dashboard-refresh-btn.is-spinning {
+      background: var(--surface-tint) !important;
+      border-color: var(--border) !important;
+      color: var(--text-muted) !important;
+      opacity: .65 !important;
+      cursor: progress !important;
+    }
+    .dashboard-refresh-btn.is-spinning .dashboard-refresh-icon {
+      animation: pr-spin var(--pr-spin-period) linear infinite;
+    }
+    @keyframes pr-spin { to { transform: rotate(360deg); } }
+    .btn-pending-ellipsis .btn-morph-label::after,
+    .pending-ellipsis::after {
+      content: "";
+      display: inline-block;
+      width: 1.15em;
+      text-align: left;
+      animation: pr-ellipsis 1.1s steps(4, end) infinite;
+    }
+    /* ═══════ Debug output popup ═══════ */
+    .pr-debug-overlay {
+      position: fixed; inset: 0; z-index: 1090; display: none;
+      background: rgba(0, 0, 0, .55);
+      align-items: center; justify-content: center; padding: 22px;
+    }
+    .pr-debug-overlay.show { display: flex; animation: pr-fade-in var(--pr-anim-in); }
+    .pr-debug-overlay.show .pr-debug-box { animation: pr-rise-in var(--pr-anim-in); }
+    @keyframes pr-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    /* Fade in while rising into place. `translate` (not transform) so it
+       composes with transform-positioned elements. */
+    @keyframes pr-rise-in {
+      from { opacity: 0; translate: 0 -14px; }
+      to   { opacity: 1; translate: 0 0; }
+    }
+    .pr-debug-box {
+      background: var(--surface-0); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+      width: min(980px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+    }
+    .pr-debug-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+    }
+    .pr-debug-title { font-weight: 600; font-size: .9rem; margin-right: auto; }
+    .pr-debug-box pre {
+      margin: 0; padding: 12px 14px; overflow: auto; flex: 1 1 auto;
+      font-size: .76rem; line-height: 1.5;
+      white-space: pre-wrap; word-break: break-word;
+      color: var(--text-secondary);
+    }
+    /* Every debug trigger shares one look (small amber outline button). */
+    .pr-debug-btn { white-space: nowrap; }
+    /* Phones: true fullscreen — a centered box taller than the viewport would
+       push its header (and the Copy/Close buttons) off-screen. */
+    @media (max-width: 640px) {
+      .pr-debug-overlay { padding: 0; }
+      .pr-debug-box {
+        width: 100%; height: 100%; max-height: none;
+        border: none; border-radius: 0;
+      }
+      .pr-debug-box pre { font-size: .68rem; padding: 10px 12px; }
+      .pr-debug-head { padding: 8px 12px; }
+    }
+
+    @keyframes pr-ellipsis {
+      0%   { content: ""; }
+      25%  { content: "."; }
+      50%  { content: ".."; }
+      75%,
+      100% { content: "..."; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      /* The dots must still READ as pending when their animation is killed. */
+      .btn-pending-ellipsis .btn-morph-label::after,
+      .pending-ellipsis::after { content: "..."; }
+    }
+
+    /* ═══════ Misc ═══════ */
+    .section-desc { font-size: .83rem; color: var(--text-muted); margin-bottom: 18px; }
+    .input-label  { font-size: .81rem; color: var(--text-secondary); margin-bottom: 4px; display: block; }
+    .filter-score-group {
+      margin-top: 18px;
+    }
+    .filter-score-group:first-child {
+      margin-top: 0;
+    }
+    .filter-score-heading {
+      font-size: .9rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+    .filter-score-subhead {
+      font-size: .8rem;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      max-width: 780px;
+    }
+    .filter-score-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+    .filter-score-card {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+    .filter-score-card > .input-label {
+      margin-bottom: 8px;
+    }
+    .filter-score-card .input-group,
+    .filter-score-card .form-control {
+      max-width: 100%;
+    }
+    .filter-score-card .input-group,
+    .filter-score-control-row,
+    .filter-score-toggle-row {
+      min-height: 42px;
+    }
+    .filter-score-card .input-group > .form-control,
+    .filter-score-card .input-group > .input-group-text {
+      min-height: 42px;
+    }
+    .filter-score-control-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+    .filter-score-control-row .form-control {
+      width: 100%;
+      min-height: 42px;
+    }
+    .filter-score-card .form-range {
+      margin: 0;
+      min-height: 30px;
+    }
+    .filter-score-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+    .filter-score-toggle-row:hover .form-check-label {
+      color: var(--text-accent);
+    }
+    .filter-score-toggle-row .form-check-input {
+      flex: 0 0 auto;
+      margin: 0;
+    }
+    .filter-score-toggle-row .form-check-label {
+      color: var(--text-primary);
+      font-size: .95rem;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    .filter-score-help {
+      font-size: .76rem;
+      color: var(--text-muted);
+      line-height: 1.35;
+      margin-top: 8px;
+    }
+    /* Checkbox/radio labels get the same hover affordance as the Filtering &
+       Scoring toggle rows (disabled inputs stay inert). */
+    .form-check-input:not(:disabled) + .form-check-label {
+      cursor: pointer;
+      transition: color .15s ease;
+    }
+    .form-check-input:not(:disabled) + .form-check-label:hover {
+      color: var(--text-accent);
+    }
+    /* Run-mode cards carry whole card bodies inside their labels — they keep
+       their own hover treatment instead of recoloring all that text. */
+    .run-mode-card .form-check-input + .form-check-label,
+    .run-mode-card .form-check-input + .form-check-label:hover {
+      color: inherit;
+    }
+    @media (max-width: 575.98px) {
+      .filter-score-grid {
+        grid-template-columns: 1fr;
+      }
+      .filter-score-card {
+        padding: 11px;
+      }
+    }
+    .page-title   { font-size: 1.3rem; font-weight: 700; color: var(--text-primary); }
+    /* Title row sticks below the variable-height site header (JS keeps
+       --pr-header-h in sync with the real height). While stuck, a full-bleed
+       ::before backdrop makes it read as a strip popping out of the header,
+       keeping any row actions (e.g. Config's Revert/Save) reachable at any
+       scroll depth. */
+    .page-title-bar {
+      position: sticky;
+      top: var(--pr-header-h, 58px);
+      z-index: 60;
+      padding: 10px 0;
+    }
+    .page-title-bar::before {
+      content: "";
+      position: absolute;
+      top: 0; bottom: 0; left: 50%;
+      width: 100vw;
+      transform: translateX(-50%);
+      z-index: -1;
+      background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      opacity: 0;
+      transition: opacity .15s ease;
+      pointer-events: none;
+    }
+    .page-title-bar.is-stuck::before { opacity: 1; }
+    /* Toasts stack bottom-right on desktop; on phones every toast spans the
+       same full-width footprint so mixed-length messages stay uniform. */
+    .toast-wrap   { position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+                    display: flex; flex-direction: column; align-items: flex-end; }
+    @media (max-width: 640px) {
+      .toast-wrap { left: 12px; right: 12px; bottom: 14px; align-items: stretch; }
+    }
+
+    /* ═══════ Theme toggle ═══════ */
+    .theme-toggle {
+      margin-left: auto;            /* push to the far right of the header row */
+      align-self: center;
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 7px; height: 32px; padding: 0 12px;
+      background: var(--surface-tint); color: var(--text-secondary);
+      border: 1px solid var(--border); border-radius: 10px;
+      font-size: .74rem; font-weight: 600; letter-spacing: .01em;
+      cursor: pointer; transition: background-color .15s, color .15s, border-color .15s, box-shadow .15s;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.20);
+    }
+    .theme-toggle:hover { background: var(--hover-neutral); color: var(--hover-text); border-color: var(--hover-neutral); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--border-accent); outline-offset: 2px; }
+    .theme-toggle svg { width: 15px; height: 15px; display: block; }
+    .theme-toggle .tt-label { display: none; }
+    /* Show the icon for the theme you'd switch TO. */
+    :root[data-theme="light"] .theme-toggle .icon-to-dark  { display: block; }
+    :root[data-theme="light"] .theme-toggle .icon-to-light { display: none; }
+    :root:not([data-theme="light"]) .theme-toggle .icon-to-dark  { display: none; }
+    :root:not([data-theme="light"]) .theme-toggle .icon-to-light { display: block; }
+
+    @media (min-width: 768px) {
+      .theme-toggle { margin-right: 24px; }   /* line up with the page content's right edge */
+      .theme-toggle .tt-label { display: inline; }
+      .about-toggle { margin-right: 8px; }    /* sits just left of the theme toggle */
+    }
+    @media (max-width: 767px) {
+      /* Top row only has the brand; pin the toggles to the brand row's right edge. */
+      .site-header .theme-toggle { position: absolute; top: 9px; right: 24px; }
+      .site-header .about-toggle { position: absolute; top: 9px; right: 70px; }
+    }
+    /* "About & quick start" reuses the theme-toggle skin so the header controls match. */
+    .about-toggle { margin-left: auto; width: 32px; padding: 0; font-size: .85rem; }
+    .about-toggle + .theme-toggle { margin-left: 0; }
+
+
+    /* ═══════ Muted glass color polish ═══════ */
+    :root[data-theme="light"] .brand-name { color: #8f5f3e; }
+    :root:not([data-theme="light"]) .brand-name { color: #d0a178; }
+    :root[data-theme="light"] .brand-mark { color: #8f5f3e; }
+    :root:not([data-theme="light"]) .brand-mark { color: #d0a178; }
+    :root[data-theme="light"] .header-tabs a.active { color: #54689a; border-bottom-color: #5f75a7; }
+    :root:not([data-theme="light"]) .header-tabs a.active { color: #a8b8dc; border-bottom-color: #8ea3ce; }
+    /* The API-error state outranks the active-tab tint: the tab stays red
+       while the user is ON Configuration until the connections check out. */
+    :root[data-theme="light"] .header-tabs a.active.config-needs-onboarding,
+    :root:not([data-theme="light"]) .header-tabs a.active.config-needs-onboarding {
+      color: var(--text-danger);
+      border-bottom-color: var(--text-danger);
+    }
+    :root[data-theme="light"] .card-header,
+    :root[data-theme="light"] .accordion-button {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.42);
+    }
+    :root[data-theme="light"] .card:nth-of-type(3n+1) .card-header,
+    :root[data-theme="light"] .accordion-item:nth-of-type(3n+1) .accordion-button {
+      background: linear-gradient(135deg, rgba(110,132,183,.15), var(--surface-2));
+    }
+    :root[data-theme="light"] .card:nth-of-type(3n+2) .card-header,
+    :root[data-theme="light"] .accordion-item:nth-of-type(3n+2) .accordion-button {
+      background: linear-gradient(135deg, rgba(126,155,132,.15), var(--surface-2));
+    }
+    :root[data-theme="light"] .card:nth-of-type(3n+3) .card-header,
+    :root[data-theme="light"] .accordion-item:nth-of-type(3n+3) .accordion-button {
+      background: linear-gradient(135deg, rgba(185,137,104,.14), var(--surface-2));
+    }
+    :root:not([data-theme="light"]) .card:nth-of-type(3n+1) .card-header,
+    :root:not([data-theme="light"]) .accordion-item:nth-of-type(3n+1) .accordion-button {
+      background: linear-gradient(135deg, rgba(110,132,183,.16), var(--surface-2));
+    }
+    :root:not([data-theme="light"]) .card:nth-of-type(3n+2) .card-header,
+    :root:not([data-theme="light"]) .accordion-item:nth-of-type(3n+2) .accordion-button {
+      background: linear-gradient(135deg, rgba(126,155,132,.13), var(--surface-2));
+    }
+    :root:not([data-theme="light"]) .card:nth-of-type(3n+3) .card-header,
+    :root:not([data-theme="light"]) .accordion-item:nth-of-type(3n+3) .accordion-button {
+      background: linear-gradient(135deg, rgba(185,137,104,.14), var(--surface-2));
+    }
+    .btn-outline-secondary {
+      border-color: var(--border); color: var(--text-secondary);
+      background: var(--surface-tint);
+    }
+    .btn-outline-secondary:not(:disabled):not(.disabled):hover,
+    .btn-outline-secondary:not(:disabled):not(.disabled):focus {
+      border-color: var(--hover-neutral); color: var(--hover-text);
+      background: var(--hover-neutral);
+    }
+    .btn-outline-secondary:disabled,
+    .btn-outline-secondary.disabled {
+      border-color: var(--border); color: var(--text-muted);
+      background: var(--surface-tint);
+      opacity: .65;
+    }
+
+    /* Opaque overlay surfaces. Cards can stay glassy; popups should not show
+       clashing page content through them. */
+    .modal-content {
+      background: var(--popup-bg) !important;
+      color: var(--text-primary);
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .modal-header,
+    .modal-footer {
+      background: var(--popup-bg-2);
+      border-color: var(--border);
+    }
+
+    /* Shared popup geometry: every dialog uses .pr-popup +
+       .modal-dialog-centered + .modal-dialog-scrollable for one width/position.
+       Add .pr-popup--fill for a fixed-height body so the file browser and
+       history windows stay the same size regardless of content. */
+    .pr-popup .modal-dialog { max-width: min(860px, calc(100vw - 24px)); }
+    .pr-popup .modal-content { border-radius: 14px; }
+    .pr-popup--fill .modal-content { height: min(680px, calc(100vh - 96px)); }
+    .pr-popup--fill .modal-body { display: flex; flex-direction: column; min-height: 0; }
+    /* The confirm dialog asks one question, so it stays narrow — a full-width
+       popup makes a two-line question look like a document. */
+    .pr-confirm .modal-dialog { max-width: min(520px, calc(100vw - 24px)); }
+    .pr-confirm .modal-body p { margin: 0 0 .65rem; line-height: 1.55; }
+    .pr-confirm .modal-body p:last-child { margin-bottom: 0; }
+    /* The consequence of saying yes, in the same red the countdown and the
+       breach note use when a run is about to delete. */
+    .pr-confirm .pr-confirm-warn { color: var(--text-danger); }
+    .pr-confirm .modal-footer { gap: 8px; }
+    .pr-confirm .modal-footer > * { margin: 0; }
+    /* Modals use .btn-close-white for the dark theme; in light theme that
+       renders a white × on a light popup, so drop the invert filter. */
+    :root[data-theme="light"] .btn-close-white { filter: none; }
+
+    /* ═══════ Toast ═══════ */
+    .pr-toast {
+      box-sizing: border-box;
+      color: var(--text-primary);
+      padding: 10px 16px; border-radius: 8px; margin-top: 8px;
+      font-size: .84rem; box-shadow: var(--shadow); min-width: 220px;
+      max-width: min(420px, calc(100vw - 48px));
+      border: 1px solid var(--border-strong);
+      background: var(--toast-info-bg);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    @media (max-width: 640px) {
+      .pr-toast { min-width: 0; max-width: none; width: 100%; }
+    }
+    /* Entrance pop / exit fade. Slide uses standalone translate so it can't
+       fight a transform. */
+    .pr-toast { animation: pr-toast-in .24s cubic-bezier(.21, 1.02, .55, 1.2); }
+    @keyframes pr-toast-in {
+      from { opacity: 0; translate: 0 14px; scale: .96; }
+      to   { opacity: 1; translate: 0 0;    scale: 1; }
+    }
+    .pr-toast--out { animation: pr-toast-out var(--pr-anim-out) forwards; }
+    @keyframes pr-toast-out {
+      to { opacity: 0; translate: 0 8px; }
+    }
+    .pr-toast--success { background: var(--toast-success-bg); border-color: var(--border-accent); }
+    .pr-toast--danger  { background: var(--toast-danger-bg);  border-color: var(--text-danger); }
+    .pr-toast--warning { background: var(--toast-warning-bg); border-color: var(--border-warning); }
+    .pr-toast--info    { background: var(--toast-info-bg);    border-color: var(--border-strong); }
+
+    /* ── Form validation, shared by Configuration and Filtering & Scoring:
+       .field-invalid on the field's wrapper paints the inputs red; the
+       .field-error line under it shows while .show is set. ──────────────── */
+    .field-invalid .form-control,
+    .field-invalid .input-group-text {
+      border-color: var(--text-danger) !important;
+    }
+    .field-invalid .form-control {
+      box-shadow: 0 0 0 2px var(--bg-danger);
+    }
+    .field-invalid .input-label {
+      color: var(--text-danger);
+    }
+    .field-error {
+      display: none;
+      color: var(--text-danger);
+      font-size: .78rem;
+      margin-top: 4px;
+    }
+    .field-error.show { display: block; }
+
+    /* Inline lock/warning notice, shared by Configuration and Filtering &
+       Scoring ("A run is active…", autopause reasons). */
+    .config-inline-warning {
+      border: 1px solid var(--border-warning);
+      background: var(--bg-warning);
+      color: var(--text-warning);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: .8rem;
+    }
+
+    /* Locked-section ghosting: the pages decide what dims; the not-allowed
+       cursor on the controls is common to both. */
+    .section-run-ghost .form-control,
+    .section-run-ghost .form-range,
+    .section-run-ghost .form-check-input,
+    .section-run-ghost .secret-toggle,
+    .section-run-ghost .btn {
+      cursor: not-allowed;
+    }
+
+    /* ═══════ Print / Save as PDF ═══════
+       Browsers' own "capture full page" features flatten a scrolling page into
+       one tall image by compositing it in pieces, and two things in this design
+       do not survive that: a `position: sticky` bar is painted wherever it is
+       stuck, landing in the middle of the image over content it was never in
+       front of; and `backdrop-filter` blurs a backdrop that does not exist for
+       the parts of the page that were off-screen, which is what leaves a smear.
+       Printing is a separate, untiled render, so it is the reliable way to get
+       the whole page in one piece — provided we hand it a flat, unstuck layout.
+
+       Last in the sheet so these win on order alone; `!important` only where a
+       later same-specificity rule would otherwise re-stick something. */
+    /* Someone who has asked their OS to reduce transparency has asked for
+       exactly one thing: stop showing content through content. The glass on
+       the sticky header, the title bar and the buttons is the only place this
+       app does that, so it drops to the opaque surface underneath — same
+       colors, same layout, nothing moves. The blur was decoration; the
+       surfaces were always real. A browser without this query simply keeps the
+       glass, which is today's behavior. */
+    @media (prefers-reduced-transparency: reduce) {
+      *, *::before, *::after {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+      /* Dropping the blur is not enough on its own — every one of these
+         surfaces is a translucent tint, so the page still shows through at
+         ~12%. Each keeps its own tint but gets it composited over --page-bg
+         (the one opaque token) as a second background layer: same color it
+         already appeared as when sitting over the page, now with nothing
+         behind it. Layers paint first-listed on top, so the tint goes first. */
+      .site-header,
+      .page-title-bar::before {
+        background-image:
+          linear-gradient(var(--surface-1), var(--surface-1)),
+          linear-gradient(var(--page-bg), var(--page-bg));
+      }
+    }
+
+    @media print {
+      /* Chrome drops backgrounds when printing unless asked not to, which would
+         throw away every surface, border tint and meter fill on the page. */
+      *, *::before, *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+      /* Nothing sticks or floats: everything lands in document order, once. */
+      .site-header, .page-title-bar {
+        position: static !important;
+        box-shadow: none !important;
+      }
+      /* The stuck strip's blurred backdrop and drop shadow are the artifact
+         itself — there is nothing for them to sit over on a flat page. */
+      .page-title-bar::before { display: none !important; }
+      /* A fixed full-viewport wash would print on the first page only. */
+      body::before { display: none !important; }
+      /* Transient overlays are not part of the page being captured. */
+      .toast-wrap, .pr-debug-overlay, .modal, .modal-backdrop,
+      .dashboard-run-tooltip, .log-window { display: none !important; }
+      /* Keep a card whole rather than splitting it across a page break. */
+      .card, .config-card, .run-mode-card, .ts-panel, .stat-card {
+        break-inside: avoid;
+      }
+      /* Side-scrolling regions print clipped to their scroll position; letting
+         them lay out full-width is the only way the rest of the row is seen. */
+      .header-tabs, .table-responsive { overflow: visible !important; }
+      body { min-height: 0; }
+    }
+  </style>
+  <script>
+    /* Set the theme before first paint to avoid a flash of the wrong palette. */
+    (function () {
+      try {
+        var saved = localStorage.getItem('pr-theme');
+        if (!saved) {
+          saved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', saved);
+        document.documentElement.setAttribute('data-bs-theme', saved);
+      } catch (e) {}
+    })();
+    /* When a cross-document view transition is animating this navigation, the
+       old page already cross-fades into this one — skip the CSS entrance fade
+       so the content doesn't ease in twice. (pagereveal fires before first
+       render; browsers without view transitions never fire it with one.) */
+    window.addEventListener('pagereveal', function (e) {
+      if (e.viewTransition) {
+        var main = document.getElementById('main');
+        if (main) main.style.animation = 'none';
+      }
+    });
+    /* Every mutating request carries X-MediaReducer; the server rejects writes
+       without it, blocking cross-origin drive-by POSTs (another origin can't add
+       a custom header without a CORS preflight this server never approves).
+       Wrapping fetch covers every call site. */
+    (function () {
+      var origFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        init = init || {};
+        var method = String((init.method || (input && input.method) || 'GET')).toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') {
+          var headers = new Headers(init.headers || (input && input.headers) || undefined);
+          if (!headers.has('X-MediaReducer')) headers.set('X-MediaReducer', '1');
+          init.headers = headers;
+        }
+        return origFetch(input, init);
+      };
+    })();
+  </script>
+  <script>
+    /* ── Form field helpers, shared by Configuration and Filtering & Scoring.
+       Defined in <head> because the pages' inline scripts call them at parse
+       time (initial validation/populate), before the footer script runs. ── */
+
+    // Lock a region of settings for a run: ghost it and disable every control
+    // inside. Shared by both pages, so a control added later is covered without
+    // anyone remembering to add it to a list.
+    //
+    // Only re-enables what IT disabled (data-run-locked), because a control
+    // switched off for its own reason must stay off afterwards. Anything inside
+    // [data-run-lock-exempt] is left alone: force-stop has to work during
+    // exactly the state that locks everything else.
+    //
+    // The dimming is CSS opacity, which multiplies down and cannot be undone by
+    // a descendant, so an exempt box would be grayed out by whatever wrapper
+    // above it got dimmed. Marking its ancestor chain lets the rule skip those
+    // wrappers and dim their other children instead, at any depth.
+    function _markPassthrough(root, locked) {
+      root.querySelectorAll('.run-lock-passthrough')
+          .forEach(el => el.classList.remove('run-lock-passthrough'));
+      if (!locked) return;
+      root.querySelectorAll('[data-run-lock-exempt]').forEach((box) => {
+        for (let el = box.parentElement; el && el !== root; el = el.parentElement) {
+          el.classList.add('run-lock-passthrough');
+        }
+      });
+    }
+
+    window.prSetRunLock = function (root, locked) {
+      if (!root) return;
+      root.classList.toggle('section-run-ghost', !!locked);
+      _markPassthrough(root, !!locked);
+      root.querySelectorAll('input, select, textarea, button').forEach((el) => {
+        if (el.closest('[data-run-lock-exempt]')) return;
+        if (locked) {
+          if (el.disabled) return;             // already off for its own reason
+          el.dataset.runLocked = '1';
+          el.disabled = true;
+          el.setAttribute('aria-disabled', 'true');
+        } else if (el.dataset.runLocked === '1') {
+          delete el.dataset.runLocked;
+          el.disabled = false;
+          el.setAttribute('aria-disabled', 'false');
+        }
+      });
+    };
+
+    /* Trimmed text of an input, '' when the element is missing. */
+    function prFieldRaw(id) {
+      return document.getElementById(id)?.value?.trim() ?? '';
+    }
+
+    /* Finite number from raw text, else null (blank is null, not 0). */
+    function prNumOrNull(raw) {
+      const n = Number(raw);
+      return raw !== '' && Number.isFinite(n) ? n : null;
+    }
+
+    function prPositiveNumber(raw) {
+      const n = prNumOrNull(raw);
+      return n !== null && n > 0;
+    }
+
+    /* A field's value as a number: blank takes blankValue (0 where blank
+       means zero, a default where blank means "use the default", null where
+       a value is required), anything non-numeric is null. */
+    function prBlankNumber(id, blankValue = null) {
+      const raw = prFieldRaw(id);
+      return raw === '' ? blankValue : prNumOrNull(raw);
+    }
+
+    /* Invalid flags show only once armed (first blur or save attempt). Focus
+       suppresses NEW flags so a retype never flashes red mid-edit, but an
+       already-visible flag stays up while focused until the value is fixed (a
+       failed save jumping to the field must not clear it). Pass the
+       .field-invalid element as flagEl for that stickiness. */
+    function prInvalidVisible(invalid, armed, input, flagEl) {
+      if (!invalid || !armed) return false;
+      if (input && document.activeElement === input) {
+        return !!flagEl?.classList.contains('field-invalid');
+      }
+      return true;
+    }
+
+    /* Blur-armed validation: focus re-runs quietly (no new flag mid-edit),
+       clicking off an enabled field validates and shows the result. */
+    function prWireBlurValidation(inputId, validateFn) {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      input.addEventListener('focus', () => validateFn({ show: false, focus: false }));
+      input.addEventListener('blur', () => {
+        if (!input.disabled) validateFn({ show: true, focus: false });
+      });
+    }
+
+    /* Download text as a file through the browser (a client-side Blob), so
+       logs and reports save to the user's machine instead of the container
+       filesystem. Returns false when there is nothing to download. */
+    function prDownloadText(filename, text) {
+      const body = String(text ?? '');
+      if (!body.trim()) return false;
+      let url = null;
+      try {
+        const blob = new Blob([body], { type: 'text/plain;charset=utf-8' });
+        url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return true;
+      } catch (_) {
+        return false;
+      } finally {
+        // Revoke on every path — including an exception after createObjectURL —
+        // so the object URL never leaks for the page's lifetime.
+        if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    }
+
+    /* Timestamp suffix for downloaded filenames, e.g. 2026-07-15_09-42-11. */
+    function prFileStamp() {
+      const d = new Date();
+      const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+    }
+
+    /* Apply/clear the red field style, its .field-error line, and the aria
+       state in one place. */
+    function prApplyFieldFlag(flagEl, errEl, inputEl, visible) {
+      flagEl?.classList.toggle('field-invalid', !!visible);
+      errEl?.classList.toggle('show', !!visible);
+      inputEl?.setAttribute('aria-invalid', visible ? 'true' : 'false');
+    }
+
+    /* Escape text for interpolation into HTML (element text or a
+       double/single-quoted attribute). */
+    function prHtmlEsc(s) {
+      return String(s ?? '').replace(/[&<>"']/g,
+        ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
+    /* Touch guard for sliders (pairs with the input[type=range] touch-action:
+       pan-y rule): pan-y hands vertical gestures to the page scroller, but
+       some mobile browsers still jump the slider's value on the INITIAL touch
+       before deciding the gesture is a scroll. Remember the value at
+       touchstart and restore it when the gesture turns out to be vertical —
+       taps (no movement) and horizontal drags keep working untouched. */
+    (function prGuardRangeTouchScroll() {
+      let g = null;
+      const restore = () => {
+        if (g && g.el.value !== g.v) {
+          g.el.value = g.v;
+          g.el.dispatchEvent(new Event('input', { bubbles: true }));
+          g.el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      };
+      document.addEventListener('touchstart', (e) => {
+        const el = e.target;
+        if (el?.matches?.('input[type="range"]') && e.touches.length === 1) {
+          g = { el, v: el.value, x: e.touches[0].clientX, y: e.touches[0].clientY,
+                horiz: false, moved: false, scrolling: false };
+        }
+      }, { capture: true, passive: true });
+      document.addEventListener('touchmove', (e) => {
+        if (!g || g.horiz || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        const dx = Math.abs(t.clientX - g.x);
+        const dy = Math.abs(t.clientY - g.y);
+        if (!g.scrolling && dx < 6 && dy < 6) return;   // no clear intent yet
+        g.moved = true;
+        if (!g.scrolling && dx > dy) { g.horiz = true; return; }  // deliberate slide
+        // Vertical: snap back IMMEDIATELY — mid-scroll, not at finger-up — and
+        // keep undoing any further jumps while this scroll gesture continues.
+        g.scrolling = true;
+        restore();
+      }, { capture: true, passive: true });
+      // touchcancel = the scroller took the gesture (the common pan-y path);
+      // touchend after unclassified vertical movement = a short flick. A final
+      // restore covers a jump that landed after the last touchmove.
+      document.addEventListener('touchcancel', () => { if (g && !g.horiz) restore(); g = null; }, true);
+      document.addEventListener('touchend', () => {
+        if (g && !g.horiz && g.moved) restore();
+        g = null;
+      }, true);
+    })();
+
+    /* Thousands-separated number (up to maxFrac decimals); mirrors the
+       server's commafy filter so live updates match the initial render.
+       Non-numeric passes through so a partial entry isn't mangled. */
+    function prCommaNum(v, maxFrac = 1) {
+      const n = Number(String(v).replace(/,/g, ''));
+      return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: maxFrac }) : String(v);
+    }
+
+    /* A MEASURED size in GB, always to one decimal — the JS twin of the
+       measured_gb template filter.
+
+       The app draws one line between numbers it measured (free space, disk
+       totals, library and movie sizes) and numbers the user typed (whole GB).
+       Measured figures keep their decimal even when it is .0, so one reading
+       never appears as "400" in one place and "400.0" in another. prCommaNum
+       is the wrong tool for them: it drops the trailing zero. Settings use
+       prCommaNum(v, 0). */
+    function prMeasuredGb(gb) {
+      /* A missing reading is not zero. Number(null) is 0 and Number('') is 0,
+         both finite, so a naive guard turns "we have no figure" into a
+         confident "0.0 GB free" — which reads as a full disk. Anything that is
+         not a real number becomes the em dash the cards already use for an
+         unknown value. A genuine 0 still formats as 0.0. */
+      if (gb === null || gb === undefined || gb === '') return '—';
+      const n = Number(gb);
+      if (!Number.isFinite(n)) return '—';
+      return n.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    }
+
+    /* GB amount for messages ("a run would free ~X GB") — measured, so it
+       follows the same rule. */
+    function prGbAmount(gb) {
+      return prMeasuredGb(gb);
+    }
+
+    /* The disk bar, drawn the same way wherever it appears — the Dashboard's
+       Storage card and Configuration's Space Thresholds panel both call this.
+       Every lookup is scoped to `root` and done by class, so the two pages keep
+       their own ids and only have to agree on the markup shape:
+
+         .disk-bar-fill        the used-space fill
+         .disk-bar-library     the media library's share of that fill
+         .disk-bar-mark--KIND  headroom | redline | cap
+         [data-dbl="KIND"]     the legend entry for each, plus "library"
+
+       `s` is { disk, libraryGb, headroomGb, redlineGb, capGb, monitoring }.
+       Thresholds come from the caller rather than a global because the two
+       pages mean different things by them: the Dashboard draws what is SAVED,
+       while Configuration must draw what the pending form would save.
+       Returns which keys ended up shown, so a caller can react to it. */
+    function prRenderDiskBar(root, s) {
+      const shown = { library: false, cap: false, headroom: false, redline: false };
+      if (!root) return shown;
+      const num = v => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+      const q = sel => root.querySelector(sel);
+      const legend = (key, on) => {
+        const e = root.querySelector(`[data-dbl="${key}"]`);
+        if (e) e.hidden = !on;
+        shown[key] = on;
+      };
+      const mark = (kind, on) => {
+        const e = q(`.disk-bar-mark--${kind}`);
+        if (e) e.hidden = !on;
+        return e;
+      };
+      const fillEl = q('.disk-bar-fill');
+      const libEl = q('.disk-bar-library');
+
+      /* Nothing monitored: empty the bar and drop every marker and legend key,
+         so no reading lingers from before the directories were removed. */
+      if (!s.monitoring) {
+        if (fillEl) fillEl.style.width = '0%';
+        if (libEl) libEl.style.width = '0%';
+        ['headroom', 'redline', 'cap'].forEach(k => mark(k, false));
+        ['library', 'cap', 'headroom', 'redline'].forEach(k => legend(k, false));
+        return shown;
+      }
+
+      const disk = s.disk || null;
+      const usedPct = disk ? num(disk.pct_used) : null;
+      /* The used fill follows any readable disk, even one whose total is not
+         usable for the proportional parts below. */
+      if (fillEl && usedPct !== null) fillEl.style.width = usedPct + '%';
+
+      const total = disk ? num(disk.total_gb) : null;
+      /* A poll can return no disk (the cache is not warmed yet) even though the
+         page rendered with a live reading. Leave the last-known bar rather than
+         blanking the markers and library while the used fill still shows —
+         that mismatch is the flicker worth avoiding. */
+      if (total === null || !(total > 0)) return shown;
+
+      const lib = num(s.libraryGb);
+      const haveGeom = lib !== null && lib >= 0;
+
+      /* Anchor the library's right edge to the used fill's right edge so the
+         two stay flush; clamp its width to the used fill (guards a stale
+         library reading larger than used). */
+      const usedRight = (usedPct !== null) ? usedPct : (haveGeom ? 100 : 0);
+      let libW = 0, libLeft = usedRight;
+      if (haveGeom) {
+        libW = Math.max(0, Math.min(lib / total * 100, usedRight));
+        libLeft = usedRight - libW;
+      }
+      const libShown = haveGeom && libW > 0;
+      if (libEl) {
+        libEl.style.left = libLeft + '%';
+        libEl.style.width = libW + '%';
+        if (libShown) libEl.title = `Media library: ${prMeasuredGb(lib)} GB`;
+      }
+
+      /* Headroom and Redline are free-space targets: the used edge at which
+         that much free space remains. */
+      const freeMark = (kind, targetGb, label, note) => {
+        const t = num(targetGb);
+        const on = t !== null && t > 0 && t < total;
+        const el = mark(kind, on);
+        if (on && el) {
+          el.style.left = ((total - t) / total * 100) + '%';
+          el.title = `${label}: ${prCommaNum(t, 0)} GB free — ${note}`;
+        }
+        return on;
+      };
+      const headroomShown = freeMark('headroom', s.headroomGb,
+        'Headroom target', 'cleanup keeps at least this much free');
+      const redlineShown = freeMark('redline', s.redlineGb,
+        'Redline floor', 'emergency cleanup runs when free drops below this');
+
+      /* Library cap: the used edge if the library were trimmed to the cap, i.e.
+         the library's base (non-library used) plus the cap. Hidden when the cap
+         is unreachable — reaching it would put the used edge past the end of
+         the disk, so the line would run off the bar. The reach test is done in
+         raw GB so it is exact; the marker itself stays anchored to the
+         library's visual base and is clamped to the bar. */
+      let capShown = false;
+      const capEl = q('.disk-bar-mark--cap');
+      if (capEl) {
+        const cap = num(s.capGb);
+        const usedGb = num(disk.used_gb);
+        if (haveGeom && cap !== null && cap > 0 && usedGb !== null) {
+          const baseGb = Math.max(0, usedGb - lib);
+          if (baseGb + cap <= total) {
+            capEl.style.left = Math.min(100, Math.max(0, libLeft + cap / total * 100)) + '%';
+            capEl.title = `Library size cap: ${prCommaNum(cap, 0)} GB — `
+              + 'cleanup keeps the media library at or under this';
+            capShown = true;
+          }
+        }
+        capEl.hidden = !capShown;
+      }
+
+      legend('library', libShown);
+      legend('cap', capShown);
+      legend('headroom', headroomShown);
+      legend('redline', redlineShown);
+      return shown;
+    }
+
+    /* Scroll an element into view; scroll-margin CSS on the target clears
+       the sticky bars. delayMs (after a paint) lets layout/animation settle
+       first — and staggers competing on-load scrolls so the later caller
+       decides the final position. */
+    function prScrollTo(el, { delayMs = 0, smooth = true } = {}) {
+      if (!el) return;
+      const go = () => el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+      if (delayMs > 0) window.requestAnimationFrame(() => window.setTimeout(go, delayMs));
+      else go();
+    }
+  </script>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+
+<header class="site-header">
+  <div class="header-inner">
+    <div class="header-brand">
+      <a href="/">
+        <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="5"/>
+          <path d="M7.5 7.5l4.5 4 4.5-4"/>
+          <path d="M7.5 16.5h9"/>
+        </svg>
+        <span class="brand-text">
+          <span class="brand-name">MediaReducer</span>
+          <span class="brand-sub">Media Library Manager</span>
+        </span>
+      </a>
+      <a href="/#run-progress" class="pr-pill pr-pill--state is-accent header-run-badge run-badge-mobile" aria-live="polite"><span class="pr-pill-dot" aria-hidden="true"></span><span class="run-badge-label">Running</span></a>
+    </div>
+    <div class="header-tabs">
+      <a href="/"         class="{{ 'active' if request.path == '/'         else '' }}">Dashboard</a>
+      <a href="/config"   class="{{ 'active' if request.path == '/config'   else '' }} {{ 'config-needs-onboarding' if connection_onboarding_needed or api_connection_error else '' }}" {{ 'title="Fix the API connection settings"' if api_connection_error and not connection_onboarding_needed else ('title="Set up your media server connection (Plex via Tautulli, or Jellyfin)"' if connection_onboarding_needed else '') }}>Configuration</a>
+      <a href="/explorer" class="{{ 'active' if request.path == '/explorer' else '' }}">Filtering &amp; Scoring</a>
+    </div>
+    <a href="/#run-progress" class="pr-pill pr-pill--state is-accent header-run-badge run-badge-desktop" aria-live="polite"><span class="pr-pill-dot" aria-hidden="true"></span><span class="run-badge-label">Running</span></a>
+    <button type="button" id="about-toggle" class="theme-toggle about-toggle" onclick="prShowWelcome()"
+            aria-label="About MediaReducer and quick start guide" title="About &amp; quick start"
+            aria-haspopup="dialog">?</button>
+    <button type="button" id="theme-toggle" class="theme-toggle" onclick="prToggleTheme()"
+            aria-label="Switch between light and dark theme" title="Switch theme">
+      <!-- moon: shown in light mode (click → dark) -->
+      <svg class="icon-to-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+      <!-- sun: shown in dark mode (click → light) -->
+      <svg class="icon-to-light" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4.2"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+      </svg>
+      <span class="tt-label" id="theme-toggle-label">Light</span>
+    </button>
+  </div>
+</header>
+
+<div id="main">
+  {% block content %}{% endblock %}
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<!-- First-run welcome / About & quick start. Auto-opens once per install (until
+     a config reset) and can be reopened any time from the "?" header button. -->
+<div class="modal fade pr-popup" id="welcome-modal" tabindex="-1" aria-hidden="true" aria-labelledby="welcome-modal-title">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title" id="welcome-modal-title">Welcome to MediaReducer</h5>
+          <div style="font-size:.78rem;color:var(--text-muted);">Automatic movie library cleanup for Plex and Jellyfin</div>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="welcome-warning welcome-warning--danger">
+          <strong>This app deletes movie files — there is no recycle bin.</strong>
+          It starts paused and deletes nothing. Use <strong>Simulate</strong> until the
+          output matches exactly what you expect before you turn on
+          <strong>Automatic Cleanup</strong>.
+        </div>
+        <div class="welcome-warning welcome-warning--caution">
+          <strong>Do not expose this app to the internet.</strong> There is no login —
+          anyone who can reach the web UI can delete your media. Keep port 7474 on your
+          LAN or behind a VPN.
+        </div>
+
+        <h6 class="welcome-heading">Quick start</h6>
+        <ol class="welcome-steps">
+          <li>Open <strong>Configuration</strong> → <strong>Connections</strong>: pick your servers, use <strong>Auto Detect</strong>, then <strong>Check for Errors</strong>.</li>
+          <li><strong>Movie Library Paths</strong>: add the folders MediaReducer may manage and protect any collections.</li>
+          <li>Arm at least one <strong>Space Threshold</strong> — all start off, and Monitor Only needs one — then tune scoring on the <strong>Filtering &amp; Scoring</strong> tab.</li>
+          <li>Run <strong>Simulate</strong> from the Dashboard and read the log — <strong>Monitor Only</strong> switches on by itself once the scan finishes.</li>
+          <li>Turn on <strong>Automatic Cleanup</strong> only when Simulate deletes exactly what you'd delete yourself.</li>
+          <li>Optional: add <strong>Notifications</strong> to get a summary of each run.</li>
+        </ol>
+
+        <h6 class="welcome-heading">About</h6>
+        <p class="welcome-about">
+          MediaReducer scores every movie from watch history and IMDb rating, and frees
+          space by deleting the lowest-value files first when your storage thresholds are
+          crossed. Protected collections, filtered movies, and anything it can't safely
+          identify are always skipped. Reopen this guide any time with the <strong>?</strong>
+          button in the header; full documentation is in the README.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Get started</button>
+        <button type="button" class="btn btn-outline-primary" onclick="prWelcomeOpenConfig()">Open Configuration</button>
+      </div>
+    </div>
+  </div>
+</div>
+<style>
+  .welcome-warning {
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+    font-size: .84rem; line-height: 1.55;
+  }
+  .welcome-warning--danger {
+    background: var(--bg-danger); color: var(--text-danger);
+    border: 1px solid var(--border-danger);
+  }
+  .welcome-warning--caution {
+    background: var(--bg-warning); color: var(--text-warning);
+    border: 1px solid var(--border-warning);
+  }
+  .welcome-heading {
+    margin: 18px 0 8px; font-size: .78rem; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted);
+  }
+  .welcome-steps { margin: 0 0 4px; padding-left: 20px; line-height: 1.75; font-size: .88rem; }
+  .welcome-steps li + li { margin-top: 2px; }
+  .welcome-about { margin: 0; font-size: .86rem; line-height: 1.6; color: var(--text-secondary); }
+</style>
+
+<!-- Shared confirmation dialog for the actions that delete, or that arm
+     deleting. It replaced a two-click "Are you sure?" on the button itself,
+     which had to keep its warning alive in a sticky toast off to the side —
+     the decision and the reason for it now sit in one place the user has to
+     answer. prConfirm() below fills and drives it. -->
+<div class="modal fade pr-popup pr-confirm" id="pr-confirm-modal" tabindex="-1"
+     aria-hidden="true" aria-labelledby="pr-confirm-title"
+     aria-describedby="pr-confirm-body">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="pr-confirm-title">Are you sure?</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="pr-confirm-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-outline-secondary" id="pr-confirm-extra" hidden></button>
+        <button type="button" class="btn btn-danger-action" id="pr-confirm-ok">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Manual IMDb-dataset setup steps. Pops when a Simulate/Cleanup fails on
+     the dataset (driven by the dashboard's progress polling). -->
+<div class="modal fade pr-popup" id="imdb-help-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">IMDb ratings data required</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>IMDb ratings are required for scoring — the copy on disk was missing or older than your
+        IMDb refresh interval, and the automatic download failed. Add the file manually:</p>
+        <ol class="mb-3" style="line-height:1.7;">
+          <li>Download <code>title.ratings.tsv.gz</code> from
+              <a id="imdb-help-url" href="https://datasets.imdbws.com/title.ratings.tsv.gz" target="_blank" rel="noopener">IMDb's datasets page</a>.</li>
+          <li>Drop that file into your config folder as:<br>
+              <code id="imdb-help-gz-path">/config/title.ratings.tsv.gz</code></li>
+          <li>Run again. MediaReducer unpacks it automatically. You can also place the extracted <code id="imdb-help-tsv-path">/config/title.ratings.tsv</code>.</li>
+        </ol>
+        <div class="form-text">Runs keep the file refreshed after it exists. The next Simulate also
+        annotates the Filtering &amp; Scoring library table with ratings.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='vendor/bootstrap-5.3.3.bundle.min.js') }}"></script>
+<script>
+window.PR_DISPLAY_TIME_FORMAT = {{ display_time_format | default('12h') | tojson }};
+window.PR_SERVER_TIME_ZONE = {{ server_time_zone | default('UTC') | tojson }};
+window.PR_HOST_TIME_ZONE = {{ host_time_zone | default('UTC') | tojson }};
+window.PR_SERVER_EPOCH = {{ server_epoch | default(0) | tojson }};
+window.PR_CLIENT_EPOCH_AT_LOAD = Date.now() / 1000;
+
+// First launch only: tell the server the browser's time zone so a fresh install
+// runs on the user's zone instead of the container's (usually UTC). The endpoint
+// is one-shot and guarded server-side; this just hands it the detected zone.
+window.PR_TZ_NEEDS_INIT = {{ 'true' if time_zone_needs_init else 'false' }};
+(function prInitBrowserTimeZone() {
+  if (!window.PR_TZ_NEEDS_INIT) return;
+  window.PR_TZ_NEEDS_INIT = false;   // don't double-fire within this session
+  let tz = '';
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
+  fetch('/api/timezone/init', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-MediaReducer': '1' },
+    body: JSON.stringify({ tz }),
+  }).then(r => (r.ok ? r.json() : null)).then(d => {
+    if (d && d.ok && d.time_zone && d.time_zone !== 'auto') {
+      window.PR_SERVER_TIME_ZONE = d.time_zone;   // times now render in the detected zone
+      // Let the Config page (if open) reflect it in the dropdown without a reload.
+      window.dispatchEvent(new CustomEvent('pr-timezone-initialized', { detail: { tz: d.time_zone } }));
+    }
+  }).catch(() => {});
+})();
+
+function prResolvedTimeZone() {
+  // The app runs on ONE clock — the operating zone set in Configuration
+  // (auto = container clock). All times render in that zone so what you read
+  // matches when things actually happen.
+  return String(window.PR_SERVER_TIME_ZONE || 'UTC').trim() || 'UTC';
+}
+function prTimeFormat() {
+  const raw = String(window.PR_DISPLAY_TIME_FORMAT || '12h').toLowerCase();
+  return raw === '24' || raw === '24h' ? '24h' : '12h';
+}
+function prTimeQuery() {
+  return new URLSearchParams({ time_format: prTimeFormat() }).toString();
+}
+function prTimeLabel(hhmm) {
+  // A canonical 24-hour "HH:MM" — the daily run time, and the Config page's
+  // dropdown values — rendered in the chosen display format. Anything that
+  // isn't HH:MM comes back untouched.
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm ?? '').trim());
+  if (!m) return String(hhmm ?? '');
+  const h = Number(m[1]);
+  if (!Number.isFinite(h) || h > 23) return String(hhmm);
+  if (prTimeFormat() === '24h') return `${String(h).padStart(2, '0')}:${m[2]}`;
+  return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`;
+}
+function prZonedHHMM(when) {
+  // "HH:MM", always 24-hour, for a Date or epoch-ms in the OPERATING zone.
+  // This is the form the scheduler's run-time comparisons use — a sortable
+  // key, never a display string, so it ignores the 12/24-hour setting.
+  // Returns null when the zone can't be resolved, so each caller keeps its
+  // own fallback.
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: prResolvedTimeZone(),
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).format(when instanceof Date ? when : new Date(when));
+  } catch (_) { return null; }
+}
+function prServerEpochNow() {
+  // Server clock estimate: render-time epoch plus client elapsed time.
+  return Number(window.PR_SERVER_EPOCH || 0)
+       + (Date.now() / 1000 - Number(window.PR_CLIENT_EPOCH_AT_LOAD || 0));
+}
+function prClockSkewSeconds() {
+  // Positive = server clock ahead of this device. Includes page-load latency,
+  // so treat small values as noise.
+  return Number(window.PR_SERVER_EPOCH || 0) - Number(window.PR_CLIENT_EPOCH_AT_LOAD || 0);
+}
+function prDateTimeFormat(withSeconds = true) {
+  const is24 = prTimeFormat() === '24h';
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: prResolvedTimeZone(),
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: is24 ? '2-digit' : 'numeric',
+    minute: '2-digit',
+    ...(withSeconds ? { second: '2-digit' } : {}),
+    hour12: !is24,
+    hourCycle: is24 ? 'h23' : 'h12',
+  });
+}
+function prFormatDate(date, withSeconds = true) {
+  try { return prDateTimeFormat(withSeconds).format(date); }
+  catch (_) { return date.toLocaleString(undefined, { hour12: prTimeFormat() !== '24h' }); }
+}
+function prFormatEpoch(epochSeconds, withSeconds = true) {
+  if (epochSeconds === null || epochSeconds === undefined || epochSeconds === '') return '—';
+  const n = Number(epochSeconds);
+  if (!Number.isFinite(n)) return '—';
+  return prFormatDate(new Date(n * 1000), withSeconds);
+}
+function prNormalizeDisplayedTimestamps(text) {
+  // Defensive browser-side cleanup for raw log lines that still start with the
+  // script's server-clock 24-hour timestamp. The backend normally converts log
+  // output before sending it; this keeps Dashboard output consistent if any raw
+  // text slips through. It only changes what is displayed, never the log file.
+  const raw = String(text ?? '');
+  if (!raw) return raw;
+  const re = /(^|\n)(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})(\s+-\s+|\s+\|\s*)/g;
+  return raw.replace(re, (match, lineStart, datePart, hh, mm, ss, sep) => {
+    if (prTimeFormat() === '24h') return match;
+    const h = Number(hh);
+    if (!Number.isFinite(h)) return match;
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${lineStart}${datePart} ${h12}:${mm}:${ss} ${suffix}${sep}`;
+  });
+}
+
+function prSetTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  const root = document.documentElement;
+  // Swap the whole palette in one frame. Both attributes are set together —
+  // ours drives the app's tokens, Bootstrap's drives its own — and .pr-theme-swap
+  // holds every transition off while they land, so nothing is caught halfway
+  // between the two themes. Reading offsetWidth forces the new colors to be
+  // computed before transitions come back.
+  root.classList.add('pr-theme-swap');
+  root.setAttribute('data-theme', t);
+  root.setAttribute('data-bs-theme', t);
+  void root.offsetWidth;
+  // Two frames: the first is the one the new palette paints in, so the class
+  // can only come off after it. requestAnimationFrame may not run in a
+  // background tab, so a timer backstops it — leaving the class on would
+  // silently kill every transition on the page.
+  const restore = () => root.classList.remove('pr-theme-swap');
+  requestAnimationFrame(() => requestAnimationFrame(restore));
+  setTimeout(restore, 250);
+  try { localStorage.setItem('pr-theme', t); } catch (e) {}
+  const label = document.getElementById('theme-toggle-label');
+  const btn = document.getElementById('theme-toggle');
+  // Button advertises the theme you'll switch TO.
+  if (label) label.textContent = (t === 'light') ? 'Dark' : 'Light';
+  if (btn) btn.title = (t === 'light') ? 'Switch to dark theme' : 'Switch to light theme';
+}
+function prToggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  prSetTheme(current === 'light' ? 'dark' : 'light');
+}
+// Sync the label/title with whatever the pre-paint script already applied.
+document.addEventListener('DOMContentLoaded', function () {
+  prSetTheme(document.documentElement.getAttribute('data-theme') || 'dark');
+});
+
+// ── First-run welcome / About & quick start ─────────────────────────────────
+// Auto-opens once for a fresh install; any dismissal (Get started, ×, Esc,
+// backdrop) persists the seen flag so it never nags again. The "?" header
+// button reopens it on demand without touching the flag (already seen).
+window.PR_WELCOME_SERVER_NEEDED = {{ 'true' if welcome_needed | default(false) else 'false' }};
+
+function prWelcomeSeenPending() {
+  try {
+    const ts = Number(sessionStorage.getItem('pr-welcome-seen-pending') || 0);
+    return !!ts && Date.now() - ts < 120000;
+  } catch (_) {
+    return false;
+  }
+}
+
+function prSetWelcomeSeenPending() {
+  try { sessionStorage.setItem('pr-welcome-seen-pending', String(Date.now())); } catch (_) {}
+}
+
+function prClearWelcomeSeenPending() {
+  try { sessionStorage.removeItem('pr-welcome-seen-pending'); } catch (_) {}
+}
+
+window.PR_WELCOME_NEEDED = window.PR_WELCOME_SERVER_NEEDED && !prWelcomeSeenPending();
+if (!window.PR_WELCOME_SERVER_NEEDED) prClearWelcomeSeenPending();
+
+async function prPersistWelcomeSeen({ keepalive = false } = {}) {
+  if (!window.PR_WELCOME_NEEDED && !window.PR_WELCOME_SERVER_NEEDED) return;
+  window.PR_WELCOME_NEEDED = false;
+  prSetWelcomeSeenPending();
+  try {
+    const opts = keepalive
+      ? { method: 'POST', keepalive: true }
+      : { method: 'POST', cache: 'no-store' };
+    await fetch('/api/welcome/seen', opts);
+  } catch (_) {}
+}
+
+function prShowWelcome() {
+  const el = document.getElementById('welcome-modal');
+  if (el && window.bootstrap) bootstrap.Modal.getOrCreateInstance(el).show();
+}
+
+async function prWelcomeOpenConfig() {
+  // Persist the seen flag before navigating. The session flag covers the short
+  // page-transition window if config.json has not finished writing yet.
+  await prPersistWelcomeSeen();
+  window.location.href = '/config';
+}
+
+(function initWelcomeGuide() {
+  const el = document.getElementById('welcome-modal');
+  if (!el) return;
+  el.addEventListener('hidden.bs.modal', () => {
+    if (!window.PR_WELCOME_NEEDED) return;
+    prPersistWelcomeSeen({ keepalive: true });
+  });
+  if (window.PR_WELCOME_NEEDED) {
+    document.addEventListener('DOMContentLoaded', prShowWelcome);
+    if (document.readyState !== 'loading') prShowWelcome();
+  }
+})();
+
+// ── Shared debug output popup ─────────────────────────────────────────────────
+// Every debug button routes through here: a fixed panel with the raw text and
+// a copy-to-clipboard button. Created lazily so any page can use it.
+function _prDebugBox() {
+  let overlay = document.getElementById('pr-debug-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'pr-debug-overlay';
+    overlay.className = 'pr-debug-overlay';
+    overlay.innerHTML =
+      '<div class="pr-debug-box" role="dialog" aria-modal="true" aria-label="Debug output">' +
+        '<div class="pr-debug-head">' +
+          '<span class="pr-debug-title" id="pr-debug-title"></span>' +
+          '<button type="button" class="btn btn-sm btn-outline-secondary" id="pr-debug-copy" onclick="prCopyDebugBox(this)">Copy</button>' +
+          '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="prHideDebugBox()">Close</button>' +
+        '</div>' +
+        '<pre id="pr-debug-text"></pre>' +
+      '</div>';
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) prHideDebugBox(); });
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && overlay.classList.contains('show')) prHideDebugBox();
+    });
+  }
+  return overlay;
+}
+// Pin the page-title bar exactly below the site header and give it its
+// floating backdrop only while actually stuck.
+(function () {
+  const bar = document.querySelector('.page-title-bar');
+  if (!bar) return;
+  // offsetHeight is rounded to whole pixels, and the stacked mobile header is
+  // 86.72px tall — reported as 87. The title bar then sticks a quarter-pixel
+  // BELOW where the header actually ends, and scrolling content shows through
+  // that seam. Measure the real height and floor it, so the bar laps under the
+  // header instead: the header paints above it (z-index 100 vs 60), so an
+  // overlap is invisible where a gap is not.
+  const headerH = () => {
+    const el = document.querySelector('.site-header');
+    if (!el) return 58;
+    return Math.floor(el.getBoundingClientRect().height) || 58;
+  };
+  const syncTop = () => {
+    document.documentElement.style.setProperty('--pr-header-h', headerH() + 'px');
+    document.documentElement.style.setProperty('--pr-titlebar-h', (bar.offsetHeight || 54) + 'px');
+  };
+  const syncStuck = () => bar.classList.toggle('is-stuck', bar.getBoundingClientRect().top <= headerH() + 1);
+  syncTop(); syncStuck();
+  window.addEventListener('resize', () => { syncTop(); syncStuck(); });
+  window.addEventListener('scroll', syncStuck, { passive: true });
+})();
+
+// Swap a button's label in place without the button jumping width — the label
+// carries the state ("Save" → "Saving", "Reset everything" → "Are you sure?").
+function _measureMorphButtonWidth(btn, text) {
+  if (!btn) return 0;
+  const probe = btn.cloneNode(false);
+  probe.removeAttribute('id');
+  probe.removeAttribute('onclick');
+  probe.disabled = false;
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.pointerEvents = 'none';
+  probe.style.left = '-9999px';
+  probe.style.top = '-9999px';
+  probe.style.width = 'auto';
+  probe.style.minWidth = '0';
+  const span = document.createElement('span');
+  span.className = 'btn-morph-label';
+  span.textContent = text;
+  probe.appendChild(span);
+  document.body.appendChild(probe);
+  const width = Math.ceil(probe.offsetWidth);
+  probe.remove();
+  return width;
+}
+
+function _morphButtonText(btn, text, opts = {}) {
+  if (!btn) return;
+  const nextText = String(text || '');
+  btn.classList.add('btn-morph');
+
+  if (btn._morphTimer) {
+    clearTimeout(btn._morphTimer);
+    btn._morphTimer = null;
+  }
+  let label = btn.querySelector('.btn-morph-label');
+  if (!label) {
+    const currentText = (btn.textContent || '').trim();
+    btn.textContent = '';
+    label = document.createElement('span');
+    label.className = 'btn-morph-label';
+    label.textContent = currentText;
+    btn.appendChild(label);
+  }
+
+  if ((label.textContent || '').trim() === nextText) {
+    btn.setAttribute('aria-label', nextText);
+    return;
+  }
+
+  const currentWidth = Math.ceil(btn.getBoundingClientRect().width || btn.offsetWidth);
+  const nextWidth = _measureMorphButtonWidth(btn, nextText);
+  // noShrink (used when arming "Are you sure?"): never make the tap target
+  // smaller than it was. On touch, the confirming tap lands where the button
+  // WAS — if the arming morph shrinks it, that tap hits the page instead and
+  // the outside-click canceller disarms the confirmation.
+  const targetWidth = opts.noShrink ? Math.max(currentWidth, nextWidth) : nextWidth;
+
+  btn.setAttribute('aria-label', nextText);
+  btn.style.width = `${currentWidth}px`;
+  btn.style.minWidth = `${currentWidth}px`;
+  btn.offsetWidth; // force the width transition to start from the current size
+
+  label.textContent = nextText;
+  requestAnimationFrame(() => {
+    btn.style.width = `${targetWidth}px`;
+    btn.style.minWidth = `${targetWidth}px`;
+  });
+
+  btn._morphTimer = setTimeout(() => {
+    btn.style.width = '';
+    // Keep the widened footprint for the whole armed state; the disarm morph
+    // (without noShrink) clears it.
+    btn.style.minWidth = opts.noShrink ? `${targetWidth}px` : '';
+    btn._morphTimer = null;
+  }, 210);
+}
+let _prDebugReturnFocus = null;
+function prShowDebugBox(title, text) {
+  const overlay = _prDebugBox();
+  overlay.querySelector('#pr-debug-title').textContent = title || 'Debug output';
+  overlay.querySelector('#pr-debug-text').textContent = text || '(empty)';
+  overlay.classList.add('show');
+  // The box declares role=dialog aria-modal, so actually move focus into it
+  // (and back on close) — otherwise keyboard focus stays on the now-disabled
+  // trigger button and Tab wanders the page behind the overlay.
+  if (!overlay.contains(document.activeElement)) {
+    _prDebugReturnFocus = (document.activeElement instanceof HTMLElement) ? document.activeElement : null;
+    overlay.querySelector('#pr-debug-copy')?.focus();
+  }
+}
+function prHideDebugBox() {
+  const overlay = document.getElementById('pr-debug-overlay');
+  if (!overlay || !overlay.classList.contains('show')) return;
+  overlay.classList.remove('show');
+  if (_prDebugReturnFocus && document.contains(_prDebugReturnFocus)) {
+    try { _prDebugReturnFocus.focus(); } catch (_) {}
+  }
+  _prDebugReturnFocus = null;
+}
+async function prCopyDebugBox(btn) {
+  const text = document.getElementById('pr-debug-text')?.textContent || '';
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (_) { /* fall through to the textarea fallback */ }
+  if (!ok) {
+    // http:// LAN origins have no navigator.clipboard — classic fallback.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+    ta.remove();
+  }
+  if (btn) {
+    const old = btn.textContent;
+    btn.textContent = ok ? 'Copied' : 'Copy failed';
+    setTimeout(() => { btn.textContent = old; }, 1600);
+  }
+}
+// Keep the "…" loading state visible for a beat before results replace it: a
+// fast (LAN) response can resolve before the browser paints the loading frame,
+// so the panel would flash straight old→new and never look like it refreshed.
+const PR_DEBUG_MIN_MS = 400;
+function prDebugMinVisible(startedAt) {
+  const remaining = PR_DEBUG_MIN_MS - (performance.now() - startedAt);
+  return remaining > 0 ? new Promise(res => setTimeout(res, remaining)) : Promise.resolve();
+}
+// POST a {ok, text} debug endpoint and pop the result.
+async function prRunDebug(url, title, btn, body) {
+  if (btn) btn.disabled = true;
+  const startedAt = performance.now();
+  prShowDebugBox(title, 'Running debug…');
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Debug request failed.');
+    await prDebugMinVisible(startedAt);
+    prShowDebugBox(title, d.text || '(empty response)');
+  } catch (e) {
+    await prDebugMinVisible(startedAt);
+    prShowDebugBox(title, 'Debug failed: ' + (e.message || e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Ask before an action that deletes, or that arms deleting.
+//
+// Replaces a two-click "Are you sure?" on the button itself. That pattern had
+// to park its warning in a sticky toast beside the button, which meant the
+// question and the reason for it lived in two different places — and a click
+// anywhere else silently disarmed it, so a user who read the toast and then
+// clicked back was starting over without being told. A modal puts the
+// consequence and the choice together and has to be answered.
+//
+// body: a string, or an array of paragraphs. A paragraph may be
+// {text, warn: true} to render in the danger color. Text only — nothing here
+// is ever parsed as HTML.
+//
+// Resolves 'confirm', 'extra' (the optional third button), or null for
+// cancel/escape/backdrop, so the caller treats "went away" as "no".
+let _prConfirmOpen = false;
+function prConfirm({ title = 'Are you sure?', body = '', confirmText = 'Confirm',
+                     extraText = '', danger = true } = {}) {
+  const modal = document.getElementById('pr-confirm-modal');
+  if (!modal || typeof bootstrap === 'undefined') {
+    // No dialog available (a page without base, or Bootstrap failed to load):
+    // refuse rather than silently proceeding with a destructive action, and say
+    // so — otherwise the button looks like it did nothing.
+    showToast('Could not open the confirmation. Reload the page and try again.', 'danger');
+    return Promise.resolve(null);
+  }
+  // One question at a time. There is a single dialog element, so a second call
+  // while one is open would rewrite the open question's text and leave both
+  // callers listening on the same buttons — one answer resolving two actions.
+  if (_prConfirmOpen) return Promise.resolve(null);
+  const bodyEl = document.getElementById('pr-confirm-body');
+  const okBtn = document.getElementById('pr-confirm-ok');
+  const extraBtn = document.getElementById('pr-confirm-extra');
+  document.getElementById('pr-confirm-title').textContent = title;
+
+  bodyEl.textContent = '';
+  for (const part of (Array.isArray(body) ? body : [body])) {
+    if (!part) continue;
+    const p = document.createElement('p');
+    const isObj = typeof part === 'object';
+    p.textContent = isObj ? part.text : part;
+    if (isObj && part.warn) p.className = 'pr-confirm-warn';
+    bodyEl.appendChild(p);
+  }
+
+  okBtn.textContent = confirmText;
+  okBtn.className = 'btn ' + (danger ? 'btn-danger-action' : 'btn-outline-primary');
+  extraBtn.hidden = !extraText;
+  if (extraText) extraBtn.textContent = extraText;
+
+  return new Promise((resolve) => {
+    let outcome = null;
+    const inst = bootstrap.Modal.getOrCreateInstance(modal);
+    const pick = (value) => { outcome = value; inst.hide(); };
+    const onOk = () => pick('confirm');
+    const onExtra = () => pick('extra');
+    // Resolve on hidden, not on click: the caller's next step often opens
+    // another dialog or moves focus, and Bootstrap is still tearing this one
+    // down until then. Whatever closed it, an unanswered dialog is a "no".
+    const onHidden = () => {
+      okBtn.removeEventListener('click', onOk);
+      extraBtn.removeEventListener('click', onExtra);
+      modal.removeEventListener('hidden.bs.modal', onHidden);
+      _prConfirmOpen = false;
+      resolve(outcome);
+    };
+    okBtn.addEventListener('click', onOk);
+    extraBtn.addEventListener('click', onExtra);
+    modal.addEventListener('hidden.bs.modal', onHidden);
+    _prConfirmOpen = true;
+    inst.show();
+  });
+}
+
+// Transient status line. Toasts report what happened; anything that needs an
+// answer before it happens goes through prConfirm() instead.
+function showToast(msg, type = 'success') {
+  const wrap = document.getElementById('toast-wrap');
+  const cls  = ({ success: 'pr-toast--success', danger: 'pr-toast--danger', warning: 'pr-toast--warning', info: 'pr-toast--info' })[type] || 'pr-toast--info';
+  const text = String(msg ?? '')
+    .replace(/\u2026/g, '...')
+    .replace(/[\u2013\u2014]/g, '-')
+    // Emoji only — \p{S} also covered ordinary math symbols, which mangled
+    // real messages ("HEADROOM_GB=1000" lost its '=', "~1200 GB" its '~').
+    .replace(/\p{Extended_Pictographic}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const el = document.createElement('div');
+  el.className = `pr-toast ${cls}`;
+  el.textContent = text;
+  el.style.cursor = 'pointer';
+  el.title = 'Dismiss';
+  wrap.appendChild(el);
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    el.classList.add('pr-toast--out');
+    setTimeout(() => el.remove(), 200);
+  };
+  el.addEventListener('click', dismiss);
+  // Errors and warnings carry instructions ("Reload the page", "check the
+  // connection...") — give them longer than the 5s success blip.
+  setTimeout(dismiss, (type === 'danger' || type === 'warning') ? 9000 : 5000);
+}
+
+// Header "running" badge. Toggled via a class on the header so CSS decides which
+// badge (mobile vs desktop) is shown. The Dashboard drives it directly from its
+// own status polling; every other page runs the lightweight poller below so the
+// badge is visible no matter where you are while a run is active.
+// What a run in flight is called, and which button's color it borrows. One
+// place decides, because the header badge and the run pill report the same run
+// and used to word it differently.
+//
+// Red is reserved for the run that means to delete something, and it says
+// "Cleaning" rather than "Running": red plus a word that describes any run is
+// the alarming half of a warning without the informative half.
+//   red    — a Cleanup, files are going away
+//   yellow — a Debug Cleanup, which drives that path but deletes nothing
+//   blue   — every other run, nothing is being deleted
+// The two blue cases differ only in name: a Simulate the user clicked says so,
+// the scheduler's own runs say "Running".
+window.prRunTone = function (s) {
+  if (s.debugCleanup) return ['Debugging', 'is-warning'];
+  if (s.cleanup)      return ['Cleaning', 'is-danger'];
+  return [s.manual ? 'Simulate' : 'Running', 'is-accent'];
+};
+window.prSetHeaderRunning = function (on, live, debugLive, manual) {
+  const h = document.querySelector('.site-header');
+  if (!h) return;
+  const [label, tone] = window.prRunTone(
+    { cleanup: !!live, debugCleanup: !!debugLive, manual: !!manual });
+  h.classList.toggle('is-running', !!on);
+  h.querySelectorAll('.header-run-badge').forEach(el => {
+    el.classList.remove('is-danger', 'is-accent', 'is-warning');
+    el.classList.add(tone);
+  });
+  h.querySelectorAll('.run-badge-label').forEach(el => { el.textContent = label; });
+};
+// The badge links to the Dashboard's run-progress card. Already on the
+// Dashboard, smooth-scroll to it instead of a full reload.
+document.querySelectorAll('.header-run-badge').forEach(a => {
+  a.addEventListener('click', (e) => {
+    const target = document.getElementById('run-progress');
+    if (!target) return;   // other pages navigate normally
+    e.preventDefault();
+    history.replaceState(null, '', '#run-progress');
+    prScrollTo(target);
+  });
+});
+// ── IMDb manual-setup popup (shared by all pages) ──
+// Which failure the popup was already shown for. Persisted so a page reload
+// or tab switch does not re-open it — only a NEW failure (a new key) pops it
+// again, keyed by the run's started_at.
+let _imdbHelpShownFor = null;
+function _imdbHelpAlreadyShown(key) {
+  try { return localStorage.getItem('pr-imdb-help-shown') === String(key); }
+  catch (_) { return _imdbHelpShownFor === key; }
+}
+function _markImdbHelpShown(key) {
+  _imdbHelpShownFor = key;
+  try { localStorage.setItem('pr-imdb-help-shown', String(key)); } catch (_) {}
+}
+
+async function showImdbHelpModal() {
+  // Fill in the exact destination path and configured source URL so the steps
+  // match this install, then open the modal.
+  try {
+    const r = await fetch('/api/imdb/status', { cache: 'no-store' });
+    const s = await r.json();
+    const path = s.path || '/config/title.ratings.tsv';
+    const url = s.url || 'https://datasets.imdbws.com/title.ratings.tsv.gz';
+    const tsvEl = document.getElementById('imdb-help-tsv-path');
+    const gzEl = document.getElementById('imdb-help-gz-path');
+    const urlEl = document.getElementById('imdb-help-url');
+    if (tsvEl) tsvEl.textContent = path;
+    if (gzEl) gzEl.textContent = path + '.gz';
+    if (urlEl && url) urlEl.href = url;
+  } catch (_) { /* keep the sensible defaults already in the markup */ }
+  const modalEl = document.getElementById('imdb-help-modal');
+  if (modalEl && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
+
+// Live red Configuration tab: /api/status polls call this so an API failure
+// mid-run (or a recovery) repaints the header without a page reload.
+window.prSetConfigTabError = function (on) {
+  const tab = [...document.querySelectorAll('.header-tabs a')].find(a => a.getAttribute('href') === '/config');
+  if (!tab) return;
+  on = !!on;
+  if (tab.classList.contains('config-needs-onboarding') === on) return;
+  tab.classList.toggle('config-needs-onboarding', on);
+  if (on) tab.title = 'Fix the API connection settings';
+  else tab.removeAttribute('title');
+};
+// Tab click feedback: mark the clicked tab while its navigation is in flight
+// (see .is-navigating). Skipped for the current page and for modified clicks
+// (new-tab etc., which don't navigate this document).
+(function initTabNavFeedback() {
+  document.querySelectorAll('.header-tabs a').forEach((a) => {
+    const dest = () => (a.getAttribute('href') || '').split('#')[0];
+    // The wave starts the moment the pointer goes DOWN — click fires on
+    // release, which would eat the whole press duration before anything
+    // showed. pressT stamps the wave's true start so the next page can
+    // continue it from the right offset.
+    let pressT = 0;
+    let clicked = false;
+    a.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const d = dest();
+      if (!d || d === location.pathname) return;
+      pressT = Date.now();
+      clicked = false;
+      a.classList.add('is-navigating');
+      // A press that never becomes a navigation (drag off, release elsewhere,
+      // canceled) must not leave the tab lit.
+      const settle = () => setTimeout(() => {
+        if (!clicked) a.classList.remove('is-navigating');
+      }, 250);
+      window.addEventListener('pointerup', settle, { once: true });
+      window.addEventListener('pointercancel', settle, { once: true });
+    });
+    a.addEventListener('click', (e) => {
+      if (e.defaultPrevented || e.button !== 0
+          || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const d = dest();
+      if (!d || d === location.pathname) return;
+      clicked = true;
+      a.classList.add('is-navigating');   // keyboard activation has no pointerdown
+      // Hand the wave to the next page: a fast load swaps documents before the
+      // ripple finishes, and the arriving page plays out the remainder — timed
+      // from the PRESS, where the wave actually began.
+      const started = (pressT && Date.now() - pressT < 1000) ? pressT : Date.now();
+      pressT = 0;
+      try {
+        sessionStorage.setItem('pr-tab-wave', JSON.stringify({ href: d, t: started }));
+      } catch (err) {}
+      // Safety: a canceled navigation (Esc) never fires pageshow — stop the
+      // pulse eventually rather than blinking forever on a page that stayed.
+      setTimeout(() => a.classList.remove('is-navigating'), 20000);
+    });
+  });
+  // Arriving side of the hand-off: if this page was reached by a tab click
+  // moments ago, finish the wave on the (now active) tab from where the
+  // previous page left it.
+  try {
+    const raw = sessionStorage.getItem('pr-tab-wave');
+    if (raw) {
+      sessionStorage.removeItem('pr-tab-wave');
+      const { href, t } = JSON.parse(raw);
+      const elapsed = Date.now() - Number(t);
+      if (href === location.pathname && elapsed >= 0 && elapsed < 320
+          && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const tab = [...document.querySelectorAll('.header-tabs a')]
+          .find(x => (x.getAttribute('href') || '').split('#')[0] === href);
+        if (tab) {
+          tab.style.setProperty('--pr-wave-offset', `-${Math.round(elapsed)}ms`);
+          tab.classList.add('is-arriving');
+          const settle = () => {
+            tab.classList.remove('is-arriving');
+            tab.style.removeProperty('--pr-wave-offset');
+          };
+          tab.addEventListener('animationend', settle, { once: true });
+          // Fallback: if the animation never runs (killed mid-flight, element
+          // hidden), animationend never fires — settle shortly after the
+          // wave's lifetime regardless.
+          setTimeout(settle, 700);
+        }
+      }
+    }
+  } catch (err) {}
+  // A back/forward-cache restore brings the old page back with the classes
+  // still on the tab — clear both so the restored page reads as settled.
+  window.addEventListener('pageshow', () => {
+    document.querySelectorAll('.header-tabs a.is-navigating, .header-tabs a.is-arriving')
+      .forEach((a) => {
+        a.classList.remove('is-navigating', 'is-arriving');
+        a.style.removeProperty('--pr-wave-offset');
+      });
+  });
+})();
+
+// Sliding tab underline: on hover-capable pointers the active tab's blue bar
+// glides to the hovered tab and returns when the pointer leaves the tab row.
+(function initTabIndicator() {
+  if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+  const tabs = document.querySelector('.header-tabs');
+  if (!tabs || !tabs.querySelector('a')) return;
+  const bar = document.createElement('span');
+  bar.className = 'header-tab-indicator';
+  tabs.appendChild(bar);
+  tabs.classList.add('has-indicator');
+  const activeTab = () => tabs.querySelector('a.active');
+  function moveTo(el, instant = false) {
+    if (!el) { bar.style.opacity = '0'; return; }
+    if (instant) bar.style.transition = 'none';
+    bar.style.opacity = '1';
+    bar.style.left = el.offsetLeft + 'px';
+    bar.style.width = el.offsetWidth + 'px';
+    bar.style.top = (el.offsetTop + el.offsetHeight - 2) + 'px';
+    // The alert-red Configuration tab keeps its color under the bar too.
+    bar.style.background = el.classList.contains('config-needs-onboarding')
+      ? 'var(--text-danger)' : 'var(--text-accent)';
+    if (instant) requestAnimationFrame(() => { bar.style.transition = ''; });
+  }
+  moveTo(activeTab(), true);
+  tabs.querySelectorAll('a').forEach(a => {
+    a.addEventListener('mouseenter', () => moveTo(a));
+  });
+  tabs.addEventListener('mouseleave', () => moveTo(activeTab()));
+  window.addEventListener('resize', () => moveTo(activeTab(), true));
+  // Fonts can settle after first paint and shift the tab widths.
+  window.addEventListener('load', () => moveTo(activeTab(), true));
+})();
+
+(function pollHeaderRunBadge() {
+  async function tick() {
+    if (window.__prDashboardOwnsBadge) return;   // Dashboard updates it itself
+    try {
+      const r = await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' });
+      if (r.ok) {
+        const d = await r.json();
+        window.prSetHeaderRunning(!!d.run_active, !!d.run_cleanup, !!d.run_debug_cleanup, !!d.run_manual);
+        window.prSetConfigTabError(!!d.config_attention);
+        // Page hook: lets a page react to run-state changes without its own
+        // /api/status poll (the explorer locks Filtering & Scoring with it).
+        if (typeof window.prOnStatusPoll === 'function') {
+          try { window.prOnStatusPoll(d); } catch (_) {}
+        }
+      }
+    } catch (_) { /* transient — try again next tick */ }
+  }
+  tick();
+  setInterval(tick, 4000);
+})();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

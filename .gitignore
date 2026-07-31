@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+# The install flow copies .env.example to .env in the clone — it holds the
+# user's local paths and must never be committed.
+.env
+node_modules/
+# Transient artifacts from `npm i playwright` during browser tests
+package.json
+package-lock.json

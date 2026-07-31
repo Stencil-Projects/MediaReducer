@@ -1,0 +1,16 @@
+# The Dockerfile COPYs only the runtime files explicitly, so this list just
+# keeps the build context small — nothing here could reach the image anyway.
+.git
+.gitignore
+.env
+.env.example
+.dockerignore
+__pycache__/
+*.pyc
+node_modules/
+package.json
+package-lock.json
+tests/
+README.md
+ARCHITECTURE.md
+docker-compose.yml
