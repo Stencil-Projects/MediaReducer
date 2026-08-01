@@ -15,8 +15,10 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("MEDIAREDUCER_CONFIG", tempfile.mktemp())
 import engine as E
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -197,7 +199,7 @@ import atexit
 import json as _json
 import shutil as _sh
 from pathlib import Path as _P
-E.OUTPUT_DIR = _P(tempfile.mkdtemp(prefix="mr-report."))
+_tmpout.redirect_engine(E, _P(tempfile.mkdtemp(prefix="mr-report.")))
 atexit.register(_sh.rmtree, E.OUTPUT_DIR, True)
 E.write_run_report(mode="debug_cleanup", deleted_count=1,
                    deleted_items=[{"title": "X", "size": 1, "path": _P("/m/x.mkv")}])

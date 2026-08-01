@@ -59,9 +59,9 @@
           Description="The folder that CONTAINS your movie folders, not the movie folder itself. If your films are in /mnt/user/media/Movies, put /mnt/user/media here and add Movies as a monitored path in the UI. Must be writable: this is the only place MediaReducer can delete from."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media</Config>
 
-  <Config Name="Config storage" Target="/config" Default="/mnt/user/appdata/mediareducer" Mode="rw"
+  <Config Name="Config storage" Target="/config" Default="/mnt/user/appdata/mediareducer/config" Mode="rw"
           Description="Settings, logs, cache, the IMDb dataset and your deletion history. Keep this on the array so it survives a container rebuild."
-          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/mediareducer</Config>
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/mediareducer/config</Config>
 
   <Config Name="Tautulli appdata (optional)" Target="/tautulli" Default="/mnt/user/appdata/tautulli" Mode="ro"
           Description="Read-only, and only so Auto Detect can read the Tautulli API key and Plex token out of Tautulli's own config. Skip it and type those in yourself."

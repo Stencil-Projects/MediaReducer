@@ -8,7 +8,7 @@ only feed Auto Detect, the WebUI port, and PUID/PGID/TZ.
 `ghcr.io/stencil923/mediareducer:alpha`, which `.github/workflows/publish.yml`
 pushes when you tag a release:
 
-    git tag v1.0.0-alpha.1 && git push origin v1.0.0-alpha.1
+    git tag vX.Y.Z-alpha.N && git push origin vX.Y.Z-alpha.N   # must match APP_VERSION in app.py
 
 `:latest` is deliberately reserved for the first non-prerelease, so nobody
 installs an alpha by asking for "latest". Point this at `:latest` when you cut

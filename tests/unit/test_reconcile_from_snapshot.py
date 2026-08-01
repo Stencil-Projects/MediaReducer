@@ -25,6 +25,7 @@ _OUT = tempfile.mkdtemp(prefix="mr-reconcile.")
 os.environ["MEDIAREDUCER_CONFIG"] = str(Path(_OUT) / "config.json")
 import db
 import engine as E
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -33,8 +34,7 @@ def check(name, cond):
     ok = ok and cond
 
 E.log = lambda *a, **k: None
-E.OUTPUT_DIR = Path(_OUT)
-E.DB_FILE = Path(_OUT) / "mediareducer.db"
+_tmpout.redirect_engine(E, Path(_OUT))
 GB = 1_000_000_000
 NOW = 1_700_000_000
 SEED_TS = NOW - 5 * 86400          # an old delay clock, to prove preservation
@@ -227,8 +227,7 @@ def movie(path, plays, size=2 * GB):
 
 
 def reconcile_queue(td, exts):
-    E.OUTPUT_DIR = Path(td)
-    E.DB_FILE = Path(td) / "mediareducer.db"
+    _tmpout.redirect_engine(E, Path(td))
     E.MOVIE_EXTENSIONS = set(exts)
     movies = [movie("/lib/A.mkv", 0), movie("/lib/B.mp4", 1), movie("/lib/C.mkv", 2)]
     _dbstate.seed(E.DB_FILE, {

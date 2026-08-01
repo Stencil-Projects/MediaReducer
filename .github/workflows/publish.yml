@@ -3,7 +3,7 @@ name: Publish image
 # Push a version tag to publish. Nothing else publishes: no branch push, no
 # schedule, so an image only ever appears because someone tagged a release.
 #
-#   git tag v1.0.0-alpha.1 && git push origin v1.0.0-alpha.1
+#   git tag vX.Y.Z-alpha.N && git push origin vX.Y.Z-alpha.N   (must match APP_VERSION)
 #
 # workflow_dispatch runs the whole pipeline WITHOUT pushing, which is how to
 # check a Dockerfile change before committing to a tag.

@@ -18,7 +18,11 @@ off `OUTPUT_DIR`, whose default IS `/config`, so a test that leaves it at the
 default writes into the deployment data directory on a real host. `_tmpout.py`
 gives a test its own: `config()` before importing app, `redirect_engine()` after
 importing engine, which repoints the path constants engine fixes at import.
-`run_tests.sh` fails the run if the unit tier leaves state there.
+`run_tests.sh` compares /config's file list either side of the unit tier and
+fails on any difference. It plants a canary named `mediareducer.db` first, since
+the destructive path unlinks the store BY NAME and a create-then-wipe otherwise
+leaves nothing to notice. Directories are ignored: counting them made the check
+fail about one run in five.
 
 GitHub Actions runs the `--e2e` tier on every push and pull request
 (`.github/workflows/tests.yml`). It needs no secrets, since the media servers

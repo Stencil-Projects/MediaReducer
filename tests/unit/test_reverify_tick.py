@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _dbstate
 os.environ.setdefault("MEDIAREDUCER_CONFIG", tempfile.mktemp())
 import engine as E
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -42,8 +43,7 @@ def _seed(td):
     out = Path(td, "out"); out.mkdir()
     E.LIBRARY_ROOT = lib
     E.MONITOR_DIRS = [str(movies)]
-    E.OUTPUT_DIR = out
-    E.DB_FILE = out / "mediareducer.db"
+    _tmpout.redirect_engine(E, out)
     # Plan: A, B marked (covering count 2); C, D eligible behind them.
     entries = {}
     for i, p in enumerate(paths):

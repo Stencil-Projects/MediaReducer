@@ -14,10 +14,12 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 _OUT = tempfile.mkdtemp(prefix="mr-cand-out.")
 os.environ["MEDIAREDUCER_CONFIG"] = str(Path(_OUT) / "config.json")
 import db
 import engine as E
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -73,8 +75,7 @@ def _reset(use_plex, use_jellyfin, *, protect_favorites=False):
     E._JELLYFIN_PROTECTED_IMDB_IDS = set()
     E._JELLYFIN_PROTECTED_TMDB_IDS = set()
     E._JELLYFIN_IDS_BY_MATCH_KEY = {}
-    E.OUTPUT_DIR = Path(_OUT)
-    E.DB_FILE = Path(_OUT) / "mediareducer.db"
+    _tmpout.redirect_engine(E, Path(_OUT))
     for _f in db.db_files(E.DB_FILE):   # fresh store per combo
         _f.unlink(missing_ok=True)
     db.forget_initialized(E.DB_FILE)

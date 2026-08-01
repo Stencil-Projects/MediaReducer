@@ -74,9 +74,21 @@ check("CLI follows MEDIAREDUCER_PORT", r.stdout.strip().endswith("127.0.0.1:8099
 r = _run(URL, "")
 check("CLI treats a blank port as the default", r.stdout.strip().endswith("127.0.0.1:7474"), r.stdout + r.stderr)
 
+# A bad port is REPORTED and ignored here, not fatal as it is in app.py.
+# DEFAULT_URL is only argparse's default, so exiting would also break
+# `--url http://nas:9000`, which is exactly what someone reaches for when their
+# environment is wrong.
+for bad in ("abc", "0", "-1", "99999"):
+    r = _run(URL, bad)
+    check(f"CLI reports and ignores {bad!r}",
+          r.returncode == 0
+          and r.stdout.strip().endswith("127.0.0.1:7474")
+          and "MEDIAREDUCER_PORT" in r.stderr,
+          f"rc={r.returncode} out={r.stdout.strip()[-30:]} err={r.stderr.strip()[:60]}")
+
 # MEDIAREDUCER_URL is the more specific setting and stays in charge.
 env = dict(os.environ)
-env["MEDIAREDUCER_PORT"] = "8099"
+env["MEDIAREDUCER_PORT"] = "abc"          # garbage, and still irrelevant
 env["MEDIAREDUCER_URL"] = "http://nas.local:9999"
 r = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {str(ROOT)!r}); {URL}"],
                    capture_output=True, text=True, env=env)

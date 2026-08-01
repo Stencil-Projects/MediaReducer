@@ -47,30 +47,44 @@ export MEDIAREDUCER_CONFIG="$TMP/unit-config/config.json"
 mkdir -p "$TMP/unit-config"
 printf '{"OUTPUT_DIR": "%s"}\n' "$TMP/unit-config" > "$MEDIAREDUCER_CONFIG"
 # A test that points MEDIAREDUCER_CONFIG at its own file must put OUTPUT_DIR in
-# it. Miss that and output_dir() falls back to /config, which is the real data
-# directory on a deployed host: one test creates a store there and wipes it, so
-# a suite run as root could delete a user's library snapshot and deletion
-# history. On CI it just fails, unwritably. Noticing after the fact is the whole
-# point of this check.
-CONFIG_DIR_EXISTED=0; [[ -e /config ]] && CONFIG_DIR_EXISTED=1
+# it, or output_dir() falls back to /config, which on a deployed host is the
+# user's real data directory. Both directions matter and only one is obvious:
+# a test can WRITE state there, and a test can DELETE what it finds (one drives
+# /api/cache/clear, which unlinks the store). So this compares the file list
+# before and after, and seeds a canary when /config does not exist yet, since
+# a create-then-wipe leaves nothing behind to notice.
+#
+# Files only. An empty directory is not state, and counting directories made
+# this fail about one run in five on a different test each time: whichever test
+# calls /api/config/reset rewrites config.json to the shipped defaults, which is
+# a config with no OUTPUT_DIR in it, and the writability probe mkdirs whatever
+# path it checks.
+_config_files() { find /config -type f ! -name '.mediareducer-rw-check.*' 2>/dev/null | sort; }
+# The canary is named mediareducer.db on purpose. The destructive path is
+# db.reset_store(), which unlinks the STORE by name, so a canary called anything
+# else survives it and the wipe goes unnoticed: that is exactly how the first
+# version of this check passed while a test was deleting the file it is meant to
+# protect. Only planted when /config does not already exist, and removed after.
+CONFIG_CANARY=""
+if [[ ! -e /config ]] && mkdir -p /config 2>/dev/null; then
+  CONFIG_CANARY="/config/mediareducer.db"
+  echo "canary written by tests/run_tests.sh; safe to delete" > "$CONFIG_CANARY"
+fi
+CONFIG_BEFORE="$(_config_files)"
+
 for t in tests/unit/test_*.py; do
   run "$(basename "$t" .py)" python3 "$t"
 done
-if [[ $CONFIG_DIR_EXISTED -eq 0 && -e /config ]]; then
-  # An empty directory is fine. The writability probe mkdirs whatever path it is
-  # checking and cleans up after itself, and a couple of tests reach it with the
-  # default still in place (/api/config/reset rewrites config.json to the
-  # shipped defaults, which is exactly a config with no OUTPUT_DIR in it).
-  # STATE is the thing to care about: a store, a log, a deletion history.
-  leaked="$(ls -A /config | grep -v '^\.mediareducer-rw-check\.' || true)"
-  if [[ -n "$leaked" ]]; then
-    echo "FAIL unit tests wrote state into /config, the deployment data directory"
-    echo "     A test resolved OUTPUT_DIR to the default. On a deployed host that"
-    echo "     is the user's real data; one test wipes the store it finds there."
-    echo "$leaked" | head -10 | sed 's/^/       /'
-    fail=$((fail+1)); failed_names+=("hermetic_output_dir")
-  fi
+
+if [[ "$(_config_files)" != "$CONFIG_BEFORE" ]]; then
+  echo "FAIL the unit tests changed /config, the deployment data directory"
+  echo "     A test resolved OUTPUT_DIR to the default instead of its own temp dir."
+  echo "     '>' appeared, '<' was DELETED (the worse of the two):"
+  diff <(echo "$CONFIG_BEFORE") <(_config_files) | grep -E '^[<>]' | head -10 | sed 's/^/       /'
+  fail=$((fail+1)); failed_names+=("hermetic_output_dir")
 fi
+# Only remove /config if this script is what created it.
+[[ -n "$CONFIG_CANARY" ]] && rm -rf /config
 
 # ── Scoring parity: engine vs the Score Explorer's JS mirror ──
 run parity_gen python3 tests/parity/gen_py_scores.py "$TMP/parity"

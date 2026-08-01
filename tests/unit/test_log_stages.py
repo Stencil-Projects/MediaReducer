@@ -20,8 +20,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("MEDIAREDUCER_CONFIG", tempfile.mktemp())
 import engine as E  # noqa: E402
+import _tmpout  # noqa: E402
 
 ok = True
 
@@ -34,8 +36,7 @@ def check(name, cond, extra=""):
 
 
 _OUT = Path(tempfile.mkdtemp(prefix="mr-stages."))
-E.OUTPUT_DIR = _OUT
-E.LOGFILE = _OUT / "lastrun.log"
+_tmpout.redirect_engine(E, _OUT)
 
 
 def fresh():

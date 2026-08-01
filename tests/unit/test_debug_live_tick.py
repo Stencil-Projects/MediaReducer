@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _dbstate
 import engine
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -55,11 +56,7 @@ def setup(td):
     engine.LIBRARY_ROOT = lib
     engine.MONITOR_DIRS = [str(movies)]
     engine._RESOLVED_MONITORED_ROOTS = None
-    engine.OUTPUT_DIR = out
-    engine.LOGFILE = out / "lastrun.log"
-    engine.DELETED_LOG = out / "deleted.log"
-    engine.PROGRESS_FILE = out / "progress.json"
-    engine.DB_FILE = out / "mediareducer.db"   # the queue lives in the DB's queue table
+    _tmpout.redirect_engine(engine, out)
     engine._PLAN_CONFIG_RAW = {k: None for k in engine._PLAN_CONFIG_KEYS}
     engine._PLAN_CONFIG_RAW.update({"HEADROOM_GB": 0, "REDLINE_GB": 200, "REDLINE_ONLY_MODE": True})
     entries = {str(p): {"title": p.stem, "score": i + 1.0, "size_bytes": 2 * MB,
@@ -177,10 +174,7 @@ with tempfile.TemporaryDirectory() as td:
     engine.LIBRARY_ROOT = lib
     engine.MONITOR_DIRS = [str(movies)]
     engine._RESOLVED_MONITORED_ROOTS = None
-    engine.OUTPUT_DIR = out
-    engine.DB_FILE = out / "mediareducer.db"
-    engine.PROGRESS_FILE = out / "progress.json"
-    engine.DELETED_LOG = out / "deleted.log"
+    _tmpout.redirect_engine(engine, out)
     engine.NEAR_TIE_PTS = 2.0
     engine._PLAN_CONFIG_RAW = {k: None for k in engine._PLAN_CONFIG_KEYS}
     engine._PLAN_CONFIG_RAW.update({"HEADROOM_GB": 0, "REDLINE_GB": 200,

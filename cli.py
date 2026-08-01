@@ -31,10 +31,29 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-# Follows MEDIAREDUCER_PORT so the CLI still finds a service that was moved
-# off 7474; MEDIAREDUCER_URL still wins, and --url wins over both.
-DEFAULT_URL = os.environ.get("MEDIAREDUCER_URL") or \
-    f"http://127.0.0.1:{os.environ.get('MEDIAREDUCER_PORT', '7474').strip() or '7474'}"
+def _default_url() -> str:
+    """Where to look for the service: MEDIAREDUCER_URL, else MEDIAREDUCER_PORT
+    on localhost, else 7474. `--url` overrides whatever this returns.
+
+    A bad port is reported and ignored rather than fatal, unlike in app.py. This
+    value is only argparse's DEFAULT: exiting here would also break
+    `--url http://nas:9000`, which is the very thing someone reaches for when
+    their environment is misconfigured. Interpolating it blindly is not the
+    alternative either, since "http://127.0.0.1:abc" fails as a URL parse error
+    that says nothing about the variable that caused it.
+    """
+    url = (os.environ.get("MEDIAREDUCER_URL") or "").strip()
+    if url:
+        return url
+    port = (os.environ.get("MEDIAREDUCER_PORT") or "").strip()
+    if port and not (port.isdigit() and 1 <= int(port) <= 65535):
+        print(f"warning: ignoring MEDIAREDUCER_PORT={port!r} "
+              f"(want a number from 1 to 65535); using 7474.", file=sys.stderr)
+        port = ""
+    return f"http://127.0.0.1:{port or '7474'}"
+
+
+DEFAULT_URL = _default_url()
 GB = 1_000_000_000
 
 # Runtime-only / env-derived keys the server fills in on load. Never write them

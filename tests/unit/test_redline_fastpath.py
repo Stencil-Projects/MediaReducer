@@ -7,7 +7,9 @@ import sys
 import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import engine
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -30,11 +32,7 @@ def setup(td):
     engine.CHECK_PATH = lib   # hermetic: disk_usage() reads the temp library, not a real /library mount
     engine.MONITOR_DIRS = [str(movies)]
     engine._RESOLVED_MONITORED_ROOTS = None
-    engine.OUTPUT_DIR = out
-    engine.LOGFILE = out / "lastrun.log"
-    engine.DELETED_LOG = out / "deleted.log"
-    engine.PROGRESS_FILE = out / "progress.json"
-    engine.DB_FILE = out / "mediareducer.db"   # the queue lives in the DB's queue table
+    _tmpout.redirect_engine(engine, out)
     engine._PLAN_CONFIG_RAW = {k: None for k in engine._PLAN_CONFIG_KEYS}
     engine._PLAN_CONFIG_RAW.update({"HEADROOM_GB": 0, "REDLINE_GB": 200,
                                     "REDLINE_ONLY_MODE": True})
@@ -367,11 +365,7 @@ with tempfile.TemporaryDirectory() as td:
     engine.CHECK_PATH = lib   # hermetic: disk_usage() reads the temp library, not a real /library mount
     engine.MONITOR_DIRS = [str(movies)]
     engine._RESOLVED_MONITORED_ROOTS = None
-    engine.OUTPUT_DIR = out
-    engine.LOGFILE = out / "lastrun.log"
-    engine.DELETED_LOG = out / "deleted.log"
-    engine.PROGRESS_FILE = out / "progress.json"
-    engine.DB_FILE = out / "mediareducer.db"
+    _tmpout.redirect_engine(engine, out)
     engine.NEAR_TIE_PTS = 2.0
     engine._PLAN_CONFIG_RAW = {k: None for k in engine._PLAN_CONFIG_KEYS}
     engine._PLAN_CONFIG_RAW.update({"HEADROOM_GB": 0, "REDLINE_GB": 200,
@@ -421,11 +415,7 @@ with tempfile.TemporaryDirectory() as td:
     engine.CHECK_PATH = lib   # hermetic: disk_usage() reads the temp library, not a real /library mount
     engine.MONITOR_DIRS = [str(movies)]
     engine._RESOLVED_MONITORED_ROOTS = None
-    engine.OUTPUT_DIR = out
-    engine.LOGFILE = out / "lastrun.log"
-    engine.DELETED_LOG = out / "deleted.log"
-    engine.PROGRESS_FILE = out / "progress.json"
-    engine.DB_FILE = out / "mediareducer.db"
+    _tmpout.redirect_engine(engine, out)
     engine.NEAR_TIE_PTS = 2.0
     engine._PLAN_CONFIG_RAW = {k: None for k in engine._PLAN_CONFIG_KEYS}
     engine._PLAN_CONFIG_RAW.update({"HEADROOM_GB": 0, "REDLINE_GB": 200,
@@ -460,8 +450,7 @@ import time
 import engine as E  # this section drives write_plan_to_queue via the E alias
 import db
 tmp = Path(tempfile.mkdtemp())
-E.OUTPUT_DIR = tmp
-E.DB_FILE = tmp / "mediareducer.db"
+_tmpout.redirect_engine(E, tmp)
 E.DELETE_DELAY_DAYS = 3
 E.log = lambda *a, **k: None   # silence
 

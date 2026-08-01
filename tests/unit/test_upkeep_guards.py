@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _dbstate
 import db
 import engine as E
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -61,11 +62,7 @@ def _seed_disk_snapshot_queue(td, *, marked_prefix=2):
     E.CHECK_PATH = lib
     E._RESOLVED_MONITORED_ROOTS = None
     E.MONITOR_DIRS = [str(movies)]
-    E.OUTPUT_DIR = out
-    E.LOGFILE = out / "lastrun.log"
-    E.DELETED_LOG = out / "deleted.log"
-    E.PROGRESS_FILE = out / "progress.json"
-    E.DB_FILE = out / "mediareducer.db"
+    _tmpout.redirect_engine(E, out)
     entries = {str(p): {"title": p.stem, "score": i + 1.0, "size_bytes": 2 * MB,
                         "marked_at": (1_000_000_000 + i) if i < marked_prefix else None}
                for i, p in enumerate(paths)}
@@ -204,8 +201,7 @@ def _seed(td):
     E.CHECK_PATH = lib
     E._RESOLVED_MONITORED_ROOTS = None
     E.MONITOR_DIRS = [str(movies)]
-    E.OUTPUT_DIR = out
-    E.DB_FILE = out / "mediareducer.db"
+    _tmpout.redirect_engine(E, out)
     entries = {str(p): {"title": p.stem, "score": i + 1.0, "size_bytes": 2 * MB,
                         "marked_at": None} for i, p in enumerate(paths)}
     snap = [E._snapshot_entry(p.stem, 2000, 6.0, 1000, 0, 0, 0, 1_500_000_000, 2 * MB,

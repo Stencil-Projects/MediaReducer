@@ -19,10 +19,10 @@ _OUT = tempfile.mkdtemp(prefix="mr-test-out.")
 os.environ["MEDIAREDUCER_CONFIG"] = str(Path(_OUT) / "config.json")
 Path(_OUT, "config.json").write_text(json.dumps({"OUTPUT_DIR": _OUT}), encoding="utf-8")
 import engine as E
+import _tmpout
 import app as A
 
-E.OUTPUT_DIR = Path(_OUT)
-E.DB_FILE = Path(_OUT) / "mediareducer.db"
+_tmpout.redirect_engine(E, Path(_OUT))
 A.load_config = lambda: {"OUTPUT_DIR": _OUT}
 
 ok = True

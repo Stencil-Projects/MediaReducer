@@ -411,7 +411,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.1"
+APP_VERSION = "1.0.0-alpha.2"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.

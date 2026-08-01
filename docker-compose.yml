@@ -3,14 +3,16 @@ services:
     build: .
     container_name: mediareducer
     ports:
-      - "7474:7474"          # web UI — access at http://your-server-ip:7474
+      # Host side only, so the container port stays 7474 and its health check
+      # keeps working. Set WEBUI_PORT in .env if 7474 is taken on this host.
+      - "${WEBUI_PORT:-7474}:7474"    # web UI — http://your-server-ip:${WEBUI_PORT:-7474}
     volumes:
       - ${PLEX_LIBRARY_PATH}:/library:rw             # shared movie library mount (file deletion)
       - ${TAUTULLI_APPDATA}:/tautulli:ro             # optional: lets Auto Detect read the Tautulli API key + Plex token
       - ${RADARR_APPDATA}:/radarr:ro                 # optional: lets Auto Detect read the Radarr API key
       # The fallback below is an UNRAID default — set the var in .env on any
       # other host, or Docker will create /mnt/user/appdata/... for you.
-      - ${MEDIAREDUCER_DATA:-/mnt/user/appdata/mediareducer}:/config  # persistent config/logs/cache
+      - ${MEDIAREDUCER_DATA:-/mnt/user/appdata/mediareducer/config}:/config  # persistent config/logs/cache
     environment:
       - PYTHONUNBUFFERED=1
       # Run as a specific user instead of root (optional — works on any host).

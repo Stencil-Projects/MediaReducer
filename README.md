@@ -92,8 +92,8 @@ controls. Click **Check for Errors** after fixing mounts.
 Clone or extract this project on your server:
 
 ```bash
-git clone https://github.com/Stencil923/MediaReducer.git /mnt/user/appdata/MediaReducer
-cd /mnt/user/appdata/MediaReducer
+git clone https://github.com/Stencil923/MediaReducer.git /mnt/user/appdata/mediareducer
+cd /mnt/user/appdata/mediareducer
 ```
 
 Copy the example environment file and edit it for your paths:
@@ -106,8 +106,12 @@ cp .env.example .env
 PLEX_LIBRARY_PATH=/mnt/user/media
 TAUTULLI_APPDATA=/mnt/user/appdata/tautulli
 RADARR_APPDATA=/mnt/user/appdata/radarr
-MEDIAREDUCER_DATA=/mnt/user/appdata/mediareducer
+MEDIAREDUCER_DATA=/mnt/user/appdata/mediareducer/config
+WEBUI_PORT=7474
 ```
+
+`WEBUI_PORT` only moves the host side; the container keeps serving on 7474, so
+its health check is unaffected. Change it if something else already owns 7474.
 
 `PLEX_LIBRARY_PATH` is the root folder that contains the movie folders you want
 available to MediaReducer. For example, if your movies are at
@@ -622,7 +626,7 @@ plan-currency and deletion-delay models, and the state files.
 ## Updating
 
 ```bash
-cd /mnt/user/appdata/MediaReducer
+cd /mnt/user/appdata/mediareducer
 git pull
 docker compose up -d --build
 ```

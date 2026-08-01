@@ -22,8 +22,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("MEDIAREDUCER_CONFIG", tempfile.mktemp())
 import engine as E  # noqa: E402
+import _tmpout  # noqa: E402
 
 ok = True
 
@@ -53,7 +55,7 @@ LINK.symlink_to(INSIDE)
 
 E.LIBRARY_ROOT = LIB
 E.MONITOR_DIRS = [str(LIB / "Movies")]
-E.OUTPUT_DIR = BASE / "out"
+_tmpout.redirect_engine(E, BASE / "out")
 E.OUTPUT_DIR.mkdir(exist_ok=True)
 E.LOGFILE = E.OUTPUT_DIR / "lastrun.log"
 E.LOGFILE.write_text("", encoding="utf-8")

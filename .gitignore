@@ -31,3 +31,5 @@ package-lock.json
 /deleted.log
 /title.ratings.tsv
 /logs/
+# The compose default puts the /config volume inside the clone.
+/config/
