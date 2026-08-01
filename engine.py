@@ -776,39 +776,41 @@ def validate_connections():
         record_issue("connection_invalid", message)
 
     if not (USE_PLEX or USE_JELLYFIN):
-        _conn_error("No server software is selected. Enable Plex or Jellyfin in the Config page's Connections section.")
+        _conn_error("No server software is selected. Turn on Plex or Jellyfin.")
         return False
 
     ok = True
 
     if USE_PLEX:
-        missing = [name for name, val in (("TAUTULLI_URL", TAUTULLI_URL),
-                                          ("TAUTULLI_API_KEY", TAUTULLI_API_KEY)) if not val]
+        # Named the way the Configuration page labels them, since that is where
+        # whoever reads this has to go and type the value in.
+        missing = [name for name, val in (("Tautulli URL", TAUTULLI_URL),
+                                          ("Tautulli API key", TAUTULLI_API_KEY)) if not val]
         if missing:
             for name in missing:
-                _conn_error(f"{name} is blank in the saved Connections config.")
+                _conn_error(f"{name} is blank.")
             log("Set the required Tautulli URL/API key in the Config page's URLs and API Keys section.")
             log("Use Auto Detect there to copy values from mounted appdata, or fill them in manually if your Docker port/proxy differs.")
             ok = False
         if PROTECTED_COLLECTIONS and (not PLEX_URL or not PLEX_TOKEN):
-            _conn_error("Plex URL/token are blank, but Plex protected collections are configured.")
+            _conn_error("Plex protected collections are set up, but the Plex URL or token is blank.")
             ok = False
         elif not PROTECTED_COLLECTIONS:
             log("Plex protected collection checks disabled (PROTECTED_COLLECTIONS is empty); Plex API check skipped.")
 
     if USE_JELLYFIN:
-        jmissing = [name for name, val in (("JELLYFIN_URL", JELLYFIN_URL),
-                                           ("JELLYFIN_API_KEY", JELLYFIN_API_KEY)) if not val]
+        jmissing = [name for name, val in (("Jellyfin URL", JELLYFIN_URL),
+                                           ("Jellyfin API key", JELLYFIN_API_KEY)) if not val]
         if jmissing:
             for name in jmissing:
-                _conn_error(f"{name} is blank in the saved Connections config.")
+                _conn_error(f"{name} is blank.")
             log("Set the Jellyfin URL and API key in the Config page's Connections section (create an API key in Jellyfin's Dashboard → API Keys).")
             ok = False
 
     return ok
 
 
-def _abort_api_failure(message, *, phase=None):
+def _abort_api_failure(message, *, detail=None, phase=None):
     """Fail closed when a selected media API stops answering during a run.
 
     The failed step is taken from the stage that is actually open, not from a
@@ -818,6 +820,11 @@ def _abort_api_failure(message, *, phase=None):
     step the run had not reached. Whoever is looking at that x needs it to name
     the stage they can then find in the log, so the message carries it too."""
     log(f"ABORT: {message}")
+    # Diagnostics go to the LOG only. The dashboard shows `message`, which is
+    # the sentence someone reads mid-failure; a movie title, an internal id and
+    # a urlopen repr belong where you go looking afterwards.
+    if detail:
+        log(f"ABORT detail: {detail}")
     stage = _STAGE_TITLE or "STARTUP"
     log(f"ABORT stage: {stage} — quote this stage name when reporting the failure.")
     emit_progress(status="error", phase=phase or _CURRENT_PHASE, stage=stage,
@@ -831,22 +838,28 @@ def verify_runtime_api_health():
         try:
             tautulli_api("get_libraries")
         except Exception as e:
-            _abort_api_failure(f"Tautulli API check failed during run startup: {e}")
+            _abort_api_failure("Tautulli did not answer when the run started. Check that it is "
+                               "running and reachable, then run again.", detail=str(e))
         if PROTECTED_COLLECTIONS:
             if not (PLEX_URL and PLEX_TOKEN):
-                _abort_api_failure("Plex protected collections are configured, but Plex URL/token are not available.")
+                _abort_api_failure("Plex protected collections are set up, but the Plex URL or token "
+                                   "is blank. Fill them in under Configuration, or clear the "
+                                   "protected collections.")
             try:
                 section_ids = _plex_movie_section_ids_direct()
             except Exception as e:
-                _abort_api_failure(f"Plex API check failed during run startup: {e}")
+                _abort_api_failure("Plex did not answer when the run started. Check that it is "
+                                   "running and reachable, then run again.", detail=str(e))
             if not section_ids:
-                _abort_api_failure("Plex API check failed during run startup: no movie sections were returned.")
+                _abort_api_failure("Plex returned no movie libraries. Check that the Plex token can see "
+                                   "your movie library, then run again.")
 
     if USE_JELLYFIN:
         try:
             _jellyfin_request("System/Info", timeout=6)
         except Exception as e:
-            _abort_api_failure(f"Jellyfin API check failed during run startup: {e}")
+            _abort_api_failure("Jellyfin did not answer when the run started. Check that it is "
+                               "running and reachable, then run again.", detail=str(e))
 
     # Radarr's forget only happens when a REAL Cleanup deletes a movie. A Simulate
     # or Debug Cleanup never touches Radarr, so an unreachable Radarr must not block
@@ -858,7 +871,8 @@ def verify_runtime_api_health():
         try:
             _radarr_json("/api/v3/system/status", timeout=6)
         except Exception as e:
-            _abort_api_failure(f"Radarr API check failed during run startup: {e}")
+            _abort_api_failure("Radarr did not answer when the run started. Check that it is running, "
+                               "or turn off Optional Radarr cleanup, then run again.", detail=str(e))
 
     verify_media_path_compatibility()
 
@@ -955,7 +969,11 @@ def verify_media_path_compatibility():
         try:
             raw_paths = sampler()
         except Exception as e:
-            _abort_api_failure(f"{label} path compatibility check failed during run startup: {e}", phase="checking")
+            # Name the server rather than saying "it": the sentence has already
+            # mentioned the library path, so "it" could be either.
+            _abort_api_failure(f"Could not read movie paths from {label} to check them against "
+                               f"{LIBRARY_ROOT}. Check that {label} is running, then run again.",
+                               detail=str(e), phase="checking")
 
         if not raw_paths:
             log(f"WARN {label} path compatibility: API returned no movie file paths to validate against {LIBRARY_ROOT}.")
@@ -965,10 +983,13 @@ def verify_media_path_compatibility():
         if len(matched) != len(raw_paths):
             unmatched = [raw for raw in raw_paths if not resolve_under_library(raw)]
             examples = "; ".join(raw_paths[:3])
+            # One example path stays in the message: the whole fix is comparing the
+            # path the server reports against what is mounted, so it is the fact
+            # someone needs, not a diagnostic they can look up later.
             _abort_api_failure(
-                f"{label} reports movie paths that MediaReducer cannot match under {LIBRARY_ROOT}. "
-                f"Check the media mounts, then rerun. "
-                f"Examples: {examples}. Unmatched: {'; '.join(unmatched[:3])}",
+                f"{label} reports movie files that are not under {LIBRARY_ROOT}, "
+                f"for example {unmatched[0]}. Check the media mounts, then run again.",
+                detail=f"sampled: {examples} | unmatched: {'; '.join(unmatched[:3])}",
                 phase="checking",
             )
         log(f"{label} path compatibility: {len(matched)}/{len(raw_paths)} sampled path(s) matched under {LIBRARY_ROOT}.")
@@ -2399,8 +2420,9 @@ def fetch_movie_metadata(rating_key, title):
         metadata = tautulli_api("get_metadata", rating_key=rating_key, media_info=0)
     except Exception as e:
         _abort_api_failure(
-            f"Tautulli metadata query failed during run; aborting so API-dependent protection/scoring is not guessed. "
-            f"title={title} | rating_key={rating_key} | error={e}",
+            "Tautulli stopped answering while reading movie details. Nothing was "
+            "deleted. Check that Tautulli is running, then run again.",
+            detail=f"title={title} | rating_key={rating_key} | error={e}",
             phase="scanning",
         )
 
@@ -2689,19 +2711,25 @@ def fetch_protected_paths():
         return set(), set(), set(), set()
     if not PLEX_URL or not PLEX_TOKEN:
         log("Plex protection: PLEX_URL/PLEX_TOKEN not set; aborting because protected collections cannot be verified.")
-        _abort_api_failure("Plex protected collections are configured, but Plex URL/token are not available.", phase="scanning")
+        _abort_api_failure("Plex protected collections are set up, but the Plex URL or token is "
+                           "blank. Fill them in under Configuration, or clear the protected "
+                           "collections.", phase="scanning")
 
     section_ids = _plex_movie_section_ids_direct()
     if section_ids is None:
         log("WARN Plex protection: could not reach Plex to list sections; aborting because protected collections cannot be verified.")
-        _abort_api_failure("Plex protection query failed: could not reach Plex to list sections.", phase="scanning")
+        _abort_api_failure("Plex stopped answering while checking protected collections. Nothing "
+                           "was deleted. Check that Plex is running, then run again.",
+                           detail="listing movie sections", phase="scanning")
 
     wanted = _protected_name_set(PROTECTED_COLLECTIONS)
     paths, keys, imdb_ids, tmdb_ids, matched = set(), set(), set(), set(), set()
     for section_id in section_ids:
         status, data = plex_request(f"/library/sections/{section_id}/collections")
         if not status or status != 200 or not data:
-            _abort_api_failure(f"Plex protection query failed for section {section_id}: status={status}", phase="scanning")
+            _abort_api_failure("Plex stopped answering while checking protected collections. Nothing "
+                               "was deleted. Check that Plex is running, then run again.",
+                               detail=f"section={section_id} status={status}", phase="scanning")
         container = data.get("MediaContainer") or {}
         collections = container.get("Directory") or container.get("Metadata") or []
         collections = _as_list(collections)
@@ -2715,7 +2743,9 @@ def fetch_protected_paths():
             status2, data2 = plex_request(f"/library/collections/{coll_key}/children")
             if not status2 or status2 != 200 or not data2:
                 _abort_api_failure(
-                    f"Plex protection query failed while reading collection '{coll.get('title')}' children: status={status2}",
+                    "Plex stopped answering while checking protected collections. Nothing "
+                    "was deleted. Check that Plex is running, then run again.",
+                    detail=f"collection={coll.get('title')!r} status={status2}",
                     phase="scanning",
                 )
             members = _as_list((data2.get("MediaContainer") or {}).get("Metadata"))
@@ -2732,7 +2762,9 @@ def fetch_protected_paths():
                     # fetch the item directly to get its file path.
                     s3, d3 = plex_request(f"/library/metadata/{rk}")
                     if s3 != 200 or not d3:
-                        _abort_api_failure(f"Plex protection metadata query failed for ratingKey={rk}: status={s3}", phase="scanning")
+                        _abort_api_failure("Plex stopped answering while checking protected collections. Nothing "
+                                           "was deleted. Check that Plex is running, then run again.",
+                                           detail=f"ratingKey={rk} status={s3}", phase="scanning")
                     md = _as_list((d3.get("MediaContainer") or {}).get("Metadata"))
                     for m in md:
                         item_paths |= _plex_item_paths(m)
@@ -2757,13 +2789,17 @@ def fetch_protected_paths():
                        if str(n).strip().lower() in wanted
                        and str(n).strip().lower() not in _matched_norm})
     if _missing:
-        _msg = (f"Plex protected collection(s) {_missing} not found — renamed or deleted? "
-                f"Aborted rather than running unprotected.")
+        _names = ", ".join(f"'{n}'" for n in _missing)
+        _one = len(_missing) == 1
+        _noun, _verb, _it = (("collection", "no longer exists", "it") if _one
+                             else ("collections", "no longer exist", "them"))
         if RUN_MODE in ("debug_sim", "headroom", "debug_cleanup"):
             _abort_api_failure(
-                _msg + " Fix or uncheck them under Configuration → Protected collections.",
+                f"Protected Plex {_noun} {_names} {_verb}, so nothing was deleted. "
+                f"Fix or uncheck {_it} under Configuration → Protected collections.",
                 phase="scanning")
-        log(f"WARN {_msg}")
+        log(f"WARN Plex protected {_noun} {_names} not found — renamed or deleted? "
+            f"A deleting run would stop here rather than run unprotected.")
     return paths, keys, imdb_ids, tmdb_ids
 
 
@@ -2777,10 +2813,16 @@ def radarr_lookup_movie(tmdb_id, title):
             headers=headers,
         )
     except Exception as e:
-        _abort_api_failure(f"Radarr lookup failed during post-delete cleanup | title={title} | tmdb_id={tmdb_id} | error={e}", phase="deleting")
+        _abort_api_failure("Radarr did not answer while removing a deleted movie from its library. "
+                           "The file is already gone; Radarr may still list it. Check Radarr, "
+                           "then run again.",
+                           detail=f"lookup | title={title} | tmdb_id={tmdb_id} | error={e}", phase="deleting")
 
     if status != 200:
-        _abort_api_failure(f"Radarr lookup failed during post-delete cleanup | title={title} | tmdb_id={tmdb_id} | status={status}", phase="deleting")
+        _abort_api_failure("Radarr did not answer while removing a deleted movie from its library. "
+                           "The file is already gone; Radarr may still list it. Check Radarr, "
+                           "then run again.",
+                           detail=f"lookup | title={title} | tmdb_id={tmdb_id} | status={status}", phase="deleting")
     if not isinstance(data, list) or len(data) == 0:
         log(f"Radarr: movie not found, nothing to clean up | title={title} | tmdb_id={tmdb_id} | status={status}")
         return None
@@ -2807,10 +2849,16 @@ def radarr_delete(tmdb_id, title, movie=None):
                 headers=headers,
             )
         except Exception as e:
-            _abort_api_failure(f"Radarr lookup failed during post-delete cleanup | title={title} | tmdb_id={tmdb_id} | error={e}", phase="deleting")
+            _abort_api_failure("Radarr did not answer while removing a deleted movie from its library. "
+                               "The file is already gone; Radarr may still list it. Check Radarr, "
+                               "then run again.",
+                               detail=f"lookup | title={title} | tmdb_id={tmdb_id} | error={e}", phase="deleting")
 
         if status != 200:
-            _abort_api_failure(f"Radarr lookup failed during post-delete cleanup | title={title} | tmdb_id={tmdb_id} | status={status}", phase="deleting")
+            _abort_api_failure("Radarr did not answer while removing a deleted movie from its library. "
+                               "The file is already gone; Radarr may still list it. Check Radarr, "
+                               "then run again.",
+                               detail=f"lookup | title={title} | tmdb_id={tmdb_id} | status={status}", phase="deleting")
         if not isinstance(data, list) or len(data) == 0:
             log(f"Radarr: movie not found, nothing to clean up | title={title} | tmdb_id={tmdb_id} | status={status}")
             return True  # not an error — just not in Radarr (e.g. manually added movie)
@@ -2828,13 +2876,19 @@ def radarr_delete(tmdb_id, title, movie=None):
             headers=headers,
         )
     except Exception as e:
-        _abort_api_failure(f"Radarr delete failed during post-delete cleanup | title={title} | tmdb_id={tmdb_id} | error={e}", phase="deleting")
+        _abort_api_failure("Radarr did not answer while removing a deleted movie from its library. "
+                           "The file is already gone; Radarr may still list it. Check Radarr, "
+                           "then run again.",
+                           detail=f"delete | title={title} | tmdb_id={tmdb_id} | error={e}", phase="deleting")
 
     if del_status in (200, 204):
         log(f"Radarr: deleted | title={title} | tmdb_id={tmdb_id} | radarr_id={radarr_id}")
         return True
 
-    _abort_api_failure(f"Radarr delete failed during post-delete cleanup | title={title} | tmdb_id={tmdb_id} | status={del_status}", phase="deleting")
+    _abort_api_failure("Radarr did not answer while removing a deleted movie from its library. "
+                       "The file is already gone; Radarr may still list it. Check Radarr, "
+                       "then run again.",
+                       detail=f"delete | title={title} | tmdb_id={tmdb_id} | status={del_status}", phase="deleting")
 
 
 def cleanup_radarr(candidate):
@@ -2879,7 +2933,9 @@ def cleanup_radarr(candidate):
             )
             return
         if not (RADARR_URL and RADARR_API_KEY):
-            _abort_api_failure(f"Radarr cleanup is enabled, but Radarr URL/API key are not available | title={title} | tmdb_id={tmdb_id}", phase="deleting")
+            _abort_api_failure("Optional Radarr cleanup is on, but Radarr's URL or API key is missing. "
+                               "Add them under Configuration, or turn the option off.",
+                               detail=f"title={title} | tmdb_id={tmdb_id}", phase="deleting")
         radarr_movie = radarr_lookup_movie(tmdb_id, title)
         if not radarr_movie:
             return
@@ -2904,7 +2960,9 @@ def cleanup_radarr(candidate):
     if RADARR_URL and RADARR_API_KEY:
         radarr_delete(tmdb_id, title, movie=radarr_movie)
     else:
-        _abort_api_failure(f"Radarr cleanup is enabled, but Radarr URL/API key are not available | title={title} | tmdb_id={tmdb_id}", phase="deleting")
+        _abort_api_failure("Optional Radarr cleanup is on, but Radarr's URL or API key is missing. "
+                           "Add them under Configuration, or turn the option off.",
+                           detail=f"title={title} | tmdb_id={tmdb_id}", phase="deleting")
 
 
 # =========================
@@ -2945,8 +3003,9 @@ def extract_file_path(item, quiet=False):
         metadata = tautulli_api("get_metadata", rating_key=rating_key, media_info=1)
     except Exception as e:
         _abort_api_failure(
-            f"Tautulli file-path metadata query failed during run; aborting instead of skipping a movie with incomplete API data. "
-            f"title={item.get('title')} | rating_key={rating_key} | error={e}",
+            "Tautulli stopped answering while reading a movie's file path. Nothing "
+            "was deleted. Check that Tautulli is running, then run again.",
+            detail=f"title={item.get('title')} | rating_key={rating_key} | error={e}",
             phase="scanning",
         )
 
@@ -3225,8 +3284,9 @@ def _jellyfin_boxset_children(box_id, user_id):
         tmdb_ids.update(found_tmdbs)
     if successful_queries == 0:
         _abort_api_failure(
-            f"Jellyfin protection query failed for BoxSet {box_id}; no child endpoint answered. "
-            f"Errors: {'; '.join(query_errors[:3])}",
+            "Jellyfin stopped answering while checking protected collections. Nothing was "
+            "deleted. Check that Jellyfin is running, then run again.",
+            detail=f"BoxSet {box_id}, no child endpoint answered: {'; '.join(query_errors[:3])}",
             phase="scanning",
         )
     return ids, paths, imdb_ids, tmdb_ids
@@ -3243,7 +3303,9 @@ def _jellyfin_protected_items():
     try:
         users = list(_jellyfin_user_ids())
     except Exception as e:
-        _abort_api_failure(f"Jellyfin protection query failed while listing users: {e}", phase="scanning")
+        _abort_api_failure("Jellyfin stopped answering while checking protected collections. "
+                           "Nothing was deleted. Check that Jellyfin is running, then run again.",
+                           detail=f"listing users: {e}", phase="scanning")
     user_id = users[0] if users else None
     log(f"Jellyfin protection: wanted={sorted(wanted)} | users={len(users)} | using user_id={user_id or 'none'}")
 
@@ -3267,7 +3329,9 @@ def _jellyfin_protected_items():
             break
     if not boxsets and listing_attempts > 0 and len(listing_errors) >= listing_attempts:
         _abort_api_failure(
-            f"Jellyfin protection query failed while listing BoxSets. Errors: {'; '.join(listing_errors[:3])}",
+            "Jellyfin stopped answering while checking protected collections. Nothing was "
+            "deleted. Check that Jellyfin is running, then run again.",
+            detail=f"listing collections: {'; '.join(listing_errors[:3])}",
             phase="scanning",
         )
     log(f"Jellyfin protection: found {len(boxsets)} collection(s) via {used_path or 'n/a'}: "
@@ -3298,13 +3362,19 @@ def _jellyfin_protected_items():
                        if str(n).strip().lower() in wanted
                        and str(n).strip().lower() not in _matched_norm})
     if _missing:
-        _msg = (f"Jellyfin protected collection(s) {_missing} not found — renamed, deleted, or not "
-                f"visible to the API key's user? Aborted rather than running unprotected.")
+        _names = ", ".join(f"'{n}'" for n in _missing)
+        _one = len(_missing) == 1
+        _noun, _verb, _exist, _it = (("collection", "is", "exists", "it") if _one
+                                     else ("collections", "are", "exist", "them"))
         if RUN_MODE in ("debug_sim", "headroom", "debug_cleanup"):
             _abort_api_failure(
-                _msg + " Fix or uncheck them under Configuration → Protected collections.",
+                f"Protected Jellyfin {_noun} {_names} {_verb} not visible to MediaReducer, so "
+                f"nothing was deleted. Check the {_noun} still {_exist} and that the API key's "
+                f"user can see {_it}, or uncheck {_it} under Configuration → Protected collections.",
                 phase="scanning")
-        log(f"WARN {_msg}")
+        log(f"WARN Jellyfin protected {_noun} {_names} not found — renamed, deleted, or not "
+            f"visible to the API key's user? A deleting run would stop here rather than "
+            f"run unprotected.")
     return protected_ids, protected_paths, protected_imdb_ids, protected_tmdb_ids
 
 
@@ -3412,7 +3482,9 @@ def get_all_movies_from_jellyfin():
                 "EnableUserData": "true",
             }) or {}).get("Items", [])
         except Exception as e:
-            _abort_api_failure(f"Jellyfin play-history query failed for user {uid}: {e}", phase="scanning")
+            _abort_api_failure("Jellyfin stopped answering while reading watch history. Nothing was "
+                               "deleted. Check that Jellyfin is running, then run again.",
+                               detail=f"user={uid}: {e}", phase="scanning")
         for item in items:
             row = rows.get(item.get("Id"))
             if not row:
@@ -4465,10 +4537,9 @@ def build_candidates():
         # no store write has happened yet, so the last good snapshot and deletion
         # plan are preserved for when storage comes back.
         _abort_api_failure(
-            "No monitored library path is mounted under /library — the storage volume "
-            "may be offline. Aborting so the saved library snapshot and deletion plan "
-            "are not wiped as if every movie were deleted. Check the /library mount, "
-            "then re-run.", phase="scanning")
+            f"No movie library is mounted at {LIBRARY_ROOT}, so the storage may be offline. "
+            "Nothing was deleted and your saved plan is untouched. Check the mount, then "
+            "run again.", phase="scanning")
 
     # Everything from here to the merge is the "Reading library" step: asking
     # each server what it holds, and resolving those rows to real files. It used
@@ -4506,7 +4577,9 @@ def build_candidates():
         # catalog reads against the path resolution.
         movies = get_all_movies()
     except Exception as e:
-        _abort_api_failure(f"Media library API query failed during run: {e}", phase="scanning")
+        _abort_api_failure("A media server stopped answering while reading your library. Nothing "
+                           "was deleted. Check that it is running, then run again.",
+                           detail=str(e), phase="scanning")
     total_movies = len(movies)
 
     # Remove stale cache entries (Plex movies no longer present). The metadata

@@ -19,6 +19,12 @@ await p.goto('' + BASE + '/explorer', { waitUntil: 'networkidle' });
 await p.waitForTimeout(800);
 
 const snap = () => p.evaluate(() => ({
+  // Settle any running animation first. #main carries a page-entry animation
+  // whose from-state is opacity 0, and it is an ancestor of the note, so the
+  // dimmed-walk below reports a decorative fade as "the run ghost dimmed it".
+  // Measured: #main reads 0, then 0.19, then 0.92 while that animation runs.
+  // Infinite ones (the header badge pulse) cannot be finished and are skipped.
+  _settled: document.getAnimations().forEach(a => { try { a.finish(); } catch {} }),
   ghost: document.getElementById('filter-score-card')?.classList.contains('section-run-ghost'),
   noteHidden: document.getElementById('exp-run-lock-note')?.hidden,
   // The notice sits OUTSIDE the card it explains: inside, the run ghost dims

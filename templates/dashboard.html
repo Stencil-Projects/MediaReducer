@@ -203,6 +203,46 @@
     background: var(--surface-3);
     transform: translateY(-1px);
   }
+  /* Corner arrow: the "this opens something" mark on every clickable box — both
+     history buttons here, and the four run stat boxes once their log section
+     exists (.rp-stat.log-jumpable, in the run panel's own style block). Until
+     now the only signal was a border and a hover lift, which says nothing at
+     all until the pointer is already on it, and says nothing ever on a phone.
+     It points up-left, into the box, so it reads as belonging to the thing it
+     sits on rather than pointing off the edge of it. */
+  .dashboard-history-btn,
+  .rp-stat.log-jumpable { position: relative; }
+  .dashboard-history-btn::after,
+  .rp-stat.log-jumpable::after {
+    /* Two declarations on purpose: the second keeps the arrow out of the
+       button's accessible name (a screen reader would otherwise read out "north
+       west arrow"), and the first is what an engine that doesn't understand the
+       alt-text syntax falls back to instead of dropping the arrow entirely. */
+    content: "↖";
+    content: "↖" / "";
+    position: absolute;
+    right: 6px;
+    bottom: 3px;
+    /* Inter is bundled up to 700, and its arrows thicken on the weight axis
+       like everything else — at 400 this reads as a hairline on a phone. */
+    font-size: .95rem;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-muted);
+    opacity: .8;
+    pointer-events: none;
+    transition: opacity .15s ease, color .15s ease;
+  }
+  /* The history buttons round at 14px against the stat boxes' 8px, so the same
+     offset would tuck the arrow into the curve. */
+  .dashboard-history-btn::after { right: 9px; bottom: 6px; }
+  .dashboard-history-btn:hover::after,
+  .dashboard-history-btn:focus::after,
+  .rp-stat.log-jumpable:hover::after,
+  .rp-stat.log-jumpable:focus-visible::after {
+    opacity: 1;
+    color: var(--accent);
+  }
   .dashboard-mode-link {
     display: inline-flex;
     align-items: center;
@@ -702,20 +742,29 @@
        space is for things that went WRONG, which have nowhere else to appear.
        The engine still composes the full message: the notifier falls back to it
        when it cannot build its own plan block, and the debug report echoes it. */
-    /* Issue list: severity colors the marker only. A red wall of text reads as
-       one big failure; the point is that these are separate, countable things. */
+    /* Issue list: for the countable issues, severity colors the marker only. A
+       red wall of text reads as one big failure, and the point of those is that
+       they are separate, countable things. The run-stopping failure at the top
+       IS one big failure, so it is the one entry that takes the color. */
     .rp-issues { list-style:none; margin:14px 0 0; padding:0; font-size:.8rem; }
     /* Nothing separates one issue from the next — no rule, no gap. The marker
-       column does it: every issue opens with a "!" and its note lines do not,
-       so the left edge already says where each one begins, and whitespace on
-       top of that only pushed the list past the fold. (A divider was tried
-       first and read as a table.) Every issue uses the SAME glyph — a "!" is a
-       third the width of a "▲", so mixed severities started each issue's text
-       at a different x and the list read as ragged. Severity is its color. */
+       column does it: every issue opens with a marker and its note lines do
+       not, so the left edge already says where each one begins, and whitespace
+       on top of that only pushed the list past the fold. (A divider was tried
+       first and read as a table.) The column is a FIXED width because the
+       glyphs are not — a "!" is a third the width of a "×" — and without it
+       each issue's text started at its own x and the list read as ragged.
+       Severity is the marker's color; only a run-stopping failure, which is a
+       different kind of thing from a movie that got skipped, changes glyph. */
     .rp-issues li { display:flex; gap:8px; align-items:baseline; padding:0; }
-    .rp-issue-mark { flex:none; font-weight:600; line-height:1.5; }
+    .rp-issue-mark { flex:none; width:.9em; text-align:center; font-weight:600; line-height:1.5; }
+    .rp-issue-fatal .rp-issue-mark { color:var(--text-danger); }
     .rp-issue-error .rp-issue-mark { color:var(--text-danger); }
     .rp-issue-warning .rp-issue-mark { color:var(--text-warning, #c9a227); }
+    /* The failure gets the weight and the red the pill and the stepper's × are
+       already claiming, from the same token so all three agree in either theme.
+       The issues under it are things the run got past, and stay neutral. */
+    .rp-issue-fatal .rp-issue-line { font-weight:600; color:var(--text-danger); }
     .rp-issue-body { min-width:0; }
     .rp-issue-line { color:var(--text-primary); }
     .rp-issue-note { color:var(--text-muted); font-size:.75rem; line-height:1.45; }
@@ -823,7 +872,9 @@
     .rp-current { font-size:.76rem; color:var(--text-muted); margin-top:7px; min-height:1.1em; }
     .rp-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin-top:14px; }
     .rp-stat { background:var(--surface-2); border-radius:8px; padding:8px 10px; border:1px solid transparent; }
-    /* Clickable stats share the Lifetime pruned box's border + hover treatment. */
+    /* Clickable stats share the Lifetime pruned box's border + hover treatment,
+       and its bottom-right corner arrow — that rule lives with the history
+       buttons in the page's own style block, since it covers both. */
     .rp-stat.log-jumpable {
       cursor: pointer;
       border-color: color-mix(in srgb, var(--border-strong) 78%, transparent);
@@ -1461,17 +1512,43 @@ function _renderRunOutcome(p) {
   // so the panel said the same numbers twice. The rest of the message is still
   // produced (the notifier falls back to it, and the debug report echoes it);
   // it just isn't repeated here.
-  document.getElementById('rp-msg').textContent =
-    String(p.message || '').split('\n')[0];
+  //
+  // A run that FAILED has no result to headline — it has a reason, and a reason
+  // is a thing that went wrong, so it belongs in the issue list below with
+  // everything else of that kind. The pill and the bar already say "Failed".
+  const failed = p.status === 'error';
+  // First line of the message, trimmed. The engine wraps its sentences, and a
+  // leading newline would otherwise render as an empty headline.
+  const lead = String(p.message || '').trim().split('\n')[0].trim();
+  document.getElementById('rp-msg').textContent = failed ? '' : lead;
+
+  // The failure leads the list. It is deliberately not a run_issues category:
+  // those fold many events of a known kind into one counted line, and this is a
+  // single event whose wording is written at the call site that stopped the run.
+  const entries = [];
+  if (failed) {
+    entries.push({
+      fatal: true,
+      // Same fallback sentence the failure alert uses for the same state.
+      line: lead || 'The run stopped before it finished.',
+      // The stage is what someone can quote in a bug report and then find
+      // verbatim in the log, where the engine wrote it as a ====== banner.
+      note: p.stage ? `Failed during ${p.stage} — this stage name appears in the log.` : '',
+    });
+  }
+  for (const issue of Array.isArray(p.issues) ? p.issues : []) entries.push(issue);
 
   const ul = document.getElementById('rp-issues');
   ul.textContent = '';
-  for (const issue of Array.isArray(p.issues) ? p.issues : []) {
+  for (const issue of entries) {
     const li = document.createElement('li');
-    li.className = 'rp-issue-' + (issue.severity === 'error' ? 'error' : 'warning');
+    li.className = 'rp-issue-' + (issue.fatal ? 'fatal'
+                                : issue.severity === 'error' ? 'error' : 'warning');
     const mark = document.createElement('span');
     mark.className = 'rp-issue-mark';
-    mark.textContent = '!';
+    // × for a run that stopped, ! for something it got past. Same glyph as the
+    // red × the stepper puts on the step that died.
+    mark.textContent = issue.fatal ? '×' : '!';
     const body = document.createElement('div');
     body.className = 'rp-issue-body';
     const line = document.createElement('div');
@@ -1671,14 +1748,10 @@ function renderProgress(p) {
   document.getElementById('rp-bar-pct').textContent = pctText;
 
   let current = '';
-  // A failed run names the stage it died in. The red × alone says which step,
-  // but a step is a picture — the stage name is the thing someone can quote in
-  // a bug report and then find verbatim in the log, because the engine writes
-  // the same word as a `====== STAGE ======` banner. The REASON is not repeated
-  // here: _renderRunOutcome already puts p.message in the headline above.
-  if (!active && status === 'error' && p.stage) {
-    current = `Failed during ${p.stage} — this stage name appears in the log`;
-  } else if (active) {
+  // Nothing here for a failed run: the reason and the stage it died in are one
+  // thought, and _renderRunOutcome keeps them together in the issue list rather
+  // than splitting them across the panel with the stat boxes in between.
+  if (active) {
     if ((phase === 'deleting' || phase === 'simulating') && p.current_title) {
       current = (isSim ? 'Would remove: ' : 'Removing: ') + p.current_title;
     } else if (phase === 'scanning') current = 'Checking ratings, watch history and protection';

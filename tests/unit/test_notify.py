@@ -296,6 +296,29 @@ check("error dispatch honors NOTIFY_ON_ERROR", r == (False, "disabled") and not 
 notify.dispatch_error({**DEST, "NOTIFY_ENABLED": True, "NOTIFY_ON_ERROR": True}, "boom")
 check("error dispatch sends when enabled", len(sent) == 1 and "boom" in sent[0][2])
 
+# ── A failed run reads like the dashboard's run panel ────────────────────────
+# Same three things in the same order: the engine's sentence behind a ×, the
+# stage to quote, then anything the run had recorded before it died. It used to
+# be "a run failed, check the log", which is the trip the alert should save.
+sent.clear()
+notify.dispatch_error(
+    {**DEST, "NOTIFY_ENABLED": True, "NOTIFY_ON_ERROR": True},
+    "Tautulli stopped answering while reading movie details. Nothing was deleted.",
+    stage="SCORING",
+    issues=[{"category": "identity_mismatch", "count": 43, "detail": "Some Movie (2011)"}])
+_body = sent[-1][2]
+check("failure alert leads with × and the engine's sentence",
+      _body.startswith("× Tautulli stopped answering"))
+check("failure alert names the stage", "Failed during SCORING" in _body)
+check("failure alert carries issues recorded before the abort",
+      "Identity mismatch: 43 movies skipped" in _body)
+check("failure alert titles itself a failure", sent[-1][1] == "MediaReducer — run failed")
+
+sent.clear()
+notify.dispatch_error({**DEST, "NOTIFY_ENABLED": True, "NOTIFY_ON_ERROR": True})
+check("a failure with no message still says something",
+      sent[-1][2].startswith("× The run stopped"))
+
 # ── Fresh-install defaults ───────────────────────────────────────────────────
 # Nothing is delivered until the master switch goes on and a service is set up.
 # These defaults decide what arrives the moment it does: the three alert types

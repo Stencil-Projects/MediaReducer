@@ -225,7 +225,13 @@ the section it preceded. `_CURRENT_PHASE` is what `_abort_api_failure` stamps on
 failure, so an abort raised from a helper marks whichever stage was actually open
 rather than one hardcoded at the call site — the log's `ABORT stage:` line and the
 dashboard's "Failed during …" then carry the same words, which is what a user is
-asked to quote. And the work that is deliberately quiet (reading 2,800 movies is
+asked to quote — the panel carries both as one entry at the top of the run
+panel's issue list, marked with a red × rather than the `!` of something the run
+got past. The failure text is split in two for the same reason:
+`_abort_api_failure(message, detail=…)` puts a plain sentence on the dashboard
+and the movie title, internal ids and exception repr on an `ABORT detail:` log
+line, so the panel says what happened and what to do while the log keeps
+everything needed to diagnose it. And the work that is deliberately quiet (reading 2,800 movies is
 not worth 2,800 lines) still reports through `timed_step()`, which logs one line
 on success and stays silent on exception, since a "finished in" line under an
 abort would read as if the work had completed. `_RP_STEP_INDEX` in `dashboard.html`

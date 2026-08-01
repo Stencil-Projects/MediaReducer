@@ -701,7 +701,7 @@ def _movie_name_blocks(report, debug, budget=_MOVIE_LIST_CHARS, *, armed=True):
     return blocks
 
 
-def _issue_block(report):
+def _issue_block(report, *, lead=None):
     """The categorized "what went wrong" list, or "" for a clean run.
 
     Reads the issue summary the engine attached to the report, so the categories
@@ -717,7 +717,8 @@ def _issue_block(report):
     if not summary:
         return ("Completed with errors — see the detailed log."
                 if report.get("completed_with_errors") else "")
-    lines = [run_issues.headline(report.get("issues")) + ":"]
+    lines = [run_issues.headline(report.get("issues"),
+                                 **({"lead": lead} if lead else {})) + ":"]
     for entry in summary:
         mark = "!" if entry["severity"] == run_issues.ERROR else "-"
         lines.append(f"{mark} {entry['line']}")
@@ -891,6 +892,31 @@ def build_low_space_message(cfg, *, free_gb, redline_gb, margin_gb, items=None):
     return "MediaReducer — low space warning", "\n\n".join(body_parts)
 
 
+def build_error_message(cfg, *, message="", stage="", issues=None):
+    """(title, body) for a run that stopped dead.
+
+    Shaped like the dashboard's run panel, because this is the same failure
+    being read somewhere else: the engine's sentence first — what stopped
+    answering, that nothing was deleted, what to check — then the stage to
+    quote when reporting it, then whatever the run had already recorded before
+    it died. "A run failed, check the log" sent the reader to go and look; this
+    is what they were going to find.
+    """
+    line = str(message or "").strip().splitlines()
+    line = line[0].strip() if line else ""
+    body_parts = [f"× {line or 'The run stopped before it finished.'}"]
+    if stage:
+        body_parts.append(f"Failed during {stage} — this stage name appears in the log.")
+    # Same categorized list the finished-with-errors summary uses: a run can
+    # collect issues and THEN hit something fatal, and those are still the most
+    # specific thing anyone has about what it was doing. Its own lead, because
+    # that summary opens with "Completed with", which here would be a lie.
+    block = _issue_block({"issues": issues}, lead="Recorded before it stopped —")
+    if block:
+        body_parts.append(block)
+    return "MediaReducer — run failed", "\n\n".join(body_parts)
+
+
 def _dispatch_built(cfg, built, none_detail):
     if not _bool(cfg, "NOTIFY_ENABLED"):
         return False, "disabled"
@@ -921,13 +947,14 @@ def dispatch_low_space(cfg, *, free_gb, redline_gb, margin_gb, items=None):
         "nothing to report")
 
 
-def dispatch_error(cfg, message):
+def dispatch_error(cfg, message="", *, stage="", issues=None):
     """Deliver a run-failure alert (a nonzero engine exit the app caught).
-    Gated on NOTIFY_ENABLED and NOTIFY_ON_ERROR."""
+
+    Gated on NOTIFY_ENABLED and NOTIFY_ON_ERROR. With that toggle off a failed
+    run says NOTHING — there is no summary to fall back to, because a run that
+    stopped has no result to report.
+    """
     if not _bool(cfg, "NOTIFY_ENABLED") or not _bool(cfg, "NOTIFY_ON_ERROR"):
         return False, "disabled"
-    return _deliver(
-        apprise_urls(cfg),
-        "MediaReducer — run failed",
-        str(message or "A run failed. Check the detailed log."),
-    )
+    title, body = build_error_message(cfg, message=message, stage=stage, issues=issues)
+    return _deliver(apprise_urls(cfg), title, body)

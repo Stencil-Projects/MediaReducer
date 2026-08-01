@@ -411,7 +411,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.3"
+APP_VERSION = "1.0.0-alpha.4"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -1256,6 +1256,12 @@ def reopen_daily_window(reason: str = "daily run time moved later") -> None:
 def log_path()     -> Path: return output_dir() / "lastrun.log"
 def deleted_path() -> Path: return output_dir() / "deleted.log"
 def progress_path()-> Path: return output_dir() / "progress.json"
+
+# The engine died without writing a terminal state — killed, OOM, the container
+# stopped. The dashboard and the failure alert both fall back to this, so one
+# event is not described two ways.
+RUN_ENDED_UNEXPECTEDLY = ("The run ended unexpectedly and did not report why. "
+                          "Check the detailed log.")
 def run_report_path() -> Path: return output_dir() / "last_run_report.json"
 def logs_dir()     -> Path: return output_dir() / "logs"
 
@@ -2176,8 +2182,21 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
                             pass
                         summary_sent, _detail = notify.dispatch_run_report(cfg, report)
                 elif not is_debug:
+                    # The engine's last progress write is the failure, in the
+                    # words the dashboard is showing for the same event. Read it
+                    # here so the alert says what stopped answering instead of
+                    # "a run failed"; a torn or stale file just falls back.
+                    _prog = {}
+                    try:
+                        _prog = json.loads(progress_path().read_text(encoding="utf-8"))
+                        if not isinstance(_prog, dict) or _prog.get("status") != "error":
+                            _prog = {}
+                    except Exception:
+                        _prog = {}
                     notify.dispatch_error(
-                        cfg, "A MediaReducer run failed — check the detailed log.")
+                        cfg, _prog.get("message") or RUN_ENDED_UNEXPECTEDLY,
+                        stage=_prog.get("stage") or "",
+                        issues=_prog.get("issues") or [])
             except Exception:
                 pass  # alerting is best-effort; never surface into the app
             finally:
@@ -5158,7 +5177,28 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                 ["RADARR_URL", "RADARR_API_KEY"],
                 )
 
-    if probe:
+    # A missing or empty library root makes every path sample fail, and "paths do
+    # not line up" then sends people hunting for a Plex prefix mismatch that isn't
+    # there. Reword that case; do NOT widen it. This replaces the alignment
+    # complaint exactly where the alignment check would have run, so a state that
+    # blocked before still blocks and one that did not still does not.
+    _library = mounts.get("library") or {}
+    library_missing = probe and not _library.get("ok", True) and (
+        (use_plex and tautulli_connected) or (use_jellyfin and jellyfin_connected))
+    if library_missing:
+        media_path_blocker = True
+        if not _library.get("mounted"):
+            add_error(
+                f"No movie library at {FILESYSTEM_CHECK_PATH}. The container has no "
+                f"library mounted there, so nothing can be scanned or deleted. Check "
+                f"the /library mapping, then recheck.")
+        else:
+            add_error(
+                f"{FILESYSTEM_CHECK_PATH} is mounted but empty. That is usually a "
+                f"share or disk that has not come up yet rather than an empty "
+                f"library. Check the mount, then recheck.")
+
+    if probe and not library_missing:
         if use_plex and tautulli_connected:
             try:
                 compat = _media_path_compatibility_state("Plex/Tautulli", _sample_result(pre, "tautulli_paths"))
@@ -8011,7 +8051,11 @@ def api_run_progress():
     # show the last phase as failed instead of a phantom running state.
     if not _run_active and data.get("status") in ("starting", "running"):
         data["status"] = "error"
-        data["message"] = data.get("message") or "Run ended unexpectedly."
+        # NOT `or data["message"]`: this branch only fires while the file still
+        # holds an IN-PROGRESS line ("Checking connections…"), and the panel now
+        # prints the message as the failure itself — in red, behind a ×. Keeping
+        # it would name whatever the run was doing as the thing that went wrong.
+        data["message"] = RUN_ENDED_UNEXPECTEDLY
     resp = jsonify(data)
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp

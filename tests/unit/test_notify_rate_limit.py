@@ -95,7 +95,8 @@ check("...and states the floor actually in force",
 notify.dispatch_error(CFG, "first")
 notify.dispatch_error(CFG, "second")
 check("a second alert inside the window is not delivered", len(SENT) == 1)
-check("...and the first one is the one that went", SENT[0]["body"] == "first")
+check("...and the first one is the one that went",
+      "first" in SENT[0]["body"] and "second" not in SENT[0]["body"])
 
 rewind(notify._MIN_SEND_INTERVAL_S + 1)
 notify.dispatch_error(CFG, "third")

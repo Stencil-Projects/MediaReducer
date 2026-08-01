@@ -1104,8 +1104,8 @@
           </div>
           <div class="form-check">
             <input class="form-check-input" type="checkbox" id="NOTIFY_ON_ERROR" name="NOTIFY_ON_ERROR" {{ 'checked' if config.NOTIFY_ON_ERROR else '' }}>
-            <label class="form-check-label" for="NOTIFY_ON_ERROR">Errors</label>
-            <div class="form-text mt-0">Flag runs that completed with errors, and send an alert when a run fails outright.</div>
+            <label class="form-check-label" for="NOTIFY_ON_ERROR">Failed runs and errors</label>
+            <div class="form-text mt-0">Alert when a run stops dead, and list what went wrong on runs that finished with errors. Off means a failed run sends nothing at all, and a finished one doesn't mention its errors.</div>
           </div>
 
           <div class="notify-subhead">Where to send</div>

@@ -122,15 +122,23 @@ sys.path.insert(0, "$REPO")
 import app
 app.app.run(host="127.0.0.1", port=int(os.environ["MEDIAREDUCER_PORT"]))
 PY
-    local pid=$! url="http://127.0.0.1:$3"
-    for _ in $(seq 1 40); do
+    local pid=$! url="http://127.0.0.1:$3" body
+    for _ in $(seq 1 60); do
       # A dead process never answers. Say so rather than timing out silently.
       if ! kill -0 "$pid" 2>/dev/null; then
         echo "ERROR: the app for $url exited during boot:" >&2
         tail -5 "$TMP/app-$3.log" >&2
         exit 1
       fi
-      curl -sf "$url/api/status" >/dev/null 2>&1 && break
+      # Ready means the startup storage refresh has finished, not just that the
+      # port answers. /api/status replies about a quarter-second before that
+      # refresh clears, and a run fired inside that window is refused with
+      # "a background status refresh is finishing" — which surfaced as a whole
+      # run pipeline failing rather than as the race it is.
+      body="$(curl -sf "$url/api/status" 2>/dev/null)" || body=""
+      if [[ -n "$body" ]] && ! grep -q '"summary_active": *true' <<<"$body"; then
+        break
+      fi
       sleep 0.5
     done
     echo "$pid"

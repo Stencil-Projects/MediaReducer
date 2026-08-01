@@ -248,8 +248,12 @@ def counts_by_severity(issues):
             sum(1 for e in summary if e["severity"] == WARNING))
 
 
-def headline(issues):
-    """The one-line verdict for a run that had issues, or "" when it was clean."""
+def headline(issues, *, lead="Completed with"):
+    """The one-line verdict for a run that had issues, or "" when it was clean.
+
+    `lead` is a parameter because a run that STOPPED did not complete: the
+    failure alert prints the same counts under an opening that says so.
+    """
     errors, warnings = counts_by_severity(issues)
     if not errors and not warnings:
         return ""
@@ -258,4 +262,4 @@ def headline(issues):
         parts.append(f"{errors} kind{'' if errors == 1 else 's'} of error")
     if warnings:
         parts.append(f"{warnings} warning{'' if warnings == 1 else 's'}")
-    return "Completed with " + " and ".join(parts)
+    return f"{lead} " + " and ".join(parts)

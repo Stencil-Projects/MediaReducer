@@ -7,7 +7,13 @@ const BASE = process.env.MR_BASE_URL || 'http://127.0.0.1:7474';
 const H = { 'Content-Type': 'application/json', 'X-MediaReducer': '1' };
 
 let ok = true;
-const check = (name, cond) => { console.log((cond ? 'PASS ' : 'FAIL ') + name); ok = ok && cond; };
+// `extra` carries the app's own refusal text on a failure. Without it a refused
+// run reads as "first Simulate starts FAIL" and the reason only exists in the
+// app log, which is a long way to go for a sentence the response already had.
+const check = (name, cond, extra = '') => {
+  console.log((cond ? 'PASS ' : 'FAIL ') + name + (cond || !extra ? '' : ` — ${extra}`));
+  ok = ok && cond;
+};
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function status() {
@@ -37,7 +43,7 @@ check('media server connected before the run',
 
 // First Simulate: builds the plan and snapshot from scratch.
 const r1 = await runSimulate();
-check('first Simulate starts', r1.started === true);
+check('first Simulate starts', r1.started === true, r1.message);
 check('first Simulate finishes (no timeout)', r1.started && !r1.timeout);
 
 const snapResp = await fetch(`${BASE}/api/library-snapshot`, { cache: 'no-store' });
@@ -59,7 +65,7 @@ check('the eligible queue was built (every movie, in deletion order)',
 // both re-run just repeats the first pass and adds runtime for no new coverage.
 if (process.env.MR_E2E_SECOND_RUN !== '0') {
   const r2 = await runSimulate();
-  check('second Simulate (cache path) also finishes', r2.started === true && !r2.timeout);
+  check('second Simulate (cache path) also finishes', r2.started === true && !r2.timeout, r2.message);
   const s2 = r2.status || await status();
   check('the queue is stable across a re-run',
     Number(s2.marked_count) === Number(s1.marked_count));

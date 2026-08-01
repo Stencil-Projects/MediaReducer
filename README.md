@@ -392,8 +392,9 @@ stage prints how long it took, and the slow parts that stay quiet (reading a
 large library line by line would bury everything else) still report their
 timing.
 
-If a step shows a red ×, the dashboard names the stage it failed in and the log
-carries the same words on an `ABORT stage:` line. Quote that stage name when
+If a step shows a red ×, the dashboard says what failed and what to do about it,
+and the log carries the same words on an `ABORT:` line, the technical detail on
+`ABORT detail:`, and the stage on `ABORT stage:`. Quote that stage name when
 reporting a problem.
 
 Step 1 happens inside the run. It is not the separate pre-check that decides
@@ -486,9 +487,12 @@ box stay short:
 
 - **Movie names** — lists the movies deleted, newly marked, or first in line.
   Long lists are trimmed. Without it you still get the counts and dates.
-- **Errors** — includes the run's warnings in the summary, and alerts when a
-  run fails outright. Each kind of problem gets its own line with a count and a
-  one-line fix, in the same words the log and the dashboard use.
+- **Failed runs and errors** — alerts when a run stops dead, and lists what went
+  wrong on runs that finished with errors. Each kind of problem gets its own
+  line with a count and a one-line fix, in the same words the log and the
+  dashboard use. Off means a failed run sends nothing at all — a run that
+  stopped has no result to summarize — and a finished one doesn't mention its
+  errors.
 
 **Rate limit.** Each destination gets at most one message every 10 seconds, as a
 backstop against anything looping. You should never notice it: the alerts above

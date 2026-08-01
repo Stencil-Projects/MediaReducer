@@ -26,8 +26,9 @@ for (const path of ['/', '/config', '/explorer']) {
 
 // ── Each phase lights its own step, and a failure names its stage ──────────
 // The stepper and the log stages are written from ONE call in the engine
-// (log_stage), so this mapping is the contract between them. A failure also has
-// to name the stage without repeating the reason already shown in the headline.
+// (log_stage), so this mapping is the contract between them. A failure lands as
+// one entry in the issue list — reason on the line, stage on the note, red × for
+// the marker — and says neither of them anywhere else on the panel.
 {
   const p = await b.newPage({ viewport: { width: 1180, height: 1000 } });
   try {
@@ -49,14 +50,35 @@ for (const path of ['/', '/config', '/explorer']) {
       _rpMaxIdx = 0;
       renderProgress({ schema: 1, status: 'error', phase: 'library', mode: 'debug_sim',
                        stage: 'READING LIBRARY', message: 'Jellyfin timed out' });
-      return { line: document.getElementById('rp-current').textContent,
+      const top = document.querySelector('#rp-issues li');
+      const txt = el => el ? el.textContent : '';
+      const color = el => el ? getComputedStyle(el).color : null;
+      return { current: document.getElementById('rp-current').textContent,
                head: document.getElementById('rp-msg').textContent,
+               fatal: !!top && top.classList.contains('rp-issue-fatal'),
+               mark: txt(top && top.querySelector('.rp-issue-mark')),
+               line: txt(top && top.querySelector('.rp-issue-line')),
+               note: txt(top && top.querySelector('.rp-issue-note')),
+               // The failure's line, its ×, and the "Failed" pill all read the
+               // same red or the panel is telling three stories about one event.
+               lineColor: color(top && top.querySelector('.rp-issue-line')),
+               markColor: color(top && top.querySelector('.rp-issue-mark')),
+               pillColor: color(document.getElementById('rp-pill')),
                x: [...document.querySelectorAll('#rp-steps .rp-step')]
                     .findIndex(s => s.classList.contains('is-failed')) };
     });
-    if (!/Failed during READING LIBRARY/.test(fail.line)) bad.push('failure does not name its stage');
-    if (/Jellyfin timed out/.test(fail.line)) bad.push('failure repeats the reason twice');
-    if (!/Jellyfin timed out/.test(fail.head)) bad.push('failure lost its reason');
+    if (!fail.fatal) bad.push('failure did not lead the issue list');
+    if (fail.mark !== '×') bad.push(`failure marker is ${JSON.stringify(fail.mark)}, want ×`);
+    if (!/Jellyfin timed out/.test(fail.line)) bad.push('failure lost its reason');
+    if (!/Failed during READING LIBRARY/.test(fail.note)) bad.push('failure does not name its stage');
+    // Said once. The headline and the under-bar line both used to carry a piece
+    // of this, which put the reason and the stage on opposite sides of the
+    // stat boxes.
+    if (/Jellyfin timed out/.test(fail.head + fail.current)) bad.push('failure repeats the reason');
+    if (/Failed during/.test(fail.current)) bad.push('failure repeats its stage');
+    if (fail.lineColor !== fail.markColor || fail.lineColor !== fail.pillColor) {
+      bad.push(`red disagrees: line ${fail.lineColor} mark ${fail.markColor} pill ${fail.pillColor}`);
+    }
     if (fail.x !== 1) bad.push(`x on step ${fail.x}, want 1`);
     const ok = bad.length === 0;
     console.log(`${ok ? 'PASS' : 'FAIL'} stepper phases map to steps ${ok ? '' : JSON.stringify(bad)}`);
@@ -119,19 +141,19 @@ for (const path of ['/', '/config', '/explorer']) {
 }
 
 // ── Every run issue starts at the same left edge ───────────────────────────
-// Severity used to pick the marker glyph, and the glyphs are different widths —
-// a "!" is about a third of a "▲" — so a list of mixed severities started each
-// issue's text at its own x and read as ragged. One glyph for all of them,
-// severity in its color, and the edges line up for free. This is the guard
-// against a second glyph coming back.
+// The markers are different widths — a "!" is about a third of a "×" — so
+// without a fixed-width marker column each issue's text starts at its own x and
+// the list reads as ragged. A run that failed puts a "×" at the top of a list
+// whose other entries carry "!", which is exactly the mix that goes ragged, so
+// the fatal entry is in the sample.
 {
   const p = await b.newPage({ viewport: { width: 900, height: 1000 } });
   try {
     await p.goto(BASE + '/', { waitUntil: 'load', timeout: 20000 });
     await p.waitForTimeout(900);
     const g = await p.evaluate(() => {
-      renderProgress({ schema: 1, status: 'done', phase: 'done', mode: 'debug_sim',
-        stage: 'DRY RUN SUMMARY', issues: [
+      renderProgress({ schema: 1, status: 'error', phase: 'scanning', mode: 'debug_sim',
+        stage: 'SCORING', message: 'Tautulli stopped answering.', issues: [
           { severity: 'error', line: 'Identity mismatch: 43 movies skipped', note: 'A note.' },
           { severity: 'warning', line: 'Cleanup blocked by settings', note: 'Another note.' },
           { severity: 'error', line: 'IMDb ratings download failed' },
@@ -139,17 +161,107 @@ for (const path of ['/', '/config', '/explorer']) {
       const rows = [...document.querySelectorAll('#rp-issues li')];
       const left = el => el ? +el.getBoundingClientRect().left.toFixed(2) : null;
       return { n: rows.length,
+               marks: rows.map(li => (li.querySelector('.rp-issue-mark') || {}).textContent),
                lines: rows.map(li => left(li.querySelector('.rp-issue-line'))),
                notes: rows.map(li => left(li.querySelector('.rp-issue-note'))).filter(v => v !== null),
                rules: rows.map(li => parseFloat(getComputedStyle(li).borderTopWidth) || 0) };
     });
     const edges = new Set([...g.lines, ...g.notes]);
     // A rule between issues made the list read as a table; space separates them.
-    const ok = g.n === 3 && edges.size === 1 && g.rules.every(w => w === 0);
+    const ok = g.n === 4 && g.marks[0] === '×' && g.marks.slice(1).every(m => m === '!')
+               && edges.size === 1 && g.rules.every(w => w === 0);
     console.log(`${ok ? 'PASS' : 'FAIL'} run issues share one left edge, no dividers ${ok ? '' : JSON.stringify(g)}`);
     pass = pass && ok;
   } catch (e) {
     console.log(`FAIL run issue alignment: ${e.message}`);
+    pass = false;
+  }
+  await p.close();
+}
+
+// ── The API-error tab states its case without moving ──────────────────────
+// A broken connection is a standing state, not an event, so the tab wears a
+// steady red and a dot instead of a pulse — this is the guard against a loop
+// coming back to the header. It also has to keep its width when the state
+// flips: /api/status turns this on mid-poll, and the sliding underline is
+// positioned from offsetWidth, so a wider tab would shunt the bar sideways.
+{
+  const p = await b.newPage({ viewport: { width: 900, height: 700 } });
+  try {
+    await p.goto(BASE + '/', { waitUntil: 'load', timeout: 20000 });
+    await p.waitForTimeout(900);
+    const g = await p.evaluate(() => {
+      const tab = [...document.querySelectorAll('.header-tabs a')]
+        .find(a => a.getAttribute('href') === '/config');
+      prSetConfigTabError(false);
+      const clean = tab.getBoundingClientRect().width;
+      prSetConfigTabError(true);
+      const dot = getComputedStyle(tab, '::before');
+      return { clean: +clean.toFixed(2), error: +tab.getBoundingClientRect().width.toFixed(2),
+               // Keyframe animations only. The flip also starts the tab's
+               // color/border transitions, which getAnimations() reports too and
+               // which are the point — the tab should fade into red, not blink.
+               anims: tab.getAnimations()
+                         .filter(a => typeof a.animationName === 'string')
+                         .map(a => a.animationName),
+               dotSize: dot.width, dotColor: dot.backgroundColor,
+               textColor: getComputedStyle(tab).color };
+    });
+    const bad = [];
+    if (g.anims.length) bad.push(`tab animates: ${g.anims.join()}`);
+    if (g.dotSize !== '5px') bad.push(`no dot (width ${g.dotSize})`);
+    if (g.dotColor !== g.textColor) bad.push(`dot ${g.dotColor} vs text ${g.textColor}`);
+    if (g.clean !== g.error) bad.push(`width moves ${g.clean} -> ${g.error}`);
+    const ok = bad.length === 0;
+    console.log(`${ok ? 'PASS' : 'FAIL'} the API-error tab is static and keeps its width ${ok ? '' : JSON.stringify(bad)}`);
+    pass = pass && ok;
+  } catch (e) {
+    console.log(`FAIL API-error tab: ${e.message}`);
+    pass = false;
+  }
+  await p.close();
+}
+
+// ── The corner arrow appears on exactly the boxes that do something ────────
+// It is the only affordance that shows without a pointer, which is to say the
+// only one a phone ever sees. That makes it a promise: a box wearing the arrow
+// and doing nothing when tapped is worse than no arrow at all. A 0-count box
+// (here, "Would delete") is inert because its log section has nothing to show.
+{
+  const p = await b.newPage({ viewport: { width: 900, height: 1000 } });
+  try {
+    await p.goto(BASE + '/', { waitUntil: 'load', timeout: 20000 });
+    await p.waitForTimeout(900);
+    const g = await p.evaluate(() => {
+      // Every log section written, so only the counts decide.
+      _logSections = { scan: 1, eligible: 1, deletions: 1, summary: 1, errors: 1 };
+      renderProgress({ schema: 1, status: 'done', phase: 'done', mode: 'debug_sim',
+        stage: 'DRY RUN SUMMARY', scanned: 2880, eligible: 2201, deleted: 0,
+        bytes_freed: 0, message: 'Dry run.' });
+      const arrow = el => (getComputedStyle(el, '::after').content || '').includes('↖');
+      const box = id => {
+        const el = document.getElementById(id);
+        return { jumpable: el.classList.contains('log-jumpable'), arrow: arrow(el) };
+      };
+      return {
+        scan: box('rp-jump-scan'),
+        eligible: box('rp-jump-eligible'),
+        deletions: box('rp-jump-deletions'),   // 0 deleted — inert
+        summary: box('rp-jump-summary'),       // exempt from the count rule
+        history: [...document.querySelectorAll('.dashboard-history-btn')].map(arrow),
+      };
+    });
+    const bad = [];
+    for (const k of ['scan', 'eligible', 'summary']) {
+      if (!g[k].jumpable || !g[k].arrow) bad.push(`${k} ${JSON.stringify(g[k])}`);
+    }
+    if (g.deletions.jumpable || g.deletions.arrow) bad.push(`inert box wears an arrow ${JSON.stringify(g.deletions)}`);
+    if (g.history.length !== 2 || !g.history.every(Boolean)) bad.push(`history buttons ${JSON.stringify(g.history)}`);
+    const ok = bad.length === 0;
+    console.log(`${ok ? 'PASS' : 'FAIL'} corner arrow marks the clickable boxes only ${ok ? '' : JSON.stringify(bad)}`);
+    pass = pass && ok;
+  } catch (e) {
+    console.log(`FAIL corner arrow: ${e.message}`);
     pass = false;
   }
   await p.close();

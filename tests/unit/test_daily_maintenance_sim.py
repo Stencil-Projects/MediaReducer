@@ -314,7 +314,8 @@ import notify
 
 _dispatched = []
 notify.dispatch_run_report = lambda cfg, report: (_dispatched.append(report), (True, "stub"))[1]
-notify.dispatch_error = lambda cfg, msg: (True, "stub")
+_errors = []
+notify.dispatch_error = lambda cfg, msg="", **kw: (_errors.append((msg, kw)), (True, "stub"))[1]
 A._read_run_report = lambda: {"mode": "simulate", "eligible_count": 1}
 A.pending_delete_forecast = lambda cfg=None: {"event_on": None, "ripe": 0}
 A._marked_queue_state = lambda cfg: ("sig", {})
@@ -343,6 +344,55 @@ check("Armed manual cleanup: sent regardless of the toggle",
       dispatch("headroom", "headroom", monitor_toggle=False, scheduled=False) == 1)
 check("Debug Cleanup is silent (watched live, like a manual Simulate)",
       dispatch("headroom", "debug_cleanup", monitor_toggle=True, scheduled=False) == 0)
+
+# ── A failed run alerts with the engine's own words ─────────────────────────
+# The alert used to read "a MediaReducer run failed — check the detailed log",
+# which is the trip it should be saving. The engine's last progress write says
+# what stopped answering and which stage it died in; this is where the app picks
+# that up. A run that FAILED never has a report, so this alert is the only thing
+# it can send — which is why the Errors toggle turning it off means silence.
+import json as _json
+_errors.clear()
+A.load_config = lambda: dict(BASE, RUN_MODE="headroom", NOTIFY_ENABLED=True,
+                             NOTIFY_ON_ERROR=True, NOTIFY_CUSTOM_URLS=["json://x"])
+(A.output_dir() / "progress.json").write_text(_json.dumps({
+    "status": "error", "stage": "SCORING",
+    "message": "Tautulli stopped answering while reading movie details.",
+    "issues": [{"category": "identity_mismatch", "count": 2, "detail": "Bob (2020)"}]}))
+A._dispatch_run_notifications("headroom", 1, False, scheduled=False)
+time.sleep(0.3)
+check("a failed run alerts once", len(_errors) == 1)
+check("...carrying the engine's sentence, not a generic line",
+      bool(_errors) and _errors[0][0].startswith("Tautulli stopped answering"))
+check("...and the stage it died in",
+      bool(_errors) and _errors[0][1].get("stage") == "SCORING")
+check("...and whatever it had recorded before dying",
+      bool(_errors) and len(_errors[0][1].get("issues") or []) == 1)
+
+# A torn or stale progress file must not put the wrong sentence in an alert —
+# it falls back to the same words the dashboard shows for the same state.
+_errors.clear()
+(A.output_dir() / "progress.json").write_text("{not json")
+A._dispatch_run_notifications("headroom", 1, False, scheduled=False)
+time.sleep(0.3)
+check("an unreadable progress file alerts with the shared fallback, not a borrowed line",
+      len(_errors) == 1 and _errors[0][0] == A.RUN_ENDED_UNEXPECTEDLY)
+
+# ── A killed run does not name the step it was on as the failure ────────────
+# No terminal write, so progress.json still says "running" with whatever line
+# was in flight. The panel now prints that message AS the failure — red, behind
+# a × — so carrying it over would blame "Checking connections…" for the death.
+A._run_active = False
+(A.output_dir() / "progress.json").write_text(json.dumps({
+    "schema": 1, "status": "running", "phase": "checking",
+    "message": "Checking connections…"}))
+with A.app.test_client() as _c:
+    _prog = _c.get("/api/run/progress").get_json()
+_pmsg = _prog.get("message") or ""
+check("a run that died without reporting reads as failed", _prog.get("status") == "error")
+check("...and does not blame the step it happened to be on",
+      "Checking connections" not in _pmsg)
+check("...saying instead that it ended without saying why", "ended unexpectedly" in _pmsg)
 
 
 # ── Onboarding mode lifecycle (applied on every config save) ─────────────────

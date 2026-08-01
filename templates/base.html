@@ -356,23 +356,35 @@
       /* Keep the mark's visible edge on the underline's edge here too. */
       .header-brand { padding-left: 5px; }
     }
-    @keyframes pr-config-tab-pulse {
-      0%, 100% {
-        color: var(--text-danger);
-        background: color-mix(in srgb, var(--bg-danger) 42%, transparent);
-        box-shadow: 0 0 0 0 color-mix(in srgb, var(--text-danger) 24%, transparent);
-      }
-      50% {
-        color: var(--text-danger);
-        background: color-mix(in srgb, var(--bg-danger) 64%, transparent);
-        box-shadow: 0 0 0 6px color-mix(in srgb, var(--text-danger) 0%, transparent);
-      }
-    }
+    /* A broken connection is a standing fact, so it reads as one: a steady red
+       tab with a dot. Motion in this theme belongs to things that are actually
+       happening — the run badge while a run is live, the progress stripes, this
+       tab's own click ripple — and a 1.5s loop in the header put a state that
+       wasn't changing in that company, on every page, until it was fixed. */
     .header-tabs a.config-needs-onboarding {
       color: var(--text-danger);
       border-bottom-color: var(--text-danger);
       border-radius: 9px 9px 0 0;
-      animation: pr-config-tab-pulse var(--pr-pulse-period) ease-in-out infinite;
+      background: color-mix(in srgb, var(--bg-danger) 55%, transparent);
+    }
+    /* The dot sits in the tab's existing padding so the tab keeps its width:
+       the sliding underline measures offsetWidth, and it would jump when the
+       state flipped mid-poll. ::after belongs to the click ripple. */
+    .header-tabs a.config-needs-onboarding::before {
+      content: "";
+      position: absolute;
+      top: 7px;
+      right: 5px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    /* Small phones cut the tab padding to 9px, which is not enough room beside
+       "Configuration" — the dot landed on the final n. Lift it clear of the cap
+       height instead of widening the tab, which has to fit three tabs at 320. */
+    @media (max-width: 400px) {
+      .header-tabs a.config-needs-onboarding::before { top: 3px; right: 2px; }
     }
     .header-tabs a.config-needs-onboarding:hover {
       color: var(--text-danger);
