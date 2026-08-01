@@ -39,6 +39,7 @@ log path named in the failure line is actually there to read.
 | `test_time_zone` | `TIME_ZONE` drives the daily run, delay aging, and log timestamps; `auto` means the container clock |
 | `test_config_cache` | `load_config()`'s memo is invisible: isolated copies, writes invalidate, file issues still surface |
 | `test_mode_roundtrip` | Scheduler mode through the real save handler. The flag derivation, forced-off cascade and auto-enable are decided in one request, so a regression in their ORDER only shows up here |
+| `test_service_port` | The listening port: 7474 by default, `MEDIAREDUCER_PORT` when set, refused rather than ignored when it is not a usable port. The CLI default and the Docker healthcheck follow the same variable |
 | `test_appdata_mounts` | What the `/tautulli` and `/radarr` mounts contribute. Ports are never read from appdata; a mounted config with no key in it is not "verified" |
 
 **Deletion safety**

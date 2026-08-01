@@ -149,8 +149,8 @@ if you run a service on a non-standard port, enter its URL yourself.
 You don't have to use Docker. MediaReducer is just `app.py` (the web UI) and
 `engine.py` (the worker); run `python3 app.py` and it serves on port 7474 (the
 same port the Docker image publishes, so the URL is identical either way). The
-four paths it expects default to the container mounts above, but each can point
-anywhere via an environment variable:
+paths it expects default to the container mounts above, and the port to 7474,
+but each can point anywhere via an environment variable:
 
 | Variable | Default | Points at |
 | --- | --- | --- |
@@ -158,6 +158,7 @@ anywhere via an environment variable:
 | `MEDIAREDUCER_CONFIG` | `/config/config.json` | Where config and state are written. |
 | `MEDIAREDUCER_TAUTULLI_APPDATA` | `/tautulli` | Tautulli's config folder — Auto Detect only. |
 | `MEDIAREDUCER_RADARR_APPDATA` | `/radarr` | Radarr's config folder — Auto Detect only. |
+| `MEDIAREDUCER_PORT` | `7474` | Port to listen on, if 7474 is already taken. |
 
 For example, point it at a library on a NAS:
 

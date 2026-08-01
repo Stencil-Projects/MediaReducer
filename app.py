@@ -8709,6 +8709,32 @@ _kick_startup_health_check_and_summary(load_config())
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+SERVICE_PORT_DEFAULT = 7474
+
+
+def service_port() -> int:
+    """The port to listen on: MEDIAREDUCER_PORT, else 7474.
+
+    Under Docker the host side is remapped instead (-p 8080:7474) and this stays
+    at the default; it exists for running outside a container, where 7474 may
+    already be taken and there is nothing else to move.
+
+    A bad value stops startup rather than falling back. Quietly listening on
+    7474 after being asked for 9000 is the kind of thing you debug from the
+    other end, wondering why nothing answers.
+    """
+    raw = str(os.environ.get("MEDIAREDUCER_PORT") or "").strip()
+    if not raw:
+        return SERVICE_PORT_DEFAULT
+    try:
+        port = int(raw)
+    except ValueError:
+        raise SystemExit(f"MEDIAREDUCER_PORT must be a number (got {raw!r}).")
+    if not 1 <= port <= 65535:
+        raise SystemExit(f"MEDIAREDUCER_PORT must be between 1 and 65535 (got {port}).")
+    return port
+
+
 if __name__ == "__main__":
     # Initialize config on first boot
     if not CONFIG_PATH.exists():
@@ -8726,4 +8752,7 @@ if __name__ == "__main__":
         except (ValueError, OSError):
             pass
 
-    app.run(host="0.0.0.0", port=7474, debug=False, threaded=True)
+    _port = service_port()
+    if _port != SERVICE_PORT_DEFAULT:
+        print(f"Listening on port {_port} (MEDIAREDUCER_PORT).", flush=True)
+    app.run(host="0.0.0.0", port=_port, debug=False, threaded=True)

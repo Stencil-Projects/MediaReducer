@@ -31,7 +31,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-DEFAULT_URL = os.environ.get("MEDIAREDUCER_URL", "http://127.0.0.1:7474")
+# Follows MEDIAREDUCER_PORT so the CLI still finds a service that was moved
+# off 7474; MEDIAREDUCER_URL still wins, and --url wins over both.
+DEFAULT_URL = os.environ.get("MEDIAREDUCER_URL") or \
+    f"http://127.0.0.1:{os.environ.get('MEDIAREDUCER_PORT', '7474').strip() or '7474'}"
 GB = 1_000_000_000
 
 # Runtime-only / env-derived keys the server fills in on load. Never write them

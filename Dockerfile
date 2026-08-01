@@ -25,9 +25,12 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 7474
 
 # The UI polls /api/status constantly, so it doubles as the health probe.
-# Pure-Python probe — the slim image ships no curl/wget.
+# Pure-Python probe — the slim image ships no curl/wget. It reads the port from
+# the environment for the same reason the app does: remapping the HOST port is
+# the normal way to move this, but someone who sets MEDIAREDUCER_PORT inside the
+# container would otherwise get a container that works and reports unhealthy.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-  CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7474/api/status', timeout=8)"]
+  CMD ["python3", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/status' % (os.environ.get('MEDIAREDUCER_PORT') or '7474').strip(), timeout=8)"]
 
 # Optional PUID/PGID user mapping (see entrypoint.py); root without them.
 ENTRYPOINT ["python3", "entrypoint.py"]
