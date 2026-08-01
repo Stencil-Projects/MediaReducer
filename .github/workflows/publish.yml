@@ -134,8 +134,19 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             # The dashboard renders APP_VERSION, so this proves the image really
             # is the code being tagged, not a stale layer from the build cache.
-            curl -fsS http://127.0.0.1:7474/ | grep -qF "$VERSION" \
-              || { echo "the running app does not report version $VERSION"; exit 1; }
+            #
+            # Fetched to a file rather than piped into grep. `curl | grep -q`
+            # fails when it SUCCEEDS: grep exits at the first match, curl then
+            # writes into a closed pipe and dies with error 23, and pipefail
+            # reports the pipeline as failed. That reads as "version not found"
+            # when the version was found, which is exactly how it failed here.
+            curl -fsS -o /tmp/smoke-page.html http://127.0.0.1:7474/
+            if ! grep -qF "$VERSION" /tmp/smoke-page.html; then
+              echo "the running app does not report version $VERSION."
+              echo "versions the page does mention:"
+              grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' /tmp/smoke-page.html | sort -u | sed 's/^/  /'
+              exit 1
+            fi
             echo "the running image reports $VERSION"
           fi
           docker rm -f mr-smoke >/dev/null
