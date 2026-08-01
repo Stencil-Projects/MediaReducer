@@ -1,0 +1,163 @@
+name: Publish image
+
+# Push a version tag to publish. Nothing else publishes: no branch push, no
+# schedule, so an image only ever appears because someone tagged a release.
+#
+#   git tag v1.0.0-alpha.1 && git push origin v1.0.0-alpha.1
+#
+# workflow_dispatch runs the whole pipeline WITHOUT pushing, which is how to
+# check a Dockerfile change before committing to a tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # A tag can land on any commit, so the suite runs against the one being
+  # released rather than trusting whatever passed on a branch earlier. This app
+  # deletes files; an untested image is not worth the four minutes saved.
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  publish:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the image name and tags
+        # GHCR rejects uppercase, and this repo has capitals in its name, so the
+        # owner/repo has to be lowercased rather than used as-is.
+        #
+        # A prerelease never becomes :latest. It gets its channel pointer
+        # (:alpha, :beta, :rc) so an installer can follow the channel, while
+        # :latest keeps meaning "the newest stable" even when no stable exists
+        # yet. That is why the Unraid template tracks :alpha for now.
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dispatch-${GITHUB_SHA::7}"
+          fi
+          IMAGE="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          TAGS="$IMAGE:$VERSION"
+          case "$VERSION" in
+            dispatch-*) : ;;
+            *-alpha*)   TAGS="$TAGS $IMAGE:alpha" ;;
+            *-beta*)    TAGS="$TAGS $IMAGE:beta" ;;
+            *-rc*)      TAGS="$TAGS $IMAGE:rc" ;;
+            *-*)        : ;;
+            *)          TAGS="$TAGS $IMAGE:${VERSION%.*} $IMAGE:${VERSION%%.*} $IMAGE:latest" ;;
+          esac
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE=$IMAGE"     >> "$GITHUB_ENV"
+          echo "TAGS=$TAGS"       >> "$GITHUB_ENV"
+          echo "Will publish:"; for t in $TAGS; do echo "  $t"; done
+
+      - name: Refuse a tag that disagrees with APP_VERSION
+        # The version in the welcome guide and the debug report is what a bug
+        # report quotes. If the tag and APP_VERSION drift, every report from this
+        # build names a version that was never released, and nothing downstream
+        # would ever notice.
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          APPVER="$(grep -m1 '^APP_VERSION' app.py | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ "$VERSION" != "$APPVER" ]; then
+            echo "Tag $GITHUB_REF_NAME means version $VERSION, but app.py says $APPVER."
+            echo "Bump APP_VERSION in app.py, or tag the version that is actually in the code."
+            exit 1
+          fi
+          echo "tag and APP_VERSION agree on $APPVER"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the image
+        # Loaded into the local daemon rather than pushed, so the smoke test below
+        # runs against the EXACT image that would be published. Building straight
+        # to the registry would mean testing something already public.
+        # linux/amd64 only: Unraid is x86, and adding arm64 here means emulated
+        # builds for a platform nothing is asking for yet.
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMAGE }}:ci-smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the built image
+        # Boots it exactly as a user would and asks the running app what version
+        # it is. Catches a build that starts and then dies, a missing template or
+        # static asset, and an image built from the wrong commit; a plain
+        # "docker run" with no check would catch none of those.
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/smoke-config /tmp/smoke-library
+          docker run -d --name mr-smoke -p 7474:7474 \
+            -v /tmp/smoke-library:/library -v /tmp/smoke-config:/config \
+            "$IMAGE:ci-smoke"
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:7474/api/status >/dev/null 2>&1; then break; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' mr-smoke)" != "true" ]; then
+              echo "the container exited during boot:"; docker logs mr-smoke; exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:7474/api/status >/dev/null \
+            || { echo "never became healthy:"; docker logs mr-smoke; exit 1; }
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # The dashboard renders APP_VERSION, so this proves the image really
+            # is the code being tagged, not a stale layer from the build cache.
+            curl -fsS http://127.0.0.1:7474/ | grep -qF "$VERSION" \
+              || { echo "the running app does not report version $VERSION"; exit 1; }
+            echo "the running image reports $VERSION"
+          fi
+          docker rm -f mr-smoke >/dev/null
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push every tag
+        # Retagging the already-tested image, so what is published is byte for
+        # byte what passed the smoke test.
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          for t in $TAGS; do
+            docker tag "$IMAGE:ci-smoke" "$t"
+            docker push "$t"
+          done
+
+      - name: Say what happened
+        run: |
+          {
+            echo "### MediaReducer image"
+            if [ "${{ github.event_name }}" = "push" ]; then
+              echo "Published from \`$GITHUB_REF_NAME\`:"
+              for t in $TAGS; do echo "- \`$t\`"; done
+              echo ""
+              echo "The package is private until you make it public once, under"
+              echo "the repository's Packages settings."
+            else
+              echo "Built and smoke-tested \`$VERSION\`. Nothing was pushed:"
+              echo "workflow_dispatch is the dry run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

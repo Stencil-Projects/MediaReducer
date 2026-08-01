@@ -15,8 +15,8 @@
      subsets stay behind their unicode-range rules. #}
   {# The brand mark as a tab icon. SVG first for anything that takes it; the
      .ico carries the small raster sizes for everything else, including the
-     bare /favicon.ico browsers fetch on their own. Both come from
-     tools/make_favicon.py. #}
+     bare /favicon.ico browsers fetch on their own. Both are generated, so
+     edit the icon constants rather than these files. #}
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">

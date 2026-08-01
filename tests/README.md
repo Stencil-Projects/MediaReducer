@@ -13,6 +13,19 @@ and node. `--e2e` adds the chromium tests, the only ones needing playwright.
 Each test is a standalone script that prints `PASS`/`FAIL` lines and exits
 non-zero on failure. There is no framework: read one before writing one.
 
+Tests keep their state out of `/config`. Every path both processes write hangs
+off `OUTPUT_DIR`, whose default IS `/config`, so a test that leaves it at the
+default writes into the deployment data directory on a real host. `_tmpout.py`
+gives a test its own: `config()` before importing app, `redirect_engine()` after
+importing engine, which repoints the path constants engine fixes at import.
+`run_tests.sh` fails the run if the unit tier leaves state there.
+
+GitHub Actions runs the `--e2e` tier on every push and pull request
+(`.github/workflows/tests.yml`). It needs no secrets, since the media servers
+are mocks the harness starts itself. When something fails, the harness keeps its
+temp directory and the workflow uploads it as the `test-logs` artifact, so the
+log path named in the failure line is actually there to read.
+
 ## Unit (`tests/unit/`)
 
 **Config and validation**
@@ -137,6 +150,7 @@ dead port so an accidental network fetch fails loudly.
 | `smoke_all` | All three pages load with no JS errors or stray `NaN`, plus the cross-page invariants: each engine phase lights its own stepper step, a theme flip never shows two palettes at once, the sticky header and title bar meet with no gap, no page scrolls sideways at phone widths, run issues share one left edge, and a big log opens without hanging (off-screen lines skipped, the tail still landing at the true bottom, and the whole log still copying) |
 | `e2e_runlock` | Every Configuration section locks and unlocks with run state, and the sweep leaves each control exactly as it found it. Force stop is the only live control during a run |
 | `e2e_status_pills` | The header badge, run pill and Last Run pill each wear their button's color, compared as numbers in both themes. Also the words: a Cleanup says "Cleaning", a clicked Simulate says so, and a page loaded mid-run opens on the right badge instead of blinking |
+| `e2e_server_toggle` | Which Server software selections leave Movie Library Paths and Space Thresholds editable. A server the saved config had off is unknown rather than broken, so ticking one back on does not lock both sections; a server the save did select is still held to its health, and a fresh install cannot unlock by ticking a box it has never connected to |
 | `e2e_thresholds` | Space Thresholds states the figure each trigger needs and fills toward it, draws the shared disk bar, keeps working with nothing armed, and never quotes a value the save would discard |
 | `e2e_confirm_modal` | The dialog in front of both destructive actions. Only an explicit answer acts, every exit is driven, and a Cleanup blocked while the dialog sat open does not run on the answer |
 | `e2e_prune_confirm` | The save-time "this will prune" warning, including which schedule each threshold actually names |

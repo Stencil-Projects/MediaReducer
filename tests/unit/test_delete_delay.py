@@ -19,7 +19,10 @@ import app as A
 
 _real_load_config = A.load_config  # capture before the fake replaces it
 
-_state = {"cfg": {}}
+# Seeded with OUTPUT_DIR, not left empty: output_dir() reads this dict, and
+# anything resolving it before the test populates BASE (a scheduler tick, app
+# startup work) would otherwise land in /config, the real data directory.
+_state = {"cfg": {"OUTPUT_DIR": _OUT_DIR}}
 
 def fake_load_config():
     return dict(_state["cfg"])

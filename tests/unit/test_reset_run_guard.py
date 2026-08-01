@@ -6,14 +6,22 @@
      while holding _run_lock, so a run / summary / reconcile can't start between the
      'is a run active?' check and the unlink and then write into the just-deleted
      store (its engine subprocess would hit a table-less DB)."""
+import atexit
+import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 _CFG_DIR = tempfile.mkdtemp(prefix="mr-reset-guard.")
+atexit.register(shutil.rmtree, _CFG_DIR, True)
 os.environ["MEDIAREDUCER_CONFIG"] = str(Path(_CFG_DIR) / "config.json")
+# The config must EXIST and carry OUTPUT_DIR. Without it output_dir() falls back
+# to /config, and this test creates a store there and then wipes it: unwritable
+# on CI, and on a real host that is the live data directory.
+json.dump({"OUTPUT_DIR": _CFG_DIR}, open(os.environ["MEDIAREDUCER_CONFIG"], "w"))
 import app as A
 import db
 

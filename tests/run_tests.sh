@@ -46,9 +46,31 @@ run() {
 export MEDIAREDUCER_CONFIG="$TMP/unit-config/config.json"
 mkdir -p "$TMP/unit-config"
 printf '{"OUTPUT_DIR": "%s"}\n' "$TMP/unit-config" > "$MEDIAREDUCER_CONFIG"
+# A test that points MEDIAREDUCER_CONFIG at its own file must put OUTPUT_DIR in
+# it. Miss that and output_dir() falls back to /config, which is the real data
+# directory on a deployed host: one test creates a store there and wipes it, so
+# a suite run as root could delete a user's library snapshot and deletion
+# history. On CI it just fails, unwritably. Noticing after the fact is the whole
+# point of this check.
+CONFIG_DIR_EXISTED=0; [[ -e /config ]] && CONFIG_DIR_EXISTED=1
 for t in tests/unit/test_*.py; do
   run "$(basename "$t" .py)" python3 "$t"
 done
+if [[ $CONFIG_DIR_EXISTED -eq 0 && -e /config ]]; then
+  # An empty directory is fine. The writability probe mkdirs whatever path it is
+  # checking and cleans up after itself, and a couple of tests reach it with the
+  # default still in place (/api/config/reset rewrites config.json to the
+  # shipped defaults, which is exactly a config with no OUTPUT_DIR in it).
+  # STATE is the thing to care about: a store, a log, a deletion history.
+  leaked="$(ls -A /config | grep -v '^\.mediareducer-rw-check\.' || true)"
+  if [[ -n "$leaked" ]]; then
+    echo "FAIL unit tests wrote state into /config, the deployment data directory"
+    echo "     A test resolved OUTPUT_DIR to the default. On a deployed host that"
+    echo "     is the user's real data; one test wipes the store it finds there."
+    echo "$leaked" | head -10 | sed 's/^/       /'
+    fail=$((fail+1)); failed_names+=("hermetic_output_dir")
+  fi
+fi
 
 # ── Scoring parity: engine vs the Score Explorer's JS mirror ──
 run parity_gen python3 tests/parity/gen_py_scores.py "$TMP/parity"
@@ -142,6 +164,7 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_prune_confirm node tests/e2e/e2e_prune_confirm.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_thresholds  node tests/e2e/e2e_thresholds.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_status_pills node tests/e2e/e2e_status_pills.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_server_toggle node tests/e2e/e2e_server_toggle.mjs
 
       # A Debug-mode dashboard (its own app + isolated OUTPUT_DIR): the Cleanup
       # button morphs to Debug Cleanup, which must stay enabled through status

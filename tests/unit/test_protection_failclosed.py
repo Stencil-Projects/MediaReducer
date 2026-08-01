@@ -4,7 +4,12 @@ abort deleting runs (fail closed), warn-and-continue in the quiet summary
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import engine
+import _tmpout
+# engine fixes its path constants at import from the /config default,
+# so without this the test writes into the real data directory.
+_tmpout.redirect_engine(engine)
 
 engine.PROTECTED_COLLECTIONS = ["Keep Forever"]
 engine.PLEX_URL = "http://x"

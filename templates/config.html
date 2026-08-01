@@ -1482,12 +1482,31 @@ function _filesystemReady() {
 function _filesystemBlockingText() {
   return 'Fix the /config read/write problem first.';
 }
+// Whether the media servers are in good enough shape to edit Movie Library
+// Paths and Space Thresholds. It reads the LIVE checkboxes against the SAVED
+// health, which needs care: health is only probed for the servers the saved
+// config had selected, so a deselected server's flag reads false because
+// nothing asked, not because it failed. Ticking one back on used to be
+// indistinguishable from it being down, which locked both sections behind
+// "Connect or uncheck the selected media server first" — advice that couldn't
+// help, since Check for Errors only adopts a probe when the form still matches
+// what was saved. A newly ticked server is therefore treated as unknown until a
+// save probes it, while a server the SAVED config selected is still held to its
+// health. Nothing is loosened: the save re-probes, and /api/run re-probes again
+// before anything can delete.
 function _selectedMediaApisReady() {
   const usePlex = !!document.getElementById('USE_PLEX')?.checked;
   const useJf = !!document.getElementById('USE_JELLYFIN')?.checked;
   if (!usePlex && !useJf) return false;
-  return (!usePlex || !!_savedConfigHealth?.tautulli_connected)
-    && (!useJf || !!_savedConfigHealth?.jellyfin_connected)
+  const plexProbed = !!_savedConfig?.USE_PLEX;
+  const jfProbed = !!_savedConfig?.USE_JELLYFIN;
+  const plexOk = !usePlex || !plexProbed || !!_savedConfigHealth?.tautulli_connected;
+  const jfOk = !useJf || !jfProbed || !!_savedConfigHealth?.jellyfin_connected;
+  // At least one selected server has to be PROVEN good, or a fresh install
+  // would unlock both sections just by ticking a box it has never connected to.
+  const anyProven = (usePlex && plexProbed && !!_savedConfigHealth?.tautulli_connected)
+    || (useJf && jfProbed && !!_savedConfigHealth?.jellyfin_connected);
+  return plexOk && jfOk && anyProven
     && _mediaPathsCompatible()
     && _filesystemReady();
 }

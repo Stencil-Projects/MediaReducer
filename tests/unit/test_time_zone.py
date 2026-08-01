@@ -20,7 +20,10 @@ _OUT_DIR = tempfile.mkdtemp(prefix="mr-test-out.")
 atexit.register(shutil.rmtree, _OUT_DIR, True)
 import app as A
 
-_state = {"cfg": {}}
+# Seeded with OUTPUT_DIR, not left empty: output_dir() reads this dict, and
+# anything resolving it before the test populates BASE (a scheduler tick, app
+# startup work) would otherwise land in /config, the real data directory.
+_state = {"cfg": {"OUTPUT_DIR": _OUT_DIR}}
 
 def fake_load_config():
     return dict(_state["cfg"])

@@ -119,8 +119,8 @@ declared category nothing raises.
   the byte formatter (it cannot import `app`), pinned against it by
   `test_size_format` after the two drifted to different units.
 - **`static/`** — the favicon set: an SVG, a multi-size `.ico` and the iOS touch
-  icon, all three regenerated from one set of constants by `tools/make_favicon.py`
-  so the vector and the rasters cannot drift. `/favicon.ico` has its own route
+  icon, all three generated from one set of constants so the vector and the
+  rasters cannot drift. `/favicon.ico` has its own route
   because browsers request it at the site root before any markup is parsed.
 - **`static/vendor/`** — Bootstrap and the Inter webfont. Served from the
   container, never a CDN: both are render-blocking, and this app is normally

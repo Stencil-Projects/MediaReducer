@@ -7,8 +7,13 @@ import sys
 import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("MEDIAREDUCER_CONFIG", tempfile.mktemp())
 import engine as E
+import _tmpout
+# engine fixes its path constants at import from the /config default,
+# so without this the test writes into the real data directory.
+_tmpout.redirect_engine(E)
 
 ok = True
 def check(name, cond):

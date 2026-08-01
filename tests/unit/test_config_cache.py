@@ -22,6 +22,8 @@ with tempfile.TemporaryDirectory() as td:
     cfg_path.write_text(json.dumps({
         "RUN_MODE": "paused", "HEADROOM_GB": 500, "MONITOR_DIRS": ["/library/movies"],
         "PROTECTED_COLLECTIONS": ["Keep"], "USE_PLEX": False, "USE_JELLYFIN": False,
+        # Without this, output_dir() is /config while CONFIG_PATH is swapped.
+        "OUTPUT_DIR": td,
     }))
     _orig = A.CONFIG_PATH
     A.CONFIG_PATH = cfg_path

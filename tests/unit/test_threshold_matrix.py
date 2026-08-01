@@ -15,6 +15,7 @@ import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atexit
 import shutil
 import tempfile
@@ -31,8 +32,14 @@ atexit.register(shutil.rmtree, _LIB_DIR, True)
 os.environ["MEDIAREDUCER_LIBRARY"] = _LIB_DIR
 import app as A
 import engine
+import _tmpout
+# engine fixes its path constants at import from the /config default.
+_tmpout.redirect_engine(engine, _OUT_DIR)
 
-_state = {"cfg": {}}
+# Seeded with OUTPUT_DIR, not left empty: output_dir() reads this dict, and
+# anything resolving it before the test populates BASE (a scheduler tick, app
+# startup work) would otherwise land in /config, the real data directory.
+_state = {"cfg": {"OUTPUT_DIR": _OUT_DIR}}
 def fake_load_config():
     return dict(_state["cfg"])
 def fake_save_config(cfg, **k):

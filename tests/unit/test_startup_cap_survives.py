@@ -15,6 +15,9 @@ _OUT = tempfile.mkdtemp(prefix="mr-cap-survive.")
 atexit.register(shutil.rmtree, _OUT, True)
 os.environ["MEDIAREDUCER_CONFIG"] = str(Path(_OUT) / "config.json")
 os.environ.setdefault("MEDIAREDUCER_LIBRARY", _OUT)
+# Written BEFORE the import: app does startup work as it loads, and without
+# OUTPUT_DIR here that work builds a store in /config, the real data directory.
+Path(_OUT, "config.json").write_text(json.dumps({"OUTPUT_DIR": _OUT}))
 import app as A
 
 ok = True

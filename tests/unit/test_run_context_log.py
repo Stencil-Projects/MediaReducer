@@ -12,8 +12,10 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("MEDIAREDUCER_CONFIG", tempfile.mktemp())
 import engine as E
+import _tmpout
 
 ok = True
 def check(name, cond):
@@ -22,8 +24,9 @@ def check(name, cond):
     ok = ok and cond
 
 _OUT = Path(tempfile.mkdtemp(prefix="mr-runctx."))
-E.OUTPUT_DIR = _OUT
-E.LOGFILE = _OUT / "lastrun.log"
+# All of engine's paths, not just OUTPUT_DIR and LOGFILE: setting those two left
+# PROGRESS_FILE at /config/progress.json, and log_run_context emits progress.
+_tmpout.redirect_engine(E, _OUT)
 
 def render(**ctx):
     """Run log_run_context in isolation and return its log text."""

@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+# Tool caches. Each writes a .gitignore inside itself covering the same ground,
+# but only once that tool has run; naming them here doesn't depend on that.
+.pytest_cache/
+.ruff_cache/
 # The install flow copies .env.example to .env in the clone — it holds the
 # user's local paths and must never be committed.
 .env
@@ -7,3 +11,23 @@ node_modules/
 # Transient artifacts from `npm i playwright` during browser tests
 package.json
 package-lock.json
+# Per-machine editor/agent permissions, not project configuration. A shared
+# .claude/settings.json would still be committable.
+.claude/settings.local.json
+
+# Runtime state, for anyone who runs the app with OUTPUT_DIR pointing at their
+# clone (handy while developing, and the reason these matter): config.json holds
+# live API keys and webhook URLs, deleted.log and the store hold real movie
+# titles and paths. Untracked is not enough; one `git add -A` publishes the lot.
+# Anchored to the root so nothing under tests/ is caught by the same names.
+# default_config.json is the shipped template and is deliberately not listed.
+/config.json
+/mediareducer.db
+/mediareducer.db-wal
+/mediareducer.db-shm
+/progress.json
+/last_run_report.json
+/lastrun.log
+/deleted.log
+/title.ratings.tsv
+/logs/

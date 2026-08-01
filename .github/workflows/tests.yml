@@ -1,0 +1,114 @@
+name: Tests
+
+# The suite needs no network, no secrets and no services: the media servers are
+# mock HTTP servers the harness starts itself.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  # So a release can gate on it: publish.yml runs this first and only builds an
+  # image if it passes on that exact commit.
+  workflow_call:
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      # 3.11 matches the Dockerfile, so CI runs the interpreter the image ships.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Node runs the scoring-parity check and every browser test.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Python dependencies
+        # pyflakes is not a runtime dependency. test_no_undefined_names skips
+        # itself without it, so install it here or that test quietly does nothing.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyflakes
+
+      - name: Install Playwright
+        # Pinned like requirements.txt: a browser-automation library that moves
+        # under CI turns an unrelated change into a red build. Bump deliberately.
+        # package.json/package-lock.json are gitignored, so this is a fresh
+        # install every run rather than a restored lockfile.
+        run: |
+          npm install --no-save playwright@1.61.1
+          npx playwright install --with-deps chromium
+
+      - name: Point the tests at the browser that was just installed
+        # Belt and braces. Playwright picks chrome-headless-shell by default,
+        # which is a separate download from chromium itself; naming the
+        # executable outright means the tests cannot launch the wrong build or
+        # a stale revision left in the runner image. Asserted, so a failed
+        # install fails HERE with a clear message instead of as twelve
+        # mysterious browser-test failures.
+        run: |
+          PW_CHROMIUM="$(node -e "console.log(require('playwright').chromium.executablePath())")"
+          if [ ! -x "$PW_CHROMIUM" ]; then
+            echo "Playwright reported $PW_CHROMIUM but nothing executable is there."
+            exit 1
+          fi
+          echo "PW_CHROMIUM=$PW_CHROMIUM" >> "$GITHUB_ENV"
+
+      - name: Run the suite
+        # --e2e is the widest tier: unit + scoring parity + the full run pipeline
+        # over real HTTP under every server profile + the browser page tests.
+        run: |
+          set -o pipefail
+          ./tests/run_tests.sh --e2e 2>&1 | tee suite.log
+
+      - name: Fail if the browser tests were skipped
+        # run_tests.sh skips the browser tier and still exits 0 when Playwright
+        # is missing, which is right for a contributor's laptop and wrong here:
+        # a green build that silently tested no UI is worse than a red one.
+        run: |
+          if grep -q 'SKIP browser tests' suite.log; then
+            echo "The browser tier did not run, so this build proves nothing about the UI."
+            exit 1
+          fi
+
+      - name: Collect the logs from a failed run
+        # The harness preserves its temp dir whenever something failed, and the
+        # failure line names a log inside it. Gather everything into the
+        # workspace first: upload-artifact derives the archive layout from the
+        # common root of its paths, and mixing a workspace file with an absolute
+        # /tmp one gives a confusing tree.
+        if: failure()
+        run: |
+          mkdir -p ci-logs
+          cp suite.log ci-logs/ 2>/dev/null || true
+          for d in /tmp/mediareducer-tests.*; do
+            [ -d "$d" ] && cp -r "$d" "ci-logs/$(basename "$d")"
+          done
+          # The fixture libraries are sparse files and the archived stores add
+          # nothing to a failure diagnosis; the .log files are the point.
+          find ci-logs -type f ! -name '*.log' ! -name '*.json' -delete
+          ls -R ci-logs | head -40
+
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-logs
+          path: ci-logs
+          retention-days: 7
+          if-no-files-found: ignore

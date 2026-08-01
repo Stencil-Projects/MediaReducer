@@ -2,7 +2,9 @@
 checkbox unticked — with a Redline floor): validation rules,
 the always-on Simulate/plan gate, the standing preview queue that never
 auto-clears, and its "deletes when Redline hits" display."""
+import atexit
 import json
+import shutil
 import sys
 import tempfile
 import time
@@ -10,10 +12,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _dbstate
+# Its own directory per run. A fixed /tmp name is shared with every other run on
+# the machine, so one suite executed under sudo leaves it root-owned and every
+# later run by a normal user reads a config it cannot write, which surfaces as
+# unrelated button-state failures.
+_OUT = tempfile.mkdtemp(prefix="mr-redline-only.")
+atexit.register(shutil.rmtree, _OUT, True)
 import app as A
 import engine
+import _tmpout
+# engine fixes its path constants at import from the /config default.
+_tmpout.redirect_engine(engine, _OUT)
 
-_state = {"cfg": {}}
+# Seeded with OUTPUT_DIR, not left empty: output_dir() reads this dict, and
+# anything resolving it before the test populates BASE (a scheduler tick, app
+# startup work) would otherwise land in /config, the real data directory.
+_state = {"cfg": {"OUTPUT_DIR": _OUT}}
 
 def fake_load_config():
     return dict(_state["cfg"])
@@ -94,7 +108,7 @@ _state["cfg"] = {"RUN_MODE": "paused", "HEADROOM_GB": 1000, "REDLINE_GB": None,
                  "MAX_LIBRARY_GB": None, "MAX_HEADROOM_PCT": 15, "MONITOR_DIRS": [],
                  "USE_PLEX": True, "USE_JELLYFIN": False,
                  "IMDB_RATINGS_URL": "https://example.test/r.tsv.gz",
-                 "OUTPUT_DIR": "/tmp/mr-rl-out"}
+                 "OUTPUT_DIR": _OUT}
 r = client.post("/api/config", json={
     "RUN_MODE": "paused", "HEADROOM_GB": 0, "REDLINE_GB": None,
     "MAX_LIBRARY_GB": None, "MAX_HEADROOM_PCT": 15, "MONITOR_DIRS": [],
@@ -110,7 +124,7 @@ check("onboarding save with no dirs accepts the 0/null spelling", r.status_code 
 BASE = {"RUN_MODE": "paused", "MAX_HEADROOM_PCT": 60, "MONITOR_DIRS": ["/library/movies"],
         "USE_PLEX": False, "USE_JELLYFIN": False,
         "TAUTULLI_URL": "http://tautulli.test", "TAUTULLI_API_KEY": "test-key",
-        "IMDB_RATINGS_URL": "https://example.test/r.tsv.gz", "OUTPUT_DIR": "/tmp/mr-rl-out"}
+        "IMDB_RATINGS_URL": "https://example.test/r.tsv.gz", "OUTPUT_DIR": _OUT}
 _disk = {"total_gb": 1000, "used_gb": 500, "free_gb": 500, "pct_used": 50}
 
 _orig_limits = A._deletion_limits_exceeded

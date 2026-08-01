@@ -1,10 +1,14 @@
 """A cleanup tick whose Space Thresholds are no longer safe (e.g. the library
 grew past the cap's safety floor) pauses Automatic Cleanup with a reason instead of
 silently skipping ticks forever."""
+import atexit
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+_OUT_DIR = tempfile.mkdtemp(prefix="mr-test-out.")
+atexit.register(shutil.rmtree, _OUT_DIR, True)
 import app as A
 
 # Isolate the store: the stubbed configs below carry no OUTPUT_DIR, and a couple
@@ -12,7 +16,10 @@ import app as A
 A.output_dir = lambda: Path(tempfile.mkdtemp(prefix="mr-autopause."))
 
 calls = {"clock": 0, "run": 0, "summary": 0}
-_state = {"cfg": {}}
+# Seeded with OUTPUT_DIR, not left empty: output_dir() reads this dict, and
+# anything resolving it before the test populates BASE (a scheduler tick, app
+# startup work) would otherwise land in /config, the real data directory.
+_state = {"cfg": {"OUTPUT_DIR": _OUT_DIR}}
 _threshold = {"ok_for_cleanup": True, "cleanup_tooltip": ""}
 
 A.load_config = lambda: dict(_state["cfg"])

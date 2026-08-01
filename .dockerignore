@@ -7,10 +7,15 @@
 .dockerignore
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 node_modules/
 package.json
 package-lock.json
 tests/
+tools/
+.github/
+.claude/
 README.md
 ARCHITECTURE.md
 docker-compose.yml
