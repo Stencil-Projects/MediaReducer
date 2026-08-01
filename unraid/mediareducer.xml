@@ -1,10 +1,6 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>MediaReducer</Name>
-  <!-- :alpha follows the newest alpha release. :latest deliberately does not
-       exist yet: the publish workflow reserves it for the first non-prerelease,
-       so nobody installs an alpha by asking for "latest". Switch this to
-       :latest at 1.0.0. -->
   <Repository>ghcr.io/stencil923/mediareducer:alpha</Repository>
   <Registry>https://ghcr.io/stencil923/mediareducer</Registry>
   <Network>bridge</Network>
@@ -14,35 +10,25 @@
   <Support>https://github.com/Stencil923/MediaReducer/issues</Support>
   <Project>https://github.com/Stencil923/MediaReducer</Project>
   <Overview>
-    Keeps a large movie library under control on a NAS where the media is the
-    part that gives way. It reads your library from Plex/Tautulli, Jellyfin or
-    both, scores every movie on watch history and IMDb rating, and deletes the
-    lowest-value files first when your storage thresholds are crossed.
+    Deletes the movies you are least likely to miss when storage runs low. Reads
+    Plex/Tautulli, Jellyfin or both, scores every movie on watch history and IMDb
+    rating, and removes the lowest first.
     [br][br]
-    [b]EARLY ALPHA. This app deletes movie files and there is no recycle bin.[/b]
-    It starts paused and deletes nothing. Leave it on Monitor Only and use
-    Simulate until the output is exactly what you would have deleted yourself.
-    Keep backups.
+    [b]Early alpha, and it deletes files with no recycle bin.[/b] It starts
+    paused. Use Simulate until the output is exactly what you would have deleted
+    yourself, and keep backups.
     [br][br]
-    [b]Do not expose the WebUI to the internet.[/b] There is no login, so anyone
-    who can reach the port can reconfigure it and delete your media. Keep it on
-    your LAN or behind a VPN. Reaching it through a reverse-proxy domain? Put
-    that domain in MEDIAREDUCER_TRUSTED_HOSTS.
+    No login, so keep it on your LAN and use a VPN from outside.
     [br][br]
-    Requires Tautulli (for Plex) or Jellyfin, and internet access for the IMDb
-    ratings dataset. Radarr is optional, for forgetting a movie once its file is
-    gone so it is not re-downloaded.
+    Needs Tautulli (for Plex) or Jellyfin, plus internet for the IMDb ratings.
+    Radarr is optional, to stop a deleted movie being re-downloaded.
   </Overview>
   <Category>MediaApp:Video Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:7474]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/Stencil923/MediaReducer/main/unraid/mediareducer.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/Stencil923/MediaReducer/main/static/apple-touch-icon.png</Icon>
-  <!-- init reaps engine subprocesses and forwards SIGTERM to the app. The stop
-       timeout carries over the compose stop_grace_period: on stop the app hands
-       SIGTERM to an in flight run and waits about 8s for the engine to finish
-       the file it is deleting (unlink, then record it in deleted.log). Unraid
-       defaults to 10s, which can cut that short and lose the record of a
-       deletion that already happened. -->
+  <!-- stop-timeout 30: on stop the engine needs about 8s to finish the file it
+       is deleting and record it, and Unraid's default 10s can cut that short. -->
   <ExtraParams>--init --stop-timeout=30</ExtraParams>
   <PostArgs/>
   <CPUset/>
@@ -52,38 +38,34 @@
   <Requires/>
 
   <Config Name="WebUI Port" Target="7474" Default="7474" Mode="tcp"
-          Description="Port for the web interface. The container always listens on 7474 internally; change the host side only."
+          Description="Host port for the web interface. The container always serves on 7474."
           Type="Port" Display="always" Required="true" Mask="false">7474</Config>
 
   <Config Name="Movie library" Target="/library" Default="/mnt/user/media" Mode="rw"
-          Description="The folder that CONTAINS your movie folders, not the movie folder itself. If your films are in /mnt/user/media/Movies, put /mnt/user/media here and add Movies as a monitored path in the UI. Must be writable: this is the only place MediaReducer can delete from."
+          Description="The folder CONTAINING your movie folders: films in /mnt/user/media/Movies means /mnt/user/media here, then add Movies as a monitored path in the UI. Must be writable, and it is the only place MediaReducer can delete from."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media</Config>
 
   <Config Name="Config storage" Target="/config" Default="/mnt/user/appdata/mediareducer/config" Mode="rw"
-          Description="Settings, logs, cache, the IMDb dataset and your deletion history. Keep this on the array so it survives a container rebuild."
+          Description="Settings, logs, cache, IMDb data and your deletion history. Keep it on the array so it survives a container rebuild."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/mediareducer/config</Config>
 
   <Config Name="Tautulli appdata (optional)" Target="/tautulli" Default="/mnt/user/appdata/tautulli" Mode="ro"
-          Description="Read-only, and only so Auto Detect can read the Tautulli API key and Plex token out of Tautulli's own config. Skip it and type those in yourself."
+          Description="Read-only, and only so Auto Detect can read the Tautulli API key and Plex token. Skip it and enter them yourself."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/tautulli</Config>
 
   <Config Name="Radarr appdata (optional)" Target="/radarr" Default="/mnt/user/appdata/radarr" Mode="ro"
-          Description="Read-only, and only so Auto Detect can read the Radarr API key. Skip it and type the key in yourself. There is no Jellyfin equivalent: Jellyfin issues keys from its own dashboard and stores none on disk."
+          Description="Read-only, and only so Auto Detect can read the Radarr API key. Skip it and enter the key yourself."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/radarr</Config>
 
-  <Config Name="TZ" Target="TZ" Default="" Mode=""
-          Description="Time zone for the daily run time, deletion-delay aging and log timestamps, e.g. America/New_York. Without it the container clock is usually UTC. It can also be set in the UI under Advanced."
-          Type="Variable" Display="always" Required="false" Mask="false"/>
-
   <Config Name="PUID" Target="PUID" Default="99" Mode=""
-          Description="Run as this user instead of root. 99 is nobody on Unraid. That user needs write access to your movie files and to /config, since deletions happen with exactly its permissions. Leave both PUID and PGID blank to run as root."
-          Type="Variable" Display="always" Required="false" Mask="false">99</Config>
+          Description="Run as this user instead of root. 99 is nobody on Unraid. It needs write access to your movies and /config, since deletions use its permissions. Blank runs as root."
+          Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
 
   <Config Name="PGID" Target="PGID" Default="100" Mode=""
           Description="Group for the above. 100 is users on Unraid."
-          Type="Variable" Display="always" Required="false" Mask="false">100</Config>
+          Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
 
   <Config Name="MEDIAREDUCER_TRUSTED_HOSTS" Target="MEDIAREDUCER_TRUSTED_HOSTS" Default="" Mode=""
-          Description="Only needed behind a reverse proxy. Comma-separated list of domains you reach the UI on, e.g. media.example.com. Unknown Host headers are rejected as a DNS-rebinding guard, so a proxy domain that is not listed here cannot load the page."
+          Description="Leave empty unless you already reverse-proxy this. It adds no login: it only lets a proxy domain reach the UI, and anyone who can is free to delete your media. Comma-separated, e.g. media.example.com."
           Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>

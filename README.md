@@ -30,9 +30,13 @@ movie files at `/library`.
 > you ever run a real Cleanup.
 
 > **Do not expose the web UI to the internet.** There is no login, so anyone who
-> can reach port 7474 can reconfigure MediaReducer and delete your media. Keep
-> it on your LAN or behind a VPN. If you reach it through a reverse-proxy
-> domain, list that domain in `MEDIAREDUCER_TRUSTED_HOSTS`.
+> can reach it can reconfigure MediaReducer and delete your media. Keep it on
+> your LAN, and use a VPN to reach it from outside.
+>
+> If you already reverse-proxy it, `MEDIAREDUCER_TRUSTED_HOSTS` lets that
+> domain past the DNS-rebinding guard. It is not a substitute for a login:
+> whoever reaches the domain has full control, so put authentication in front
+> of the proxy yourself.
 
 ## What It Does
 

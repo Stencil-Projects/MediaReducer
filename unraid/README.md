@@ -1,22 +1,18 @@
 # Unraid template
 
-`mediareducer.xml` is a Docker template for Unraid. It sets the two required
-mounts (`/library`, `/config`), the two optional read-only appdata mounts that
-only feed Auto Detect, the WebUI port, and PUID/PGID/TZ.
+`mediareducer.xml` is a Docker template for Unraid. Up front it asks for the
+WebUI port and the four mounts: the two required (`/library`, `/config`) and the
+two optional read-only appdata ones that only feed Auto Detect. PUID/PGID and
+the reverse-proxy host list sit behind **Show more settings**.
 
-**It needs a published image.** `<Repository>` tracks
-`ghcr.io/stencil923/mediareducer:alpha`, which `.github/workflows/publish.yml`
-pushes when you tag a release:
+`<Repository>` tracks `ghcr.io/stencil923/mediareducer:alpha`, which
+`.github/workflows/publish.yml` pushes on a version tag:
 
     git tag vX.Y.Z-alpha.N && git push origin vX.Y.Z-alpha.N   # must match APP_VERSION in app.py
 
-`:latest` is deliberately reserved for the first non-prerelease, so nobody
-installs an alpha by asking for "latest". Point this at `:latest` when you cut
-1.0.0. A GHCR package is private on first publish; make it public once under the
-repository's Packages settings, or nobody can pull it.
-
-The image path is all lowercase even though the repository name is not, because
-registries reject uppercase. Pull it exactly as written:
+`:alpha` moves with each alpha release; `:latest` is reserved for the first
+non-prerelease, so point this at `:latest` at 1.0.0. The image path is lowercase
+even though the repository name is not, since registries reject uppercase:
 
     docker pull ghcr.io/stencil923/mediareducer:alpha
 
