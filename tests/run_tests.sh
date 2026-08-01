@@ -35,7 +35,15 @@ run() {
   if "$@" >"$TMP/$name.log" 2>&1; then
     echo "PASS $name"; pass=$((pass+1))
   else
-    echo "FAIL $name (log: $TMP/$name.log)"; tail -5 "$TMP/$name.log" | sed 's/^/    /'
+    echo "FAIL $name (log: $TMP/$name.log)"
+    # The lines that actually FAILED, then the tail. A blind tail alone is only
+    # right when the failure is last: checks run in a fixed order, so a suite
+    # that broke early and passed late printed five PASS lines and a bare
+    # "RESULT: FAIL" — and on CI, where the log file is an artifact nobody has
+    # in front of them, that is the whole diagnosis.
+    grep -E '^[[:space:]]*FAIL' "$TMP/$name.log" | grep -v 'RESULT:' | head -10 | sed 's/^/    /'
+    # Still the tail: a crash (traceback, missing module) writes no FAIL line.
+    tail -5 "$TMP/$name.log" | sed 's/^/    /'
     fail=$((fail+1)); failed_names+=("$name")
   fi
 }

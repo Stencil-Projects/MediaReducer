@@ -50,6 +50,12 @@ for (const path of ['/', '/config', '/explorer']) {
       _rpMaxIdx = 0;
       renderProgress({ schema: 1, status: 'error', phase: 'library', mode: 'debug_sim',
                        stage: 'READING LIBRARY', message: 'Jellyfin timed out' });
+      // Sample the SETTLED page. Once the run log has an errors section the pill
+      // becomes clickable, which brings a .15s color transition with it, and a
+      // computed color read in the same instant is the colour it is leaving —
+      // the pill reported the accent blue it had a frame ago. finish() throws on
+      // the header badge's infinite pulse, hence the catch.
+      document.getAnimations().forEach(a => { try { a.finish(); } catch {} });
       const top = document.querySelector('#rp-issues li');
       const txt = el => el ? el.textContent : '';
       const color = el => el ? getComputedStyle(el).color : null;
@@ -196,6 +202,10 @@ for (const path of ['/', '/config', '/explorer']) {
       prSetConfigTabError(false);
       const clean = tab.getBoundingClientRect().width;
       prSetConfigTabError(true);
+      // Same reason as the stepper check above: the tab fades into red over
+      // .15s, so its colour has to be sampled settled or the dot (which has no
+      // transition) is compared against a colour on its way somewhere.
+      document.getAnimations().forEach(a => { try { a.finish(); } catch {} });
       const dot = getComputedStyle(tab, '::before');
       return { clean: +clean.toFixed(2), error: +tab.getBoundingClientRect().width.toFixed(2),
                // Keyframe animations only. The flip also starts the tab's
