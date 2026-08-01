@@ -15,6 +15,11 @@ installs an alpha by asking for "latest". Point this at `:latest` when you cut
 1.0.0. A GHCR package is private on first publish; make it public once under the
 repository's Packages settings, or nobody can pull it.
 
+The image path is all lowercase even though the repository name is not, because
+registries reject uppercase. Pull it exactly as written:
+
+    docker pull ghcr.io/stencil923/mediareducer:alpha
+
 ## Installing it by hand
 
 Copy the file onto the Unraid box, into the folder Unraid keeps user templates

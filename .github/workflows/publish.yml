@@ -97,6 +97,19 @@ jobs:
           tags: ${{ env.IMAGE }}:ci-smoke
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # image.source is the one that matters: it is how GHCR ties the package
+          # back to this repository, which is what puts it in the repo's Packages
+          # list and lets its visibility be managed there. The rest is metadata a
+          # registry UI shows, and revision answers "which commit is this?" without
+          # trusting the tag.
+          labels: |
+            org.opencontainers.image.title=MediaReducer
+            org.opencontainers.image.description=Scores a movie library on watch history and IMDb rating, and deletes the lowest-value files when storage thresholds are crossed.
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Smoke-test the built image
         # Boots it exactly as a user would and asks the running app what version
