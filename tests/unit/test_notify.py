@@ -319,6 +319,26 @@ notify.dispatch_error({**DEST, "NOTIFY_ENABLED": True, "NOTIFY_ON_ERROR": True})
 check("a failure with no message still says something",
       sent[-1][2].startswith("× The run stopped"))
 
+# Movie names OFF must mean no film leaves the box. The issue block's "e.g."
+# example is a title or a full library path, so it follows that opt-in — the
+# counts and categories, which are the point of the block, still go out.
+_LEAKY = [{"category": "delete_failed", "detail": "/library/Movies/Private (2019)/f.mkv: denied"},
+          {"category": "delete_failed", "detail": "/library/Movies/Other (2020)/o.mkv: denied"}]
+_, _off = notify.build_error_message({}, message="Jellyfin stopped answering.", issues=_LEAKY)
+_, _on = notify.build_error_message({"NOTIFY_SHOW_MOVIES": True},
+                                    message="Jellyfin stopped answering.", issues=_LEAKY)
+# Scope: the ISSUE BLOCK only — `message` here carries no film, so this says
+# nothing about the alert's first line. That line is the engine's sentence and
+# some of those DO name a film; test_abort_name_disclosure covers it, and this
+# check quietly passing while that line leaked is why it exists separately.
+check("the issue block's example is hidden while Movie names is off",
+      "Private" not in _off and "Deletion failed: 2 movies" in _off)
+check("...and shown when it is on", "Private" not in _off and "Private" in _on)
+_run = dict(CLEAN, issues=_LEAKY)
+check("the run summary follows the same opt-in",
+      "Private" not in notify.build_run_message({**ALL_ON, "NOTIFY_SHOW_MOVIES": False}, _run)[1]
+      and "Private" in notify.build_run_message(ALL_ON, _run)[1])
+
 # ── Fresh-install defaults ───────────────────────────────────────────────────
 # Nothing is delivered until the master switch goes on and a service is set up.
 # These defaults decide what arrives the moment it does: the three alert types

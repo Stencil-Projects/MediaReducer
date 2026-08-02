@@ -701,7 +701,7 @@ def _movie_name_blocks(report, debug, budget=_MOVIE_LIST_CHARS, *, armed=True):
     return blocks
 
 
-def _issue_block(report, *, lead=None):
+def _issue_block(report, *, lead=None, show_movies=True):
     """The categorized "what went wrong" list, or "" for a clean run.
 
     Reads the issue summary the engine attached to the report, so the categories
@@ -724,7 +724,10 @@ def _issue_block(report, *, lead=None):
         lines.append(f"{mark} {entry['line']}")
         # One-per-run categories carry their specifics on the line already; a
         # counted one gets a single example so the reader has somewhere to start.
-        if entry["count"] > 1 and entry["details"]:
+        # That example is a movie title or a full library path, so it follows the
+        # Movie names opt-in: with it off nothing that names a film leaves the
+        # box, and the counts and categories — the point of this block — still do.
+        if show_movies and entry["count"] > 1 and entry["details"]:
             lines.append(f"    e.g. {entry['details'][0]}")
     return "\n".join(lines)
 
@@ -832,7 +835,7 @@ def build_run_message(cfg, report):
     # What went wrong, by category and count, in the same words the log and the
     # dashboard use. "Completed with errors; check the log" made the reader go
     # and look; a categorized list is the answer they were going to look for.
-    issue_block = _issue_block(report)
+    issue_block = _issue_block(report, show_movies=_bool(cfg, "NOTIFY_SHOW_MOVIES"))
     if issue_block and _bool(cfg, "NOTIFY_ON_ERROR"):
         body_parts.append(issue_block)
 
@@ -892,7 +895,8 @@ def build_low_space_message(cfg, *, free_gb, redline_gb, margin_gb, items=None):
     return "MediaReducer — low space warning", "\n\n".join(body_parts)
 
 
-def build_error_message(cfg, *, message="", stage="", issues=None):
+def build_error_message(cfg, *, message="", stage="", issues=None, names=()):
+
     """(title, body) for a run that stopped dead.
 
     Shaped like the dashboard's run panel, because this is the same failure
@@ -902,8 +906,20 @@ def build_error_message(cfg, *, message="", stage="", issues=None):
     it died. "A run failed, check the log" sent the reader to go and look; this
     is what they were going to find.
     """
+    show_movies = _bool(cfg, "NOTIFY_SHOW_MOVIES")
     line = str(message or "").strip().splitlines()
     line = line[0].strip() if line else ""
+    # A few abort sentences name a film — the sample path in a mount mismatch,
+    # the protected collections that went missing. The dashboard wants them;
+    # a webhook with Movie names off must not have them. The engine reports
+    # exactly what it interpolated rather than leaving this to a regex, which
+    # ate the /library mount out of the same sentence and split a collection
+    # name on the apostrophe in "Dad's stuff".
+    if not show_movies:
+        for n in names or ():
+            n = str(n)
+            if n:
+                line = line.replace(n, "[hidden]")
     body_parts = [f"× {line or 'The run stopped before it finished.'}"]
     if stage:
         body_parts.append(f"Failed during {stage} — this stage name appears in the log.")
@@ -911,7 +927,8 @@ def build_error_message(cfg, *, message="", stage="", issues=None):
     # collect issues and THEN hit something fatal, and those are still the most
     # specific thing anyone has about what it was doing. Its own lead, because
     # that summary opens with "Completed with", which here would be a lie.
-    block = _issue_block({"issues": issues}, lead="Recorded before it stopped —")
+    block = _issue_block({"issues": issues}, lead="Recorded before it stopped —",
+                         show_movies=show_movies)
     if block:
         body_parts.append(block)
     return "MediaReducer — run failed", "\n\n".join(body_parts)
@@ -947,7 +964,7 @@ def dispatch_low_space(cfg, *, free_gb, redline_gb, margin_gb, items=None):
         "nothing to report")
 
 
-def dispatch_error(cfg, message="", *, stage="", issues=None):
+def dispatch_error(cfg, message="", *, stage="", issues=None, names=()):
     """Deliver a run-failure alert (a nonzero engine exit the app caught).
 
     Gated on NOTIFY_ENABLED and NOTIFY_ON_ERROR. With that toggle off a failed
@@ -956,5 +973,6 @@ def dispatch_error(cfg, message="", *, stage="", issues=None):
     """
     if not _bool(cfg, "NOTIFY_ENABLED") or not _bool(cfg, "NOTIFY_ON_ERROR"):
         return False, "disabled"
-    title, body = build_error_message(cfg, message=message, stage=stage, issues=issues)
+    title, body = build_error_message(cfg, message=message, stage=stage, issues=issues,
+                                      names=names)
     return _deliver(apprise_urls(cfg), title, body)

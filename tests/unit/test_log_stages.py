@@ -187,6 +187,30 @@ E.log_stage("DRY RUN SUMMARY [LIBRARY CAP]", timed=False)
 check("an un-phased banner leaves the step where it was",
       E._CURRENT_PHASE == before, E._CURRENT_PHASE)
 
+# ── Helpers that run from more than one stage must not name a step ──────────
+# fetch_protected_paths and the Jellyfin protection queries run under READING
+# LIBRARY on a full scan and under RUN CONTEXT on the redline fast path, which
+# skips the library read entirely; extract_file_path and fetch_movie_metadata
+# run in both the library read and the scan. Each hardcoded phase="scanning",
+# so a failure put the red x on a step the run had not reached — and on the fast
+# path, never would.
+import ast  # noqa: E402
+
+MULTI_STAGE = {
+    "fetch_protected_paths", "fetch_movie_metadata", "extract_file_path",
+    "_jellyfin_protected_items", "_jellyfin_boxset_children",
+    "get_all_movies_from_jellyfin", "get_all_movies", "build_candidates",
+}
+_tree = ast.parse((ROOT / "engine.py").read_text())
+_aborts = [(fn.name, c) for fn in ast.walk(_tree)
+           if isinstance(fn, ast.FunctionDef) and fn.name in MULTI_STAGE
+           for c in ast.walk(fn)
+           if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "_abort_api_failure"]
+_pinned = [f"engine.py:{c.lineno} in {name}"
+           for name, c in _aborts if any(k.arg == "phase" for k in c.keywords)]
+check("a multi-stage helper's failure inherits the step that is open", not _pinned, _pinned)
+check("...and the walk found those aborts (not a vacuous pass)", len(_aborts) >= 10, len(_aborts))
+
 # ── The footer must not be mistaken for a section banner ────────────────────
 # The dashboard's "jump to section" links match the ====== banners; a footer
 # that also matched would send every link to the wrong place.

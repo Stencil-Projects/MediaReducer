@@ -159,5 +159,29 @@ try:
 except SystemExit:
     check("a missing protected BoxSet aborts a deleting run", True)
 
+# ── Fail-closed: no users is a broken answer, not zero watchers ──────────────
+# Jellyfin always has at least the account the API key belongs to, so an empty
+# user list means the request was answered but not honored. Every per-user read
+# then comes back empty and each movie looks unwatched, unfavorited and
+# therefore deletable — the worst possible thing to believe.
+E.JELLYFIN_PROTECTED_COLLECTIONS = set()
+E._jellyfin_request = lambda path, params=None, timeout=30: (
+    [] if path == "Users" else fake_request(path, params, timeout))
+
+def raises(fn, exc=Exception):
+    try:
+        fn()
+        return False
+    except exc:
+        return True
+
+check("an empty user list raises rather than returning no users",
+      raises(E._jellyfin_user_ids))
+check("...so the catalog read aborts instead of reporting nobody watched anything",
+      raises(E.get_all_movies_from_jellyfin, SystemExit))
+E.PROTECT_JELLYFIN_FAVORITES = True
+check("...and favorites come back unverifiable, not empty",
+      raises(E._jellyfin_favorite_paths))
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

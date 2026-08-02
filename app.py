@@ -411,7 +411,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.4"
+APP_VERSION = "1.0.0-alpha.5"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -2150,7 +2150,20 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
         def _work():
             summary_sent = False
             try:
-                if returncode == 0:
+                # The engine's own terminal write, not the exit code: a run that
+                # stops on a bad connection or an invalid threshold RETURNS from
+                # run() rather than exiting nonzero, so gating the alert on the
+                # exit code alone stayed silent on the two failures a user is
+                # most likely to actually hit — while the dashboard showed the
+                # red x for them all along.
+                _prog = {}
+                try:
+                    _prog = json.loads(progress_path().read_text(encoding="utf-8"))
+                    if not isinstance(_prog, dict) or _prog.get("status") != "error":
+                        _prog = {}
+                except Exception:
+                    _prog = {}
+                if returncode == 0 and not _prog:
                     if report:
                         # Enrich with the app's own queue view: total marked,
                         # the next-deletion forecast (date / "at the next run"),
@@ -2182,21 +2195,13 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
                             pass
                         summary_sent, _detail = notify.dispatch_run_report(cfg, report)
                 elif not is_debug:
-                    # The engine's last progress write is the failure, in the
-                    # words the dashboard is showing for the same event. Read it
-                    # here so the alert says what stopped answering instead of
-                    # "a run failed"; a torn or stale file just falls back.
-                    _prog = {}
-                    try:
-                        _prog = json.loads(progress_path().read_text(encoding="utf-8"))
-                        if not isinstance(_prog, dict) or _prog.get("status") != "error":
-                            _prog = {}
-                    except Exception:
-                        _prog = {}
+                    # The failure in the words the dashboard is showing for the
+                    # same event; a torn or stale file just falls back.
                     notify.dispatch_error(
                         cfg, _prog.get("message") or RUN_ENDED_UNEXPECTEDLY,
                         stage=_prog.get("stage") or "",
-                        issues=_prog.get("issues") or [])
+                        issues=_prog.get("issues") or [],
+                        names=_prog.get("names") or [])
             except Exception:
                 pass  # alerting is best-effort; never surface into the app
             finally:
@@ -2279,7 +2284,7 @@ def run_script(mode_override: str | None = None, manual: bool = False,
                 _maybe_rebuild_preview_after_run(
                     cleanup_run=_is_cleanup_mode(_effective_mode))
             else:
-                _mark_progress_terminal("error", "Run failed — see the detailed log.")
+                _mark_progress_terminal("error", RUN_ENDED_UNEXPECTEDLY)
                 # Runs fail closed on any API error, so re-probe now: the cached
                 # health drives the red Configuration tab, the jump-to-Connections
                 # link, and the per-field error highlights.
@@ -2491,8 +2496,14 @@ def run_summary() -> tuple[bool, str]:
     return True, "Summary started."
 
 
-def run_summary_sync(timeout: int = 600) -> tuple[bool, str, dict]:
-    """Run Summary/debug_info now and return the freshly cached dashboard stats."""
+def run_summary_sync(timeout: int = 600, *, defer_reconcile: bool = False) -> tuple[bool, str, dict]:
+    """Run Summary/debug_info now and return the freshly cached dashboard stats.
+
+    defer_reconcile leaves any queued config-save reconcile queued instead of
+    launching it here. A caller that means to start a real run the moment this
+    returns must pass it: the launch takes _summary_active synchronously, so the
+    run that follows is refused deterministically — and the caller owns firing
+    _maybe_launch_queued_reconcile() once it knows no run is starting."""
     global _summary_active, _summary_queued
     with _run_lock:
         if _run_active:
@@ -2523,7 +2534,8 @@ def run_summary_sync(timeout: int = 600) -> tuple[bool, str, dict]:
         _restart_schedule_clock()
         if queued:
             run_summary()
-        _maybe_launch_queued_reconcile()
+        if not defer_reconcile:
+            _maybe_launch_queued_reconcile()
 
 
 # ── Config-save reconcile launcher ────────────────────────────────────────────
@@ -2557,24 +2569,37 @@ def _run_reconcile_subprocess(config_path: Path, *, refetch: bool,
 
 
 def _maybe_launch_queued_reconcile() -> None:
-    """Fire a reconcile that was queued while a Summary/run held _summary_active."""
+    """Fire a reconcile that was queued while a Summary/run held _summary_active.
+
+    Hand it to run_reconcile unconditionally: if something is still holding the
+    lock it re-queues itself there, for whoever finishes next. Dropping it on a
+    live run instead lost the request outright — and a run launched moments
+    earlier is exactly when this gets called."""
     global _reconcile_queued
     with _run_lock:
         nxt = _reconcile_queued
         _reconcile_queued = None
-    if nxt and not _run_active:
+    if nxt:
         run_reconcile(refetch=nxt[0], trigger=nxt[1])
 
 
 def _reconcile_worker(refetch: bool, trigger: str) -> None:
-    global _summary_active
+    global _summary_active, _summary_queued
     try:
         _run_reconcile_subprocess(CONFIG_PATH, refetch=refetch, trigger=trigger)
     except Exception:
         pass
     with _run_lock:
         _summary_active = False
+        # Consume a Summary queued while this reconcile held the flag — the same
+        # handshake the other two owners of this flag make. run_summary() already
+        # answered its caller "Summary refresh queued", so it has to happen; and a
+        # flag left latched fires one spurious refresh after an unrelated later one.
+        queued = _summary_queued and not _run_active
+        _summary_queued = False
     _restart_schedule_clock()
+    if queued:
+        run_summary()
     _maybe_launch_queued_reconcile()   # a reconcile requested while this one ran
 
 
@@ -6219,23 +6244,8 @@ def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True
             continue
         title = str(e.get("title") or Path(path).name)
         size_label = _format_reclaimed_size(size_bytes) if size_bytes else ""
-        if rl_only:
-            when = (f"#{i} — deletes on the next Cleanup (Redline breached)" if marked
-                    else f"#{i} — deletes when Redline hits")
-        elif marked_at is not None:
-            when = ("deletable now" if remaining <= 0
-                    else f"deletable from {delete_on.isoformat()}")
-        else:
-            when = f"#{i} — next in line if more space is needed"
         marked_disp = "" if marked_at is None else _format_log_timestamp_for_display(
             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(marked_at)), _fmt)
-        line_parts = [p for p in (marked_disp, title) if p]
-        if size_label:
-            line_parts.append(size_label)
-        if e.get("score") is not None:
-            line_parts.append(f"score {e.get('score')}")
-        line_parts.append(when)
-        line_parts.append(path)
         out.append({
             "time": marked_disp,
             "marked_at": marked_at,
@@ -6244,11 +6254,9 @@ def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True
             "size_bytes": size_bytes,
             "size": size_label,
             "score": e.get("score"),
-            "when": when,
             "marked": marked,
             "days_remaining": remaining,
             "delete_on": delete_on.isoformat() if delete_on else None,
-            "line": " | ".join(line_parts),
         })
     # Normal (delay) modes: float the marked entries to the top, SOONEST deletion
     # first — with the incremental re-verify a backfilled mark starts a fresh,
@@ -6261,6 +6269,23 @@ def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True
         out.sort(key=lambda r: (0 if r.get("marked") else 1,
                                 r["days_remaining"] if (r.get("marked")
                                 and r.get("days_remaining") is not None) else 0))
+    if with_lines:
+        # Rank AFTER the sort. The row's other columns carry the rest — Status
+        # says marked or eligible, Deletes says the date, "now", or "at Redline"
+        # — and the window states the ordering once above the table, so this
+        # number is all a row needs to say about where it sits. Numbering during
+        # the walk numbered the FILE's order and the sort then floated the
+        # marked entries over it, so the column read #4, #2, #1, #3, #5 down a
+        # list whose whole point is that it is in order.
+        for n, r in enumerate(out, start=1):
+            r["when"] = f"#{n}"
+            parts = [p for p in (r["time"], r["title"]) if p]
+            if r["size"]:
+                parts.append(r["size"])
+            if r["score"] is not None:
+                parts.append(f"score {r['score']}")
+            parts.extend((r["when"], r["path"]))
+            r["line"] = " | ".join(parts)
     return out
 
 
@@ -6751,18 +6776,30 @@ def api_library_browse():
     """List folders under the library root for the Movie Library Paths browser."""
     root = FILESYSTEM_CHECK_PATH
     root_name = root.rsplit("/", 1)[-1] or "library"
-    base = Path(root).resolve(strict=False)
+    # Two namespaces, deliberately kept apart. `root` is the one the config, this
+    # endpoint's own query string, and every path on screen are written in; `base`
+    # is where that lands once symlinks are followed, and it is used ONLY to prove
+    # containment. Answering in the resolved namespace handed the browser paths
+    # this endpoint could not accept back: one symlinked library folder 404'd the
+    # moment it was clicked, and a /library that is itself a symlink 404'd on
+    # every folder in it.
+    root_path = Path(root)
+    base = root_path.resolve(strict=False)
     raw = (request.args.get("path") or root).strip().replace("\\", "/")
 
     if raw in ("", root, root_name):
-        target = base
+        target = root_path
     elif raw.startswith(root + "/"):
-        target = Path(raw).resolve(strict=False)
+        target = Path(raw)
     else:
-        target = (base / raw.lstrip("/")).resolve(strict=False)
+        target = root_path / raw.lstrip("/")
+    # Collapse any ".." for display without following symlinks — going up from a
+    # symlinked folder returns to where the browser came from, not to wherever
+    # the link points. Containment is still judged on the resolved form below.
+    target = Path(os.path.normpath(str(target)))
 
     try:
-        target.relative_to(base)
+        target.resolve(strict=False).relative_to(base)
     except ValueError:
         return jsonify({"ok": False, "error": f"Path must be inside {root}."}), 400
 
@@ -6774,18 +6811,18 @@ def api_library_browse():
         for child in target.iterdir():
             try:
                 if child.is_dir():
-                    dirs.append({"name": child.name, "path": str(child.resolve(strict=False))})
+                    dirs.append({"name": child.name, "path": str(child)})
             except OSError:
                 continue
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
     dirs.sort(key=lambda item: item["name"].lower())
-    parent = target.parent if target != base else base
+    parent = target.parent if target != root_path else root_path
     try:
-        parent.relative_to(base)
+        parent.resolve(strict=False).relative_to(base)
     except ValueError:
-        parent = base
+        parent = root_path
 
     return jsonify({
         "ok": True,
@@ -8150,9 +8187,17 @@ def _read_tail_lines(p: Path, n: int) -> list:
 
 
 def _error_banner_start(lines: list):
-    """Index of the one-line "!!!!!! COMPLETED WITH ERRORS !!!!!!" banner that
-    opens the run-end error report, or None when the run has none."""
-    return next((i for i, ln in enumerate(lines) if "COMPLETED WITH ERRORS" in ln), None)
+    """Index of the one-line "!!!!!! COMPLETED WITH … !!!!!!" banner that opens
+    the run-end error report, or None when the run has none.
+
+    The prefix, not the whole phrase: the banner is run_issues.headline()
+    uppercased, so it reads "COMPLETED WITH 1 KIND OF ERROR AND 1 WARNING" and
+    has for a while. Matching the old literal found nothing, and the errors view
+    silently fell through to its flagged-lines fallback — a filtered list where
+    the structured block was available. A warnings-only run prints the same
+    headline in a dashed, un-uppercased banner, which this still skips.
+    """
+    return next((i for i, ln in enumerate(lines) if "COMPLETED WITH " in ln), None)
 
 
 def _extract_errors_report(lines: list, idx: dict):
@@ -8557,74 +8602,93 @@ def _scheduled_tick_body():
         if not _refresh_connection_health_cache(cfg, probe=True).get("critical_ok", True):
             run_summary()
             return
-        refresh_ok, refresh_msg, fresh_stats = run_summary_sync()
-        if not refresh_ok:
-            print(f"Scheduled cleanup precheck failed: {refresh_msg}", flush=True)
-            # A failed library refresh must not silence a Redline emergency:
-            # the fast path deletes from the standing queue and needs no
-            # library walk (the very thing that just failed), so a breached
-            # floor launches anyway; the engine stays the authority on what
-            # actually gets deleted. Every other trigger waits for a tick
-            # whose precheck succeeds.
-            if _redline_breached_now(cfg):
-                run_script(scheduled=True)
-            return
-        disk = cached_disk_stats(fresh_stats) or disk_stats()
-        threshold_state = _space_threshold_state(cfg, disk, fresh_stats.get("library_gb"))
-        if not threshold_state.get("ok_for_cleanup"):
-            # Thresholds safe when Automatic Cleanup was armed can stop being safe later; e.g. files
-            # copied in push the cap past the safety floor. Silently skipping every tick
-            # left Automatic Cleanup armed with nothing running and no explanation: pause with the
-            # reason, like every other forced pause. Re-arming takes the two-click confirm.
-            fresh_cfg = load_config()   # fresh: don't clobber a save that landed mid-summary
-            if _is_cleanup_mode(fresh_cfg.get("RUN_MODE")):
-                fresh_cfg["RUN_MODE"] = "paused"
-                fresh_cfg["_RUN_MODE_AUTOPAUSE_REASON"] = (threshold_state.get("cleanup_tooltip")
-                                                           or "Space Thresholds are no longer safe.")
-                if save_config(fresh_cfg):
-                    _restart_schedule_clock()
-                    print("Scheduled tick: Space Thresholds unsafe — Automatic Cleanup paused "
-                          f"({fresh_cfg['_RUN_MODE_AUTOPAUSE_REASON']})", flush=True)
-            return
-        # Nothing to delete? Don't launch a Cleanup. The Summary precheck above already
-        # refreshed both filesystem capacity and media library size.
-        if not _deletion_limits_exceeded(cfg, disk, fresh_stats.get("library_gb")):
-            # Within all limits; nothing to delete, but the daily cadence still
-            # owes its maintenance Simulate (plan refresh, the 48h scan clock,
-            # and the daily-summary notification), exactly like Monitor Only.
-            # Without this, an armed-but-quiet library would never see a daily
-            # run of any kind.
-            _maybe_run_daily_maintenance_sim(cfg)
-            return
-        # Daily-only breach (headroom/cap, no redline) with today's window already
-        # used, or before the configured run time: the engine would do its full
-        # startup — connection checks, IMDb check, another library walk; just to
-        # log "waiting until tomorrow". Skip the launch; up to ~96 pointless engine
-        # spins a day otherwise while marks wait out the delay. Redline breaches
-        # always launch (they ignore the window), and any doubt fails toward
-        # launching — the engine stays the authority.
+        # defer_reconcile + the finally below: a config-save reconcile queued
+        # behind this refresh would otherwise launch the instant it finishes,
+        # take _summary_active, and get the deletion pass three lines down
+        # refused — this tick's emergency lost to a queue rebuild, silently, with
+        # the next chance 15 minutes later while the disk kept filling. The run
+        # goes first; the reconcile fires on the way out of whichever branch
+        # decided not to launch one.
+        refresh_ok, refresh_msg, fresh_stats = run_summary_sync(defer_reconcile=True)
         try:
-            _free_gb = float((disk or {}).get("free_gb"))
-            _redline = cfg.get("REDLINE_GB")
-            _redline_hit = _redline is not None and _free_gb <= float(_redline)
-        except (TypeError, ValueError):
-            # Unreadable free space: fail toward launching ONLY when a Redline
-            # is actually armed; it's the sole any-tick trigger. Without one,
-            # treating "unreadable" as a hit would bypass the daily window /
-            # run-time gate and spin the engine on every tick.
-            _redline_hit = cfg.get("REDLINE_GB") is not None
-        if not _redline_hit and (_headroom_window_used_today()
-                                 or time.strftime("%H:%M") < _daily_run_time(cfg)):
-            return
-        # run_script() owns the lock and rejects overlaps.
-        run_script(scheduled=True)
-    else:
-        # Paused (or any non-deleting mode). Once a day, after the configured daily
-        # run time, run the maintenance Simulate; every other tick is the quiet
-        # Summary (dashboard disk/library numbers stay fresh without touching
-        # lastrun.log/progress).
-        if not _maybe_run_daily_maintenance_sim(cfg):
-            run_summary()
+            _tick_cleanup_branch(cfg, refresh_ok, refresh_msg, fresh_stats)
+        finally:
+            _maybe_launch_queued_reconcile()
+        return
+
+    # Paused (or any non-deleting mode). Once a day, after the configured daily
+    # run time, run the maintenance Simulate; every other tick is the quiet
+    # Summary (dashboard disk/library numbers stay fresh without touching
+    # lastrun.log/progress).
+    if not _maybe_run_daily_maintenance_sim(cfg):
+        run_summary()
+
+
+def _tick_cleanup_branch(cfg: dict, refresh_ok: bool, refresh_msg: str,
+                         fresh_stats: dict) -> None:
+    """The armed-Automatic-Cleanup half of a scheduled tick, after its storage
+    refresh: decide whether this tick launches a deletion pass. Split out so the
+    caller can hold a queued reconcile across every one of its exits."""
+    if not refresh_ok:
+        print(f"Scheduled cleanup precheck failed: {refresh_msg}", flush=True)
+        # A failed library refresh must not silence a Redline emergency:
+        # the fast path deletes from the standing queue and needs no
+        # library walk (the very thing that just failed), so a breached
+        # floor launches anyway; the engine stays the authority on what
+        # actually gets deleted. Every other trigger waits for a tick
+        # whose precheck succeeds.
+        if _redline_breached_now(cfg):
+            run_script(scheduled=True)
+        return
+    disk = cached_disk_stats(fresh_stats) or disk_stats()
+    threshold_state = _space_threshold_state(cfg, disk, fresh_stats.get("library_gb"))
+    if not threshold_state.get("ok_for_cleanup"):
+        # Thresholds safe when Automatic Cleanup was armed can stop being safe later; e.g. files
+        # copied in push the cap past the safety floor. Silently skipping every tick
+        # left Automatic Cleanup armed with nothing running and no explanation: pause with the
+        # reason, like every other forced pause. Re-arming takes the two-click confirm.
+        fresh_cfg = load_config()   # fresh: don't clobber a save that landed mid-summary
+        if _is_cleanup_mode(fresh_cfg.get("RUN_MODE")):
+            fresh_cfg["RUN_MODE"] = "paused"
+            fresh_cfg["_RUN_MODE_AUTOPAUSE_REASON"] = (threshold_state.get("cleanup_tooltip")
+                                                       or "Space Thresholds are no longer safe.")
+            if save_config(fresh_cfg):
+                _restart_schedule_clock()
+                print("Scheduled tick: Space Thresholds unsafe — Automatic Cleanup paused "
+                      f"({fresh_cfg['_RUN_MODE_AUTOPAUSE_REASON']})", flush=True)
+        return
+    # Nothing to delete? Don't launch a Cleanup. The Summary precheck above already
+    # refreshed both filesystem capacity and media library size.
+    if not _deletion_limits_exceeded(cfg, disk, fresh_stats.get("library_gb")):
+        # Within all limits; nothing to delete, but the daily cadence still
+        # owes its maintenance Simulate (plan refresh, the 48h scan clock,
+        # and the daily-summary notification), exactly like Monitor Only.
+        # Without this, an armed-but-quiet library would never see a daily
+        # run of any kind.
+        _maybe_run_daily_maintenance_sim(cfg)
+        return
+    # Daily-only breach (headroom/cap, no redline) with today's window already
+    # used, or before the configured run time: the engine would do its full
+    # startup — connection checks, IMDb check, another library walk; just to
+    # log "waiting until tomorrow". Skip the launch; up to ~96 pointless engine
+    # spins a day otherwise while marks wait out the delay. Redline breaches
+    # always launch (they ignore the window), and any doubt fails toward
+    # launching — the engine stays the authority.
+    try:
+        _free_gb = float((disk or {}).get("free_gb"))
+        _redline = cfg.get("REDLINE_GB")
+        _redline_hit = _redline is not None and _free_gb <= float(_redline)
+    except (TypeError, ValueError):
+        # Unreadable free space: fail toward launching ONLY when a Redline
+        # is actually armed; it's the sole any-tick trigger. Without one,
+        # treating "unreadable" as a hit would bypass the daily window /
+        # run-time gate and spin the engine on every tick.
+        _redline_hit = cfg.get("REDLINE_GB") is not None
+    if not _redline_hit and (_headroom_window_used_today()
+                             or time.strftime("%H:%M") < _daily_run_time(cfg)):
+        return
+    # run_script() owns the lock and rejects overlaps.
+    run_script(scheduled=True)
 
 
 def _maybe_run_daily_maintenance_sim(cfg: dict) -> bool:

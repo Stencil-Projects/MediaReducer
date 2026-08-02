@@ -105,7 +105,9 @@ try:
           or (A._HOST_TZ is None and "TZ" not in os.environ))
 
     # ── Config save applies the zone and burns the daily window ──────────────
-    with tempfile.TemporaryDirectory() as td:
+    # ignore_cleanup_errors: this is OUTPUT_DIR, and a background thread can
+    # recreate logs/ in it between rmtree's walk and its rmdir (ENOTEMPTY).
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         code, cfg = save({"TIME_ZONE": "Pacific/Kiritimati"}, base_over={"OUTPUT_DIR": td})
         check("valid zone saves", code == 200 and cfg.get("TIME_ZONE") == "Pacific/Kiritimati")
         check("save re-points the process clock", time.strftime("%z") == "+1400")
@@ -154,7 +156,7 @@ try:
 
     # ── A running engine locks the clock: the global save guard covers the
     # time zone too (the UI also ghosts the field while a run is active) ──────
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         A._run_active = True
         code, _ = save({"TIME_ZONE": "Europe/Berlin"}, base_over={"OUTPUT_DIR": td})
         check("zone change refused while a run is active", code == 409)
@@ -205,7 +207,7 @@ try:
     check("needs-init is true only on a fresh install", bool(fresh_needs) and not existing_needs)
 
     # ── Engine adopts the zone from config.json at load ───────────────────────
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         cfg_file = Path(td, "config.json")
         cfg_file.write_text(json.dumps({"TIME_ZONE": "Pacific/Kiritimati"}), encoding="utf-8")
         env = dict(os.environ, MEDIAREDUCER_CONFIG=str(cfg_file))

@@ -3427,35 +3427,51 @@ function _thresholdRows(pending) {
 
   // `then` is what happens once it fires — kept as its own sentence so the
   // trigger figure always leads and the consequence never runs on from it.
-  const freeRow = (id, name, trigger, then) => {
+  // Both triggers are quoted in GB of disk, but they are not the same test: the
+  // engine fires Headroom when USED space reaches total − target, and Redline
+  // when FREE space falls to the floor. On any filesystem that holds blocks back
+  // — ext4 reserves 5% for root by default — free is not total − used, so
+  // measuring Headroom on free space painted the row red for a breach that would
+  // never fire, while the percentage on the row's own next line, measured on the
+  // used axis, quietly disagreed with it.
+  const spaceRow = (id, name, trigger, then, { onUsed = false } = {}) => {
     if (!(trigger > 0)) return { id, name, off: true };
     if (!diskOk) return { id, name, unknown: 'Disk space is not readable yet.' };
-    const over = free <= trigger;
-    // Fraction of the way from "empty disk" to the trigger point: at the
-    // trigger, used equals total - trigger, so the bar reads exactly full.
-    const usedAtTrigger = Math.max(total - trigger, 1);
+    // The trigger point on the used axis; at it, the bar reads exactly full.
+    const usedTrigger = total - trigger;
+    const usedAtTrigger = Math.max(usedTrigger, 1);
+    const over = onUsed ? used >= usedTrigger : free <= trigger;
+    const toGo = onUsed ? usedTrigger - used : free - trigger;
     // Measured figures carry one decimal, the same as the panel's headline and
     // the Dashboard's Storage card; a configured threshold is quoted as
     // entered. Rounding the measurements here would have the same free space
     // read two different ways in one panel.
     return {
       id, name, trigger, over,
-      state: over ? 'Triggered' : prMeasuredGb(free - trigger) + ' GB to go',
+      state: over ? 'Triggered' : prMeasuredGb(toGo) + ' GB to go',
       pct: Math.max(0, Math.min(100, (used / usedAtTrigger) * 100)),
       note: (over
-        ? `Free space is <b>${prMeasuredGb(free)} GB</b>, at or below the `
-          + `<b>${prCommaNum(trigger, 0)} GB</b> mark.`
-        : `Fires when free space falls to <b>${prCommaNum(trigger, 0)} GB</b> — `
-          + `<b>${prMeasuredGb(free)} GB</b> free now of `
-          + `${prMeasuredGb(total)} GB.`) + ' ' + then,
+        ? (onUsed
+            ? `Used space is <b>${prMeasuredGb(used)} GB</b>, at or above the `
+              + `<b>${prMeasuredGb(usedTrigger)} GB</b> that leaves `
+              + `${prCommaNum(trigger, 0)} GB spare.`
+            : `Free space is <b>${prMeasuredGb(free)} GB</b>, at or below the `
+              + `<b>${prCommaNum(trigger, 0)} GB</b> mark.`)
+        : (onUsed
+            ? `Fires when used space reaches <b>${prMeasuredGb(usedTrigger)} GB</b> — `
+              + `<b>${prMeasuredGb(used)} GB</b> used now of `
+              + `${prMeasuredGb(total)} GB.`
+            : `Fires when free space falls to <b>${prCommaNum(trigger, 0)} GB</b> — `
+              + `<b>${prMeasuredGb(free)} GB</b> free now of `
+              + `${prMeasuredGb(total)} GB.`)) + ' ' + then,
     };
   };
 
   const rows = [
-    freeRow('ts-headroom', 'Headroom target', headroom,
-            'The daily cleanup then frees space back above it.'),
-    freeRow('ts-redline', 'Redline floor', redline,
-            'A cleanup then deletes immediately, without waiting for the daily run.'),
+    spaceRow('ts-headroom', 'Headroom target', headroom,
+             'The daily cleanup then frees space back above it.', { onUsed: true }),
+    spaceRow('ts-redline', 'Redline floor', redline,
+             'A cleanup then deletes immediately, without waiting for the daily run.'),
   ];
   if (!(cap > 0)) {
     rows.push({ id: 'ts-cap', name: 'Library Size Cap', off: true });
@@ -4469,8 +4485,30 @@ function trackLibrarySize(gb) {
 // One shared apply for every /api/status payload this page sees — the base
 // layout's 4-second poll (via the prOnStatusPoll hook), the page-load seed,
 // and the post-action burst poll all feed the same state + UI sequence.
+// Scheduler Mode can change without this page: a tick that finds Space
+// Thresholds unsafe pauses Automatic Cleanup by itself, and a second tab or the
+// CLI can set it too. Left frozen at render time, the page posts whatever it was
+// showing on the next unrelated save — silently re-arming automatic deletion the
+// app had paused for safety — and the two-click arming confirm is skipped,
+// because it compares against that same stale value. So follow the live mode,
+// and move the radio with it unless this session has touched it: an unedited
+// page must not carry a mode the server has left behind.
+let _runModeTouched = false;
+document.addEventListener('change', (e) => {
+  if (e.target?.matches?.('input[name="RUN_MODE"]')) _runModeTouched = true;
+}, true);
+
+function _syncRunModeFromStatus(mode) {
+  if (!mode || mode === _savedConfig.RUN_MODE) return;
+  _savedConfig.RUN_MODE = mode;      // always: the arming confirm keys off this
+  if (_runModeTouched) return;       // ...but never overrule a deliberate choice
+  const el = document.querySelector(`input[name="RUN_MODE"][value="${mode}"]`);
+  if (el) el.checked = true;
+}
+
 function _applyStatusPayload(d) {
   const wasLocked = _configActivityLocked();
+  _syncRunModeFromStatus(d.run_mode);
   _configRunActive = !!d.run_active;
   _configSummaryActive = !!d.summary_active;
   _simulateRequired = !!(d.cleanup_state?.space_thresholds?.simulate_required);
@@ -4878,6 +4916,9 @@ async function saveConfig() {
     if (d.ok) {
       const savedConfig = d.config || getFormConfig();
       _savedConfig = savedConfig;  // Revert now reflects the newly saved state, including backend safety changes.
+      // The mode choice is now the server's; a later autopause may follow the
+      // live one again without this page holding a superseded pick.
+      _runModeTouched = false;
       if (d.connection_health) _savedConfigHealth = d.connection_health;
       // The save round-trips connection probes and can take many seconds, and
       // the fields stay editable meanwhile. A wholesale populateForm would

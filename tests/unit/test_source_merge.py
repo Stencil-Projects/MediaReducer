@@ -94,9 +94,48 @@ twin = run_merge(
     [jf_row(file="/jf/B/Film (2020)/film.mkv")],
 )
 jf_twin = next((r for r in twin if r["rating_key"] == "jf:1"), None)
+px_twin = next((r for r in twin if r["rating_key"] != "jf:1"), None)
 check("a same-filename path divergence stays two rows (no false merge)", len(twin) == 2)
 check("the unmerged twin is flagged so the scan skips it",
       jf_twin is not None and "_unmerged_plex_twin" in jf_twin)
+# BOTH sides. The rows point at one film and the Plex row carries no Jellyfin
+# favorite or protection — those are written only onto rows that merged — so
+# flagging the Jellyfin copy alone left the Plex copy a full deletion candidate
+# with its Jellyfin protection stripped, deleted while the run summary said
+# "Identity mismatch: 1 (skipped, not deleted)".
+check("...and so is the PLEX row, which is the one that could be deleted",
+      px_twin is not None and "_unmerged_jf_twin" in px_twin)
+check("each side names the other", px_twin and jf_twin
+      and px_twin["_unmerged_jf_twin"]["file"] == jf_twin["file"]
+      and jf_twin["_unmerged_plex_twin"]["file"] == px_twin["file"])
+# The favorite that makes this dangerous: a Jellyfin-favorited film whose paths
+# did not reconcile has no _jf_favorite on the Plex row to protect it.
+fav = run_merge(
+    [plex_row(file="/plex/A/Fav (2020)/fav.mkv")],
+    [jf_row(file="/jf/B/Fav (2020)/fav.mkv", _jf_favorite=True)],
+)
+fav_px = next((r for r in fav if r["rating_key"] != "jf:1"), None)
+check("a favorited twin leaves the Plex row unprotected — so it must be flagged",
+      fav_px is not None and not fav_px.get("_jf_favorite")
+      and "_unmerged_jf_twin" in fav_px)
+
+# ── One enabled server returning nothing is a broken source, not a library ───
+# Degrading to single-source mode here deletes a full run's worth of movies with
+# the missing server's watch history, favorites and collection protection
+# silently absent. Both empty is fine — there is nothing to delete either way —
+# and so is an empty library on a single-server setup.
+def merge_aborts(plex, jelly):
+    try:
+        run_merge(plex, jelly)
+        return False
+    except SystemExit:
+        return True
+
+check("an empty Jellyfin catalog beside a stocked Plex aborts", merge_aborts([plex_row()], []))
+check("...and the reverse aborts too", merge_aborts([], [jf_row()]))
+check("both servers empty is not an abort", not merge_aborts([], []))
+check("an empty library on one enabled server is not an abort",
+      not merge_aborts([], None) and not merge_aborts(None, []))
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

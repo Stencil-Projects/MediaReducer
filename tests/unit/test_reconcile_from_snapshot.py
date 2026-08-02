@@ -177,6 +177,31 @@ with db.connect(E.DB_FILE) as conn:
 check("the refreshed protection fact is persisted to the snapshot",
       _snap[P[0]]["protected"] is True)
 
+# ── A monitored-path change is not something a snapshot can be re-read for ──
+# The snapshot holds what was on disk under the paths it was SCANNED under. Left
+# unchecked, adding a branch produced a plan that could not see it — and then
+# write_plan_to_queue stamped that plan with the CURRENT paths, so it read as
+# fresh: Cleanup un-ghosted, arming was allowed, and the fast path deleted from a
+# plan blind to part of the library.
+_saved_dirs = E.MONITOR_DIRS
+try:
+    seed([movie("/lib/A.mkv", 0), movie("/lib/B.mkv", 0), movie("/lib/C.mkv", 0)],
+         queue={})
+    E.MONITOR_DIRS = ["/lib", "/lib2"]           # a branch added since that scan
+    E.reconcile_from_snapshot(trigger="paths changed")
+    _doc = db.read_pending_doc(E.DB_FILE)
+    check("a monitored-path change leaves the queue alone", not _doc.get("entries"))
+    check("...and does not stamp a plan the snapshot cannot back",
+          not _doc.get("monitor_dirs"))
+finally:
+    E.MONITOR_DIRS = _saved_dirs
+
+# The same reconcile with the paths unchanged still does its job, so the guard
+# above is a path check and not an outage.
+seed([movie("/lib/A.mkv", 0), movie("/lib/B.mkv", 0), movie("/lib/C.mkv", 0)], queue={})
+E.reconcile_from_snapshot(trigger="unchanged paths")
+check("unchanged paths still rebuild the queue", len(queue_now()) == 3)
+
 # ══ 7. No snapshot → the reconcile is a safe no-op ═══════════════════════════════
 _dbstate.reset(E.DB_FILE)
 seed([])                      # empty snapshot

@@ -1,7 +1,7 @@
 """Redline-only mode (the explicit REDLINE_ONLY_MODE flag — the Headroom
 checkbox unticked — with a Redline floor): validation rules,
 the always-on Simulate/plan gate, the standing preview queue that never
-auto-clears, and its "deletes when Redline hits" display."""
+auto-clears, and how its dateless entries read in the queue."""
 import atexit
 import json
 import shutil
@@ -179,7 +179,9 @@ finally:
     A._simulate_evidence = _orig_evidence
 
 # ── The preview queue: display + never auto-cleared while satisfied ──────────
-with tempfile.TemporaryDirectory() as td:
+# ignore_cleanup_errors: this is OUTPUT_DIR, and a background thread can
+# recreate logs/ in it between rmtree's walk and its rmdir (ENOTEMPTY).
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     _state["cfg"] = dict(BASE, **RL_CFG, OUTPUT_DIR=td)
     now = time.time()
     _dbstate.seed(Path(td, "mediareducer.db"), {"pending": {"schema": 1, "entries": {
@@ -194,8 +196,11 @@ with tempfile.TemporaryDirectory() as td:
     entries = A.pending_deletion_entries()
     check("mode: entries keep the queue's own (deletion) order",
           [e["title"] for e in entries] == ["Worst", "Next"])
+    # The row carries its RANK and nothing else about the schedule: the window
+    # says the ordering once, and the Deletes column reads "at Redline" off
+    # marked + no delete_on. Those are the facts to hold, not a sentence.
     check("mode: entries read as Redline-order, not dates",
-          entries[0]["when"] == "#1 — deletes when Redline hits"
+          entries[0]["when"] == "#1"
           and entries[0]["marked"] is False
           and entries[0]["days_remaining"] is None and entries[0]["delete_on"] is None)
 
@@ -205,10 +210,8 @@ with tempfile.TemporaryDirectory() as td:
                                        "free_gb": 200.0 - 5e-7, "pct_used": 80.0}
     entries = A.pending_deletion_entries()
     check("mode breached: deficit prefix is marked, rest queued",
-          entries[0]["marked"] is True
-          and entries[0]["when"] == "#1 — deletes on the next Cleanup (Redline breached)"
-          and entries[1]["marked"] is False
-          and entries[1]["when"] == "#2 — deletes when Redline hits")
+          entries[0]["marked"] is True and entries[0]["when"] == "#1"
+          and entries[1]["marked"] is False and entries[1]["when"] == "#2")
     A.disk_stats = _orig_ds
     f = A.pending_delete_forecast()
     check("mode: forecast schedules nothing",
@@ -310,7 +313,7 @@ finally:
 
 # ── Rebuild decision: a live run that consumed queue entries tops it back up ──
 _orig_pp = A.progress_path
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     _state["cfg"] = dict(BASE, **RL_CFG, OUTPUT_DIR=td)
     A.progress_path = lambda: Path(td, "progress.json")
     try:

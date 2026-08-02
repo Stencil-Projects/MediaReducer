@@ -877,6 +877,12 @@
        buttons in the page's own style block, since it covers both. */
     .rp-stat.log-jumpable {
       cursor: pointer;
+      /* A strip at the bottom for the corner arrow. Without it the arrow is
+         absolutely positioned over the value, and a five- or six-figure count
+         ("12,880") reaches it — these columns are a quarter of a phone screen
+         wide and the value is the widest thing in them. Grid stretch keeps the
+         un-jumpable boxes the same height. */
+      padding-bottom: 22px;
       border-color: color-mix(in srgb, var(--border-strong) 78%, transparent);
       background: color-mix(in srgb, var(--surface-2) 82%, transparent);
       box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
@@ -2150,12 +2156,22 @@ async function loadDeletedHistory() {
                           imminentCount);
     const reclaimed = _formatReclaimedBytes(d.reclaimed_bytes || 0, d.reclaimed_label || '');
     if (summary) {
+      // Said once, here. The rows carry a rank and nothing else about the
+      // ordering — repeating "next in line if more space is needed" down two
+      // thousand rows is the same sentence in the column a reader is scanning
+      // for what's different about each movie.
       summary.textContent = _dhView === 'marked'
         ? (imminentCount
             ? (_redlineOnly
-                ? `Redline is breached — ${imminentCount} marked to delete on the next Cleanup, ${marked.length - imminentCount} eligible behind them.`
-                : `${imminentCount} marked for deletion · ${marked.length - imminentCount} more eligible in deletion order.`)
-            : `${marked.length} ${marked.length === 1 ? 'movie is' : 'movies are'} eligible in deletion order — none currently marked.`)
+                ? `Redline is breached — ${imminentCount} marked to delete on the next Cleanup, ${marked.length - imminentCount} eligible behind them in the order they would go.`
+                : `${imminentCount} marked for deletion · ${marked.length - imminentCount} more eligible, in the order they would go if more space is needed.`)
+            : (_redlineOnly
+                // Redline-only above the floor marks nothing, so every row's
+                // Deletes cell reads "—". Without this the one window that
+                // exists to say WHEN these go would not mention the Redline at
+                // all, in the mode whose whole premise is that it is the trigger.
+                ? `${marked.length} ${marked.length === 1 ? 'movie is' : 'movies are'} eligible, in the order they would go when free space hits the Redline floor.`
+                : `${marked.length} ${marked.length === 1 ? 'movie is' : 'movies are'} eligible, in the order they would go if space is needed — none marked yet.`))
         : `${count} ${count === 1 ? 'movie has' : 'movies have'} been pruned · ${reclaimed} reclaimed.`;
     }
     // One list per view (both already come newest-first / in plan order from
@@ -2439,6 +2455,13 @@ function _updateBreachNote() {
     const ev = _markedEvent || {};
     const evGb = prGbAmount((ev.bytes || 0) / 1e9);
     const evN = `${ev.count} movie${ev.count === 1 ? '' : 's'}`;
+    // Being armed is not the same as being able to run. A media server that
+    // stops answering leaves the mode on Automatic Cleanup while the server
+    // sends next_run_time=null and the countdown right beside this note reads
+    // "No run scheduled" — so the conditional wording the non-deleting modes get
+    // is the honest one here too. Without it the same card said no run was
+    // scheduled AND that hundreds of GB of films delete within ~15 minutes.
+    const willRunItself = !_paused && !_schedOff && _cleanupOk && !!_nextRunTime;
     if (_safetyBlocked) {
       // Debug Cleanup ignores the safety percentage (it deletes nothing), so
       // don't tell the user a cleanup can't run while the yellow button is live.
@@ -2456,24 +2479,24 @@ function _updateBreachNote() {
     } else if (d.redline > 0) {
       // Redline frees only back to its floor (never up to the headroom target),
       // ignoring the daily window and the deletion delay.
-      text = (_paused || _schedOff)
-        ? `Redline hit — a run would free ~${prGbAmount(d.redline)} GB to clear the floor.`
-        : `Redline hit — the next check (within ~15 min) frees ~${prGbAmount(d.redline)} GB back above the floor.`;
+      text = willRunItself
+        ? `Redline hit — the next check (within ~15 min) frees ~${prGbAmount(d.redline)} GB back above the floor.`
+        : `Redline hit — a run would free ~${prGbAmount(d.redline)} GB to clear the floor.`;
     } else if (!ev.count) {
       // Nothing marked — Simulate writes the plan, and deletion (automatic OR the
       // manual button) stays ghosted over limits until it exists.
       text = `Over space limits — run Simulate to mark the ~${prGbAmount(d.max)} GB deletion plan.`;
     } else if (!ev.on) {
       // The event batch is ripe now: the next deleting run removes exactly it.
-      text = (_paused || _schedOff)
-        ? `Over space limits — a run would delete ${evN}, ${evGb} GB.`
-        : `Over space limits — ${evN} (${evGb} GB) delete${ev.count === 1 ? 's' : ''} ${timing}.`;
+      text = willRunItself
+        ? `Over space limits — ${evN} (${evGb} GB) delete${ev.count === 1 ? 's' : ''} ${timing}.`
+        : `Over space limits — a run would delete ${evN}, ${evGb} GB.`;
     } else {
       // Future-dated batch: eligibility starts that calendar day; an armed
       // scheduler deletes it at the daily run time.
-      text = (_paused || _schedOff)
-        ? `Over space limits — next deletion ${ev.on}: ${evN}, ${evGb} GB.`
-        : `Over space limits — ${evN} (${evGb} GB) delete${ev.count === 1 ? 's' : ''} ${ev.on} at ${_runTimeLabel()}.`;
+      text = willRunItself
+        ? `Over space limits — ${evN} (${evGb} GB) delete${ev.count === 1 ? 's' : ''} ${ev.on} at ${_runTimeLabel()}.`
+        : `Over space limits — next deletion ${ev.on}: ${evN}, ${evGb} GB.`;
     }
     el.textContent = text;
     el.hidden = false;

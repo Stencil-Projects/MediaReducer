@@ -89,10 +89,15 @@ const bar = () => p.evaluate(() => {
 // ── The trigger figures are computed, not guessed ───────────────────────────
 await arm();
 let r = await rows();
-check('an armed threshold states the figure free space must reach',
-      /falls to 500 GB/.test(r['ts-headroom'].note), r['ts-headroom'].note);
+// Headroom fires on USED space (used >= total - target) and Redline on FREE
+// space, which is what the engine does — and on a filesystem holding blocks
+// back the two axes are not interchangeable.
+check('an armed Headroom states the used-space figure that fires it',
+      /reaches 500\.0 GB/.test(r['ts-headroom'].note), r['ts-headroom'].note);
 check('...and how far away that is',
       r['ts-headroom'].state === '200.0 GB to go', r['ts-headroom'].state);
+check('an armed Redline still states the free-space figure',
+      /falls to 200 GB/.test(r['ts-redline'].note), r['ts-redline'].note);
 check('the cap is measured against the library, not the disk',
       /grows past 9,000 GB/.test(r['ts-cap'].note) && r['ts-cap'].state === '1,000.0 GB to go',
       r['ts-cap'].note + ' | ' + r['ts-cap'].state);

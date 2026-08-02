@@ -92,7 +92,9 @@ check("engine floors an out-of-range 0 to the 1-day minimum (defensive)",
 
 # A config.json holding a below-1 value locks the app out via the standard hand-edit
 # guard, rather than being silently reinterpreted at load.
-with tempfile.TemporaryDirectory() as td:
+# ignore_cleanup_errors: this is OUTPUT_DIR, and a background thread can
+# recreate logs/ in it between rmtree's walk and its rmdir (ENOTEMPTY).
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     cfg_path = Path(td, "config.json")
     cfg_path.write_text(json.dumps({"DELETE_DELAY_DAYS": 0}), encoding="utf-8")
     _orig_cfg_path = A.CONFIG_PATH
@@ -105,7 +107,7 @@ with tempfile.TemporaryDirectory() as td:
           any(i["key"] == "DELETE_DELAY_DAYS" for i in A._CONFIG_FILE_ISSUES))
 
 # ── Queue composition for the history modal ─────────────────────────────────
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     _state["cfg"] = dict(BASE, OUTPUT_DIR=td, DELETE_DELAY_DAYS=7)
     now = time.time()
     _dbstate.seed(Path(td, "mediareducer.db"), {"pending": {"schema": 1, "entries": {
@@ -124,10 +126,21 @@ with tempfile.TemporaryDirectory() as td:
           [e["title"] for e in entries] == ["Movie B", "Movie A", "Movie C"])
     by_title = {e["title"]: e for e in entries}
     check("days remaining honors the current delay", by_title["Movie A"]["days_remaining"] == 6)
+    # The dates themselves, not a sentence about them: the queue window renders
+    # its Deletes column from days_remaining and delete_on, and the rows no
+    # longer restate the schedule in prose.
     check("expired mark reads as deletable now",
-          by_title["Movie B"]["days_remaining"] == 0 and "deletable now" in by_title["Movie B"]["line"])
+          by_title["Movie B"]["days_remaining"] == 0)
     check("pending mark carries its eligibility date",
-          f"deletable from {by_title['Movie A']['delete_on']}" in by_title["Movie A"]["line"])
+          bool(by_title["Movie A"]["delete_on"]) and by_title["Movie A"]["days_remaining"] == 6)
+    # The rank is the row's place in the list you are reading, so it has to be
+    # stamped AFTER the sort that floats marked entries to the top. Numbering
+    # the file's order instead made the column count sideways — #4, #2, #1 — in
+    # a table whose only claim is that it is in order.
+    check("rank counts down the list as displayed",
+          [e["when"] for e in entries] == ["#1", "#2", "#3"])
+    check("...and the joined line carries the same rank",
+          all(f" | {e['when']} | " in e["line"] for e in entries))
     # The clocked-marks count gates the Config page's delay-reset button.
     check("forecast counts the clocked marks",
           A.pending_delete_forecast().get("marked") == 3)
@@ -162,7 +175,7 @@ _orig_lib = A.library_stats
 A.disk_stats = lambda: {"total_gb": 1000, "used_gb": 100, "free_gb": 900, "pct_used": 10}
 A.library_stats = lambda: {"library_gb": 100.0}
 try:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         def _write_queue():
             _dbstate.seed(Path(td, "mediareducer.db"), {"pending": {"schema": 1, "entries": {
                 "/library/movies/A/A.mkv": {"title": "Movie A", "marked_at": time.time()},
@@ -217,7 +230,7 @@ finally:
 _orig_rscf = A._read_saved_config_file
 _raw_file = {"value": None}   # None → the function falls back to the passed cfg
 A._read_saved_config_file = lambda: _raw_file["value"]
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     _state["cfg"] = dict(BASE, OUTPUT_DIR=td, HEADROOM_GB=500, REDLINE_GB=None,
                          MAX_LIBRARY_GB=2000, MONITOR_DIRS=["/library/movies"],
                          GRACE_PERIOD_DAYS=30, SCORE_BALANCE=50,
@@ -325,7 +338,7 @@ code, cfg = save({"RUN_MODE": "headroom", "DELETE_DELAY_DAYS": 7})
 check("within limits the library snapshot proves a Simulate ran and arms", code == 200)
 
 # ── Changing thresholds while ARMED force-pauses Automatic Cleanup instead of rejecting ───
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     # Arm through the handler itself so the saved config's connection fields
     # match the payload exactly — otherwise the API-change force-pause fires
     # first and masks the threshold pause under test.
@@ -389,7 +402,7 @@ with tempfile.TemporaryDirectory() as td:
     A._deletion_limits_exceeded = lambda *a, **k: False   # restore for later cases
 
 # ── Startup burn of the daily window ─────────────────────────────────────────
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     _state["cfg"] = dict(BASE, OUTPUT_DIR=td)
     today = time.strftime("%Y-%m-%d")
     dbp = Path(td, "mediareducer.db")

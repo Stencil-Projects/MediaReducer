@@ -3,6 +3,7 @@ the marked queue in plan order — no full library rescan — re-verifying only 
 cheap high-stakes facts (monitored root, fresh protection fetch). Any doubt
 falls back to the full scan."""
 import json
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -47,6 +48,10 @@ def _pending():
     """The pending doc ({entries, plan_config, monitor_dirs}) from the store."""
     return engine.load_cache().get("pending", {})
 
+# Kept before the stubs replace them: the server-selection gate is asserted on
+# the real fetchers near the end of this file.
+_REAL_FETCH_PROTECTED = engine.fetch_protected_paths
+_REAL_JF_PROTECTED = engine._jellyfin_protected_items
 engine.fetch_protected_paths = lambda: ([], None, None, None)
 engine._jellyfin_protected_items = lambda: (set(), set(), set(), set())
 engine.RUN_MODE = "headroom"
@@ -66,7 +71,9 @@ engine._fresh_watch_data = lambda ids: {
     for i in ids}
 
 # ── Plan-currency stamp ──────────────────────────────────────────────────────
-with tempfile.TemporaryDirectory() as td:
+# ignore_cleanup_errors: this is OUTPUT_DIR, and a background thread can
+# recreate logs/ in it between rmtree's walk and its rmdir (ENOTEMPTY).
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     setup(td)
     check("current stamp passes", engine._plan_stamp_current() is True)
     engine._PLAN_CONFIG_RAW["SCORE_BALANCE"] = 80        # rules changed since sim
@@ -76,7 +83,7 @@ with tempfile.TemporaryDirectory() as td:
     check("changed paths stale the stamp", engine._plan_stamp_current() is False)
 
 # ── Fast path: deletes in plan order, stops at the target, trims marks ───────
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     handled = engine._redline_fast_path(5 * MB)          # needs 3 of the 2 MB files
     deleted = [p.name for p in paths if not p.exists()]
@@ -100,7 +107,7 @@ with tempfile.TemporaryDirectory() as td:
 # The user deleted the movie manually since the queue was built. The dead mark
 # must be dropped from the queue (not lingered), and the next in line must be
 # consumed so the target is still covered — no fallback to the full scan.
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     paths[0].unlink()                                    # Movie A gone from disk
     handled = engine._redline_fast_path(4 * MB)          # needs 2 → A dead, B/C go
@@ -113,7 +120,7 @@ with tempfile.TemporaryDirectory() as td:
 
 # ── Fast path: a dead mark is dropped from the cache even when coverage falls
 #    short and the run falls back to the full scan ─────────────────────────────
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     paths[1].unlink()                                    # Movie B gone from disk
     handled = engine._redline_fast_path(50 * MB)         # queue can't cover → fall back
@@ -125,8 +132,38 @@ with tempfile.TemporaryDirectory() as td:
           and [str(p) for p in (paths[0], paths[2], paths[3])]
               == [k for k in data["entries"] if k != str(paths[1])])
 
+# ── Fast path: an unmounted branch is not "already gone" ─────────────────────
+# The gate above passes as soon as ANY monitored root is up, so one array of
+# several dropping out still reaches the work loop — and there every file on it
+# fails exists(). Purging those marks would take that whole branch out of the
+# queue AND the library snapshot, reading a mount outage as the user having
+# removed half their library, and the rebuilt plan would then be stamped current
+# while blind to it.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    paths = setup(td)
+    movies = Path(td, "library", "movies")
+    second = Path(td, "library", "movies4k")             # a second monitored branch
+    d = second / "Movie E"; d.mkdir(parents=True)
+    e_file = d / "Movie E.mkv"; e_file.write_bytes(b"\0" * (2 * MB))
+    engine.MONITOR_DIRS = [str(movies), str(second)]
+    engine._RESOLVED_MONITORED_ROOTS = None
+    entries = _pending()["entries"]
+    entries[str(e_file)] = {"title": "Movie E", "score": 0.5,   # worst → goes first
+                            "size_bytes": 2 * MB, "marked_at": 1000000000}
+    engine.save_pending(entries, stamp_thresholds=True)
+    shutil.rmtree(second)                                # …and the mount drops
+    engine._RESOLVED_MONITORED_ROOTS = None
+    handled = engine._redline_fast_path(2 * MB)
+    kept = _pending()["entries"]
+    check("a mark whose branch is unmounted keeps its place in the queue",
+          str(e_file) in kept)
+    check("...and the emergency is still served from the branch that is mounted",
+          handled is True and not paths[0].exists())
+    engine.MONITOR_DIRS = [str(movies)]
+    engine._RESOLVED_MONITORED_ROOTS = None
+
 # ── Fast path: a movie watched since it was marked is spared, next in line used
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     FRESH_PLAYS.clear(); FRESH_PLAYS["Movie A"] = 3      # A watched after marking
     try:
@@ -141,7 +178,7 @@ with tempfile.TemporaryDirectory() as td:
           list(data["entries"]) == [str(paths[0])])
 
 # ── Fast path: if the fresh fetch is unavailable, fall back to the full scan ──
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     _fwd = engine._fresh_watch_data
     engine._fresh_watch_data = lambda ids: (_ for _ in ()).throw(RuntimeError("api down"))
@@ -152,13 +189,13 @@ with tempfile.TemporaryDirectory() as td:
         engine._fresh_watch_data = _fwd
 
 # ── Fallbacks: stale plan, protected marks, thin queue, protection failure ───
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     engine._PLAN_CONFIG_RAW["GRACE_PERIOD_DAYS"] = 7     # stale vs the stamp
     check("stale plan falls back to the full scan",
           engine._redline_fast_path(2 * MB) is False and all(p.exists() for p in paths))
 
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     engine.fetch_protected_paths = lambda: ([str(paths[0])], None, None, None)
     handled = engine._redline_fast_path(3 * MB)          # A protected → B, C go
@@ -167,12 +204,12 @@ with tempfile.TemporaryDirectory() as td:
           and not paths[1].exists() and not paths[2].exists() and paths[3].exists())
     engine.fetch_protected_paths = lambda: ([], None, None, None)
 
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     check("queue too thin for the target falls back",
           engine._redline_fast_path(50 * MB) is False and all(p.exists() for p in paths))
 
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     def _boom(): raise RuntimeError("api down")
     engine.fetch_protected_paths = _boom
@@ -182,7 +219,7 @@ with tempfile.TemporaryDirectory() as td:
 
 # ── Unlink failures: route around them; if NOTHING deletes, fall back ────────
 _orig_unlink = engine.Path.unlink
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     def _deny_a(self, *a, **k):
         if self.name == "Movie A.mkv":
@@ -200,7 +237,7 @@ with tempfile.TemporaryDirectory() as td:
     check("failed file keeps its mark; deleted ones trimmed",
           list(data["entries"]) == [str(paths[0]), str(paths[3])])
 
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     def _deny_movies(self, *a, **k):
         if self.name.endswith(".mkv"):
@@ -216,7 +253,7 @@ with tempfile.TemporaryDirectory() as td:
 
 # ── Jellyfin favorites: re-fetched fresh, favorited marks are skipped ────────
 _fav_real = engine._jellyfin_favorite_paths
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     engine._jellyfin_favorite_paths = lambda: {str(paths[0])}   # A favorited post-mark
     try:
@@ -242,10 +279,40 @@ finally:
     engine.USE_JELLYFIN, engine.PROTECT_JELLYFIN_FAVORITES = _jf_saved
     engine._jellyfin_request = _req_saved
 
+# ── A deselected server's leftover collection names protect nothing ──────────
+# Unticking a server does not clear its protected-collection names — nothing
+# does — so every fetch after that migration asked a server the user turned off
+# and aborted the run. The full scan already declares that state inert; the
+# fetchers self-gate so the queue-based callers (this fast path, the 15-minute
+# upkeep, the Debug Cleanup preview) cannot forget it.
+_gate_saved = (engine.USE_PLEX, engine.USE_JELLYFIN,
+               engine.PROTECTED_COLLECTIONS, engine.JELLYFIN_PROTECTED_COLLECTIONS)
+_req_saved = engine._jellyfin_request
+engine._jellyfin_request = _no_api
+try:
+    engine.USE_PLEX, engine.USE_JELLYFIN = False, False
+    engine.PROTECTED_COLLECTIONS = {"Kids Movies"}
+    engine.JELLYFIN_PROTECTED_COLLECTIONS = {"Keep Forever"}
+    # BaseException, not Exception: ungated, these abort with SystemExit — which
+    # would take this test file down with it instead of reporting a failure.
+    def gated(fn):
+        try:
+            return fn() == (set(), set(), set(), set())
+        except BaseException:
+            return False
+    check("a deselected Plex's leftover collections are not fetched",
+          gated(_REAL_FETCH_PROTECTED))
+    check("a deselected Jellyfin's leftover collections are not fetched",
+          gated(_REAL_JF_PROTECTED))
+finally:
+    (engine.USE_PLEX, engine.USE_JELLYFIN,
+     engine.PROTECTED_COLLECTIONS, engine.JELLYFIN_PROTECTED_COLLECTIONS) = _gate_saved
+    engine._jellyfin_request = _req_saved
+
 # ── Stop (SIGTERM → SystemExit) during the protection fetch ends the run ─────
 # It must propagate — never be treated as "protection unverifiable", which
 # would fall back to a FULL SCAN that keeps deleting after the user hit Stop.
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     def _stop(): raise SystemExit(143)
     _fp_saved = engine.fetch_protected_paths
@@ -262,7 +329,7 @@ with tempfile.TemporaryDirectory() as td:
         engine.fetch_protected_paths = _fp_saved
 
 # ── deleted.log write failure must not kill the run mid-deletion ─────────────
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)
     _dl_saved = engine.DELETED_LOG
     engine.DELETED_LOG = engine.OUTPUT_DIR    # open(dir, "a") raises IsADirectoryError
@@ -283,7 +350,7 @@ with tempfile.TemporaryDirectory() as td:
 # its clock fresh, and a clocked entry keeps its running age.
 _hr_saved = (engine.HEADROOM_GB, engine.REDLINE_GB, engine.REDLINE_ONLY_MODE)
 try:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         paths = setup(td)
         engine.HEADROOM_GB, engine.REDLINE_GB = 0, 200          # redline-only
         engine.REDLINE_ONLY_MODE = True
@@ -316,7 +383,7 @@ _radarr_calls = []
 _cr_saved = engine.cleanup_radarr
 engine.cleanup_radarr = lambda c: _radarr_calls.append((c.get("title"), c.get("tmdb_id"), c.get("section_id")))
 try:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         paths = setup(td)
         d = _pending()
         for i, k in enumerate(d["entries"]):             # stamp Radarr identity
@@ -328,7 +395,7 @@ try:
               handled is True and len(_radarr_calls) == 2
               and _radarr_calls[0][1] == 1000 and _radarr_calls[0][2] == 1
               and _radarr_calls[1][1] == 1001)
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         paths = setup(td)
         _radarr_calls.clear()
         engine._redline_fast_path(3 * MB)                # default: Redline emergency
@@ -340,7 +407,7 @@ finally:
 # ── write_plan_to_queue stores the Radarr identity for the incremental delete ──
 _hr2 = (engine.HEADROOM_GB, engine.REDLINE_GB, engine.REDLINE_ONLY_MODE)
 try:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         paths = setup(td)
         engine.HEADROOM_GB, engine.REDLINE_GB, engine.REDLINE_ONLY_MODE = 0, 200, True
         cand = {"path": paths[0], "title": "Movie A", "retention_score": 1.0,
@@ -352,13 +419,37 @@ try:
 finally:
     engine.HEADROOM_GB, engine.REDLINE_GB, engine.REDLINE_ONLY_MODE = _hr2
 
+# ── …and the live full scan must not blank it again on its way out ───────────
+# A live full-scan Cleanup ends by replacing the WHOLE queue from its own
+# candidate list. Rebuilding those entries without the identity left every later
+# incremental delete unlinking the file while Radarr kept the movie monitored
+# and re-grabbed it — logged once as "no TMDB ID available", surfaced nowhere.
+# That rebuild is a closure inside main() with no seam to call, so the guard is
+# structural: both writers must still stamp both fields.
+import ast  # noqa: E402
+
+_tree = ast.parse((Path(__file__).resolve().parents[2] / "engine.py").read_text())
+def _assigned_keys(fn_name):
+    fn = next((n for n in ast.walk(_tree)
+               if isinstance(n, ast.FunctionDef) and n.name == fn_name), None)
+    if fn is None:
+        return None                      # not found: reported as a failure, not a pass
+    return {t.slice.value for n in ast.walk(fn) if isinstance(n, ast.Assign)
+            for t in n.targets
+            if isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)}
+
+for _writer in ("_full_queue", "write_plan_to_queue"):
+    _keys = _assigned_keys(_writer)
+    check(f"{_writer} stamps the Radarr identity on its queue entries",
+          _keys is not None and {"tmdb_id", "section_id"} <= _keys)
+
 # ── File size optimization in the fast path (the user's scenario) ─────────────
 # A group of near-tied-score movies sits at the deletion boundary: three 1 MB
 # files and one 5.5 MB file, all within NEAR_TIE_PTS. Target 5 MB. Strict order
 # would delete all three small ones and still fall short; File size optimization
 # deletes the single 5.5 MB file that covers the target on its own and SPARES the
 # three small near-ties.
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     lib = Path(td, "library"); movies = lib / "movies"
     out = Path(td, "out"); out.mkdir(parents=True, exist_ok=True)
     engine.LIBRARY_ROOT = lib
@@ -402,13 +493,50 @@ with tempfile.TemporaryDirectory() as td:
           not any(fpaths[n].exists() for n in ("S1", "S2", "S3", "BIG")))
     engine.NEAR_TIE_PTS = 2.0
 
+# ── A score tie deletes in PLAN order, not alphabetically ────────────────────
+# Ties are the normal case, not a corner: with the balance all watch history,
+# every unwatched movie past the staleness window scores the same. The queue
+# stores none of the tiebreak inputs (never-watched, IMDb rating, added date,
+# size), so its ORDER is the only record of what the plan decided — and a second
+# sort key in the fast path silently replaces that decision with an alphabetical
+# one, deleting a movie the queue does not show at the top.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    lib = Path(td, "library"); movies = lib / "movies"
+    out = Path(td, "out"); out.mkdir(parents=True, exist_ok=True)
+    engine.LIBRARY_ROOT = lib
+    engine.CHECK_PATH = lib
+    engine.MONITOR_DIRS = [str(movies)]
+    engine._RESOLVED_MONITORED_ROOTS = None
+    _tmpout.redirect_engine(engine, out)
+    engine.NEAR_TIE_PTS = None            # size optimization off: strict plan order
+    engine._PLAN_CONFIG_RAW = {k: None for k in engine._PLAN_CONFIG_KEYS}
+    engine._PLAN_CONFIG_RAW.update({"HEADROOM_GB": 0, "REDLINE_GB": 200,
+                                    "REDLINE_ONLY_MODE": True, "NEAR_TIE_PTS": None})
+    # The plan put Zodiac first (added years earlier). Its title sorts LAST, so
+    # an alphabetical tiebreak takes Mud instead.
+    tied = {}
+    for name in ("Zodiac", "Mud"):
+        d = movies / name; d.mkdir(parents=True)
+        f = d / f"{name}.mkv"; f.write_bytes(b"\0" * (2 * MB))
+        tied[name] = f
+    engine.save_pending(
+        {str(tied["Zodiac"]): {"title": "Zodiac", "score": 0.0,
+                               "size_bytes": 2 * MB, "marked_at": None},
+         str(tied["Mud"]):    {"title": "Mud", "score": 0.0,
+                               "size_bytes": 2 * MB, "marked_at": None}},
+        stamp_thresholds=True)
+    engine._redline_fast_path(2 * MB)     # covers exactly one of them
+    check("a score tie deletes in plan order, not alphabetical order",
+          not tied["Zodiac"].exists() and tied["Mud"].exists())
+    engine.NEAR_TIE_PTS = 2.0
+
 # ── Stored queue in NON-score order still deletes worst-first ────────────────
 # The queue is written in file-size-optimized order by Simulate (NOT pure score
 # order). _pop_next_deletion assumes score-ascending input, so the fast path must
 # re-sort worst-first before selecting — otherwise the near-tie window forms from
 # a high-scored head and would delete a GOOD movie over the WORST ones. (Regression
 # for the sim-vs-debug-live log mismatch.)
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     lib = Path(td, "library"); movies = lib / "movies"
     out = Path(td, "out"); out.mkdir(parents=True, exist_ok=True)
     engine.LIBRARY_ROOT = lib

@@ -119,7 +119,11 @@ if [[ "$MODE" == "--integration" || "$MODE" == "--e2e" ]]; then
     if curl -sf "http://127.0.0.1:$3/api/status" >/dev/null 2>&1; then
       echo "ERROR: something is already serving http://127.0.0.1:$3" >&2
       echo "       Stop it, or set MR_E2E_PORT to a free base port." >&2
-      exit 1
+      # return, not exit: boot_app runs inside "$( )", where exit kills only the
+      # subshell — the suite carried on with an empty PID and tested against
+      # whatever was already on the port, which is the exact orphan-instance
+      # confusion this guard exists to stop. Callers check the status.
+      return 1
     fi
     # Redirect the app's own output to a log so command substitution captures
     # ONLY the echoed PID, not Flask's startup chatter.
@@ -136,7 +140,7 @@ PY
       if ! kill -0 "$pid" 2>/dev/null; then
         echo "ERROR: the app for $url exited during boot:" >&2
         tail -5 "$TMP/app-$3.log" >&2
-        exit 1
+        return 1
       fi
       # Ready means the startup storage refresh has finished, not just that the
       # port answers. /api/status replies about a quarter-second before that
@@ -165,7 +169,7 @@ PY
   export MEDIAREDUCER_LIBRARY="$TMP/e2e/library"
   export MEDIAREDUCER_CONFIG="$TMP/e2e/config/config.json"
   export MR_BASE_URL="http://127.0.0.1:$PORT"
-  APP_PID="$(boot_app "$MEDIAREDUCER_CONFIG" "$TMP/e2e/library" "$PORT")"
+  APP_PID="$(boot_app "$MEDIAREDUCER_CONFIG" "$TMP/e2e/library" "$PORT")" || exit 1
   run e2e_fullrun_plex node tests/e2e/e2e_fullrun.mjs
   # The CLI (cli.py) drives the SAME running service over HTTP — smoke it against
   # this booted app (after the fullrun, so its config edits don't perturb the run).
@@ -173,13 +177,13 @@ PY
 
   python3 tests/fixtures/make_fixtures.py "$TMP/e2e-jf" jellyfin >/dev/null
   JF_PORT=$((PORT+1))
-  JF_APP_PID="$(boot_app "$TMP/e2e-jf/config/config.json" "$TMP/e2e-jf/library" "$JF_PORT")"
+  JF_APP_PID="$(boot_app "$TMP/e2e-jf/config/config.json" "$TMP/e2e-jf/library" "$JF_PORT")" || exit 1
   MR_BASE_URL="http://127.0.0.1:$JF_PORT" MR_E2E_SECOND_RUN=0 \
     run e2e_fullrun_jellyfin node tests/e2e/e2e_fullrun.mjs
 
   python3 tests/fixtures/make_fixtures.py "$TMP/e2e-both" both >/dev/null
   BOTH_PORT=$((PORT+2))
-  BOTH_APP_PID="$(boot_app "$TMP/e2e-both/config/config.json" "$TMP/e2e-both/library" "$BOTH_PORT")"
+  BOTH_APP_PID="$(boot_app "$TMP/e2e-both/config/config.json" "$TMP/e2e-both/library" "$BOTH_PORT")" || exit 1
   MR_BASE_URL="http://127.0.0.1:$BOTH_PORT" MR_E2E_SECOND_RUN=0 \
     run e2e_fullrun_both node tests/e2e/e2e_fullrun.mjs
 
@@ -195,6 +199,8 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_thresholds  node tests/e2e/e2e_thresholds.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_status_pills node tests/e2e/e2e_status_pills.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_server_toggle node tests/e2e/e2e_server_toggle.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_mode_stale   node tests/e2e/e2e_mode_stale.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_breach_note  node tests/e2e/e2e_breach_note.mjs
 
       # A Debug-mode dashboard (its own app + isolated OUTPUT_DIR): the Cleanup
       # button morphs to Debug Cleanup, which must stay enabled through status
@@ -212,7 +218,7 @@ PY
       # +33, not +3: PORT+3 (5060 by default) is SIP, which Chromium blocks as
       # an "unsafe port" (net::ERR_UNSAFE_PORT). Keep clear of reserved ports.
       DBG_PORT=$((PORT+33))
-      DBG_APP_PID="$(boot_app "$DBG_CFG" "$TMP/e2e/library" "$DBG_PORT")"
+      DBG_APP_PID="$(boot_app "$DBG_CFG" "$TMP/e2e/library" "$DBG_PORT")" || exit 1
       MR_BASE_URL="http://127.0.0.1:$DBG_PORT" run e2e_debuglive_btn node tests/e2e/e2e_debuglive_btn.mjs
       kill "$DBG_APP_PID" 2>/dev/null
       # Countdown wording: drives _updateCountdown through every mode in the

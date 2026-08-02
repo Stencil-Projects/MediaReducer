@@ -17,7 +17,9 @@ def check(name, cond):
     print(("PASS " if cond else "FAIL ") + name)
     ok = ok and cond
 
-with tempfile.TemporaryDirectory() as td:
+# ignore_cleanup_errors: this is OUTPUT_DIR, and a background thread can
+# recreate logs/ in it between rmtree's walk and its rmdir (ENOTEMPTY).
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     cfg_path = Path(td, "config.json")
     cfg_path.write_text(json.dumps({
         "RUN_MODE": "paused", "HEADROOM_GB": 500, "MONITOR_DIRS": ["/library/movies"],
@@ -63,7 +65,7 @@ with tempfile.TemporaryDirectory() as td:
 
 # Missing file (fresh install, pre-onboarding): builds from defaults, no crash,
 # and stays consistent across repeated calls.
-with tempfile.TemporaryDirectory() as td:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     A.CONFIG_PATH = Path(td, "does-not-exist.json")
     try:
         c1 = A.load_config()

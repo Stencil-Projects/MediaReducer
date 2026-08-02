@@ -378,6 +378,58 @@ time.sleep(0.3)
 check("an unreadable progress file alerts with the shared fallback, not a borrowed line",
       len(_errors) == 1 and _errors[0][0] == A.RUN_ENDED_UNEXPECTEDLY)
 
+# The REAL sequence for a killed engine: run_script's worker stamps progress.json
+# terminal and THEN dispatches. The checks above drive the dispatcher directly,
+# so they could not see the app writing its own third variant of "the run
+# failed" a few lines earlier — which is exactly what it was doing.
+check("the app has one sentence for a run that did not report why",
+      "Run failed — see the detailed log." not in Path(A.__file__).read_text())
+_errors.clear()
+(A.output_dir() / "progress.json").write_text(json.dumps({
+    "schema": 1, "status": "running", "phase": "scanning", "message": "Scoring movies"}))
+A._mark_progress_terminal("error", A.RUN_ENDED_UNEXPECTEDLY)
+A._dispatch_run_notifications("headroom", 1, False, scheduled=False)
+time.sleep(0.3)
+check("...and a killed run's alert carries it rather than the step it was on",
+      len(_errors) == 1 and _errors[0][0] == A.RUN_ENDED_UNEXPECTEDLY)
+
+# A NORMAL abort must survive that same marker: the engine already wrote a
+# terminal status, so the marker has to leave its sentence alone.
+_errors.clear()
+(A.output_dir() / "progress.json").write_text(json.dumps({
+    "schema": 1, "status": "error", "phase": "scanning", "stage": "SCORING",
+    "message": "Tautulli stopped answering while reading movie details."}))
+A._mark_progress_terminal("error", A.RUN_ENDED_UNEXPECTEDLY)
+A._dispatch_run_notifications("headroom", 1, False, scheduled=False)
+time.sleep(0.3)
+check("an engine abort's own sentence survives the app's terminal marker",
+      len(_errors) == 1 and _errors[0][0].startswith("Tautulli stopped answering"))
+
+# A run that stops on a bad connection or an invalid threshold RETURNS from
+# run() instead of exiting nonzero. Gating the alert on the exit code left the
+# two failures a user is most likely to hit completely silent, while the
+# dashboard showed the red x for them the whole time.
+_errors.clear()
+_dispatched.clear()
+(A.output_dir() / "progress.json").write_text(json.dumps({
+    "schema": 1, "status": "error", "phase": "checking",
+    "message": "Connection check failed: Tautulli URL is blank."}))
+A._dispatch_run_notifications("headroom", 0, False, scheduled=False)   # exit code ZERO
+time.sleep(0.3)
+check("a run that stopped without a nonzero exit still alerts",
+      len(_errors) == 1 and _errors[0][0].startswith("Connection check failed"))
+check("...and does not also send a run summary", not _dispatched)
+
+# …and a genuinely clean run is unaffected.
+_errors.clear()
+_dispatched.clear()
+(A.output_dir() / "progress.json").write_text(json.dumps({
+    "schema": 1, "status": "done", "phase": "done", "message": "Dry run."}))
+A._dispatch_run_notifications("headroom", 0, False, scheduled=False)
+time.sleep(0.3)
+check("a clean run still summarises and raises no failure alert",
+      not _errors and len(_dispatched) == 1)
+
 # ── A killed run does not name the step it was on as the failure ────────────
 # No terminal write, so progress.json still says "running" with whatever line
 # was in flight. The panel now prints that message AS the failure — red, behind

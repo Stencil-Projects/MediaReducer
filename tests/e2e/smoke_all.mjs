@@ -253,13 +253,39 @@ for (const path of ['/', '/config', '/explorer']) {
         const el = document.getElementById(id);
         return { jumpable: el.classList.contains('log-jumpable'), arrow: arrow(el) };
       };
-      return {
+      // Read the zero-deleted state BEFORE re-rendering: the collision case
+      // below needs a non-zero count, which would make the inert box jumpable
+      // and quietly turn the "no arrow on an inert box" assertion into a
+      // tautology about a box that no longer is one.
+      const state = {
         scan: box('rp-jump-scan'),
         eligible: box('rp-jump-eligible'),
         deletions: box('rp-jump-deletions'),   // 0 deleted — inert
         summary: box('rp-jump-summary'),       // exempt from the count rule
         history: [...document.querySelectorAll('.dashboard-history-btn')].map(arrow),
       };
+
+      // …and it must not be painted over the very number it marks. These
+      // columns are a quarter of a phone screen wide, so a five-figure count is
+      // the widest thing in the box; the arrow sits in a reserved bottom strip.
+      renderProgress({ schema: 1, status: 'done', phase: 'done', mode: 'headroom',
+        stage: 'SUMMARY', scanned: 128800, eligible: 128800, deleted: 12880,
+        bytes_freed: 1.2e12, message: 'done' });
+      const collisions = [];
+      for (const el of document.querySelectorAll('.rp-stat.log-jumpable')) {
+        const b = el.getBoundingClientRect();
+        const cs = getComputedStyle(el, '::after');
+        const a = { right: b.right - parseFloat(cs.right), bottom: b.bottom - parseFloat(cs.bottom) };
+        a.left = a.right - parseFloat(cs.width);
+        a.top = a.bottom - parseFloat(cs.height);
+        const val = el.querySelector('.rp-stat-val');
+        const rng = document.createRange(); rng.selectNodeContents(val);
+        const v = rng.getBoundingClientRect();
+        if (a.left < v.right && a.right > v.left && a.top < v.bottom && a.bottom > v.top) {
+          collisions.push(`${el.id}:${val.textContent}`);
+        }
+      }
+      return { ...state, collisions };
     });
     const bad = [];
     for (const k of ['scan', 'eligible', 'summary']) {
@@ -267,6 +293,7 @@ for (const path of ['/', '/config', '/explorer']) {
     }
     if (g.deletions.jumpable || g.deletions.arrow) bad.push(`inert box wears an arrow ${JSON.stringify(g.deletions)}`);
     if (g.history.length !== 2 || !g.history.every(Boolean)) bad.push(`history buttons ${JSON.stringify(g.history)}`);
+    if (g.collisions.length) bad.push(`arrow painted over the value: ${g.collisions.join()}`);
     const ok = bad.length === 0;
     console.log(`${ok ? 'PASS' : 'FAIL'} corner arrow marks the clickable boxes only ${ok ? '' : JSON.stringify(bad)}`);
     pass = pass && ok;

@@ -33,7 +33,7 @@ E._jellyfin_protected_items = lambda: (set(), set(), set(), set())
 E.USE_JELLYFIN = False
 E.PROTECT_JELLYFIN_FAVORITES = False
 
-def _seed(td):
+def _seed(td, order=(0, 1, 2, 3)):
     lib = Path(td, "library"); movies = lib / "movies"
     paths = []
     for n in ("A", "B", "C", "D"):
@@ -46,9 +46,10 @@ def _seed(td):
     _tmpout.redirect_engine(E, out)
     # Plan: A, B marked (covering count 2); C, D eligible behind them.
     entries = {}
-    for i, p in enumerate(paths):
+    for slot, i in enumerate(order):
+        p = paths[i]
         entries[str(p)] = {"title": p.stem, "score": 1.0, "size_bytes": 1024,
-                           "marked_at": (time.time() - 86400) if i < 2 else None}
+                           "marked_at": (time.time() - 86400) if slot < 2 else None}
     # Snapshot: every movie known unwatched (0 plays), keyed by the same path.
     snap = [E._snapshot_entry(p.stem, 2000, 6.0, 1000, 0, 0, 0, 1_500_000_000, 1024,
                               source_id=p.stem, path=str(p)) for p in paths]
@@ -116,6 +117,19 @@ with tempfile.TemporaryDirectory() as td:
     E.REDLINE_ONLY_MODE = False; E.HEADROOM_GB = 100; E.REDLINE_GB = None
     E._revalidate_pending_marks(0)
     check("within limits, the tick unschedules all marks", _marked(paths) == set())
+
+# ── A score tie is broken by the PLAN's order, not the filesystem path ───────
+# All four score the same — the normal case when the balance is all watch
+# history: everything unwatched and past the staleness window lands together —
+# and the plan put them D, C, B, A. Ordering the covering set by path instead
+# starts the delete-delay clock on movies Simulate never marked, and the two
+# selectors then disagree every cycle, so marks churn and the clocks restart.
+with tempfile.TemporaryDirectory() as td:
+    paths = _seed(td, order=(3, 2, 1, 0))
+    E.REDLINE_ONLY_MODE = False; E.HEADROOM_GB = 100; E.REDLINE_GB = None
+    E._revalidate_pending_marks(DEFICIT_2)
+    check("a score tie keeps the plan's order, not the filesystem's",
+          _marked(paths) == {"Movie D", "Movie C"})
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

@@ -209,13 +209,20 @@ RUN_MODE = "debug_info"
 EXECUTABLE_RUN_MODES = ("debug_info", "debug_sim", "headroom", "debug_cleanup", "reconcile")
 
 # ── Space thresholds ───────────────────────────────────────────────────────────
-HEADROOM_GB = 1000  # free space to maintain (once-per-day cleanup trigger). ~1 TB
-                    # is a reasonable start on a 20 TB array. 0 turns the headroom
-                    # trigger off (a Redline floor and/or a Library Size Cap can
-                    # still drive cleanup).
-REDLINE_ONLY_MODE = False  # the Headroom checkbox unticked: the headroom trigger is
+# DISARMED, matching default_config.json. These are the values a run uses for any
+# key MISSING from config.json — the file reads are all `if "KEY" in cfg` — so an
+# absent key must never arm a trigger. They used to be example values from before
+# the shipped config existed (1000 GB of headroom, a 200 GB Redline floor), which
+# meant a config.json that lost those three lines to a hand-edit, a truncated
+# write, or an install predating them came up armed to delete on a 1 TB free-space
+# target instead of doing nothing. Absent means off; the GUI and the shipped
+# config are what arm anything.
+HEADROOM_GB = 0     # free space to maintain (once-per-day cleanup trigger).
+                    # 0 turns the headroom trigger off (a Redline floor and/or a
+                    # Library Size Cap can still drive cleanup).
+REDLINE_ONLY_MODE = True   # the Headroom checkbox unticked: the headroom trigger is
                            # off (a Redline floor and/or a cap drives cleanup instead)
-REDLINE_GB  = 200   # emergency floor: immediate cleanup when free space drops below
+REDLINE_GB  = None  # emergency floor: immediate cleanup when free space drops below
                     # this, freeing only back to this floor (not the headroom target).
                     # Cannot exceed HEADROOM_GB. None disables.
 
@@ -810,7 +817,7 @@ def validate_connections():
     return ok
 
 
-def _abort_api_failure(message, *, detail=None, phase=None):
+def _abort_api_failure(message, *, detail=None, phase=None, names=()):
     """Fail closed when a selected media API stops answering during a run.
 
     The failed step is taken from the stage that is actually open, not from a
@@ -827,8 +834,12 @@ def _abort_api_failure(message, *, detail=None, phase=None):
         log(f"ABORT detail: {detail}")
     stage = _STAGE_TITLE or "STARTUP"
     log(f"ABORT stage: {stage} — quote this stage name when reporting the failure.")
+    # `names` is whatever of the message is a film title, a path, or a collection
+    # someone named. The dashboard prints the sentence whole; the notifier needs
+    # to know which spans to drop when Movie names is off, and only the call site
+    # that interpolated them can say.
     emit_progress(status="error", phase=phase or _CURRENT_PHASE, stage=stage,
-                  message=message)
+                  message=message, names=[str(n) for n in names if n])
     raise SystemExit(1)
 
 
@@ -979,9 +990,12 @@ def verify_media_path_compatibility():
             log(f"WARN {label} path compatibility: API returned no movie file paths to validate against {LIBRARY_ROOT}.")
             continue
 
-        matched = [raw for raw in raw_paths if resolve_under_library(raw)]
-        if len(matched) != len(raw_paths):
-            unmatched = [raw for raw in raw_paths if not resolve_under_library(raw)]
+        # ONE pass, not a matched-pass and an unmatched-pass: resolve_under_library
+        # touches the filesystem, so two passes can disagree if a mount comes back
+        # between them — and the abort below reads unmatched[0].
+        unmatched = [raw for raw in raw_paths if not resolve_under_library(raw)]
+        matched_n = len(raw_paths) - len(unmatched)
+        if unmatched:
             examples = "; ".join(raw_paths[:3])
             # One example path stays in the message: the whole fix is comparing the
             # path the server reports against what is mounted, so it is the fact
@@ -990,9 +1004,9 @@ def verify_media_path_compatibility():
                 f"{label} reports movie files that are not under {LIBRARY_ROOT}, "
                 f"for example {unmatched[0]}. Check the media mounts, then run again.",
                 detail=f"sampled: {examples} | unmatched: {'; '.join(unmatched[:3])}",
-                phase="checking",
+                names=(unmatched[0],), phase="checking",
             )
-        log(f"{label} path compatibility: {len(matched)}/{len(raw_paths)} sampled path(s) matched under {LIBRARY_ROOT}.")
+        log(f"{label} path compatibility: {matched_n}/{len(raw_paths)} sampled path(s) matched under {LIBRARY_ROOT}.")
 
 
 def log_blank():
@@ -2423,7 +2437,6 @@ def fetch_movie_metadata(rating_key, title):
             "Tautulli stopped answering while reading movie details. Nothing was "
             "deleted. Check that Tautulli is running, then run again.",
             detail=f"title={title} | rating_key={rating_key} | error={e}",
-            phase="scanning",
         )
 
     # Protection: collections is a plain list of strings e.g. ["Protected"]
@@ -2707,20 +2720,27 @@ def fetch_protected_paths():
     while protected collections are configured, the run aborts instead of
     using stale protection data.
     """
+    if not USE_PLEX:
+        # Deselecting Plex leaves PROTECTED_COLLECTIONS in config.json — nothing
+        # clears it — and asking a server the user turned off aborts the run. The
+        # gate belongs here rather than at each call site: the queue-based paths
+        # each forgot it, so a migration away from Plex broke every 15-minute
+        # tick and every redline emergency with a Plex error.
+        return set(), set(), set(), set()
     if not PROTECTED_COLLECTIONS:
         return set(), set(), set(), set()
     if not PLEX_URL or not PLEX_TOKEN:
         log("Plex protection: PLEX_URL/PLEX_TOKEN not set; aborting because protected collections cannot be verified.")
         _abort_api_failure("Plex protected collections are set up, but the Plex URL or token is "
                            "blank. Fill them in under Configuration, or clear the protected "
-                           "collections.", phase="scanning")
+                           "collections.")
 
     section_ids = _plex_movie_section_ids_direct()
     if section_ids is None:
         log("WARN Plex protection: could not reach Plex to list sections; aborting because protected collections cannot be verified.")
         _abort_api_failure("Plex stopped answering while checking protected collections. Nothing "
                            "was deleted. Check that Plex is running, then run again.",
-                           detail="listing movie sections", phase="scanning")
+                           detail="listing movie sections")
 
     wanted = _protected_name_set(PROTECTED_COLLECTIONS)
     paths, keys, imdb_ids, tmdb_ids, matched = set(), set(), set(), set(), set()
@@ -2729,7 +2749,7 @@ def fetch_protected_paths():
         if not status or status != 200 or not data:
             _abort_api_failure("Plex stopped answering while checking protected collections. Nothing "
                                "was deleted. Check that Plex is running, then run again.",
-                               detail=f"section={section_id} status={status}", phase="scanning")
+                               detail=f"section={section_id} status={status}")
         container = data.get("MediaContainer") or {}
         collections = container.get("Directory") or container.get("Metadata") or []
         collections = _as_list(collections)
@@ -2746,7 +2766,6 @@ def fetch_protected_paths():
                     "Plex stopped answering while checking protected collections. Nothing "
                     "was deleted. Check that Plex is running, then run again.",
                     detail=f"collection={coll.get('title')!r} status={status2}",
-                    phase="scanning",
                 )
             members = _as_list((data2.get("MediaContainer") or {}).get("Metadata"))
             for item in members:
@@ -2764,7 +2783,7 @@ def fetch_protected_paths():
                     if s3 != 200 or not d3:
                         _abort_api_failure("Plex stopped answering while checking protected collections. Nothing "
                                            "was deleted. Check that Plex is running, then run again.",
-                                           detail=f"ratingKey={rk} status={s3}", phase="scanning")
+                                           detail=f"ratingKey={rk} status={s3}")
                     md = _as_list((d3.get("MediaContainer") or {}).get("Metadata"))
                     for m in md:
                         item_paths |= _plex_item_paths(m)
@@ -2797,7 +2816,7 @@ def fetch_protected_paths():
             _abort_api_failure(
                 f"Protected Plex {_noun} {_names} {_verb}, so nothing was deleted. "
                 f"Fix or uncheck {_it} under Configuration → Protected collections.",
-                phase="scanning")
+                names=_missing)
         log(f"WARN Plex protected {_noun} {_names} not found — renamed or deleted? "
             f"A deleting run would stop here rather than run unprotected.")
     return paths, keys, imdb_ids, tmdb_ids
@@ -3006,7 +3025,6 @@ def extract_file_path(item, quiet=False):
             "Tautulli stopped answering while reading a movie's file path. Nothing "
             "was deleted. Check that Tautulli is running, then run again.",
             detail=f"title={item.get('title')} | rating_key={rating_key} | error={e}",
-            phase="scanning",
         )
 
     for key in possible_keys:
@@ -3200,9 +3218,21 @@ def _jellyfin_date_to_epoch(value):
 
 
 def _jellyfin_user_ids():
-    """All Jellyfin user IDs (play history is per-user and must be aggregated)."""
+    """All Jellyfin user IDs (play history is per-user and must be aggregated).
+
+    A working Jellyfin always has at least one account — the one the API key
+    belongs to — so an empty list means the request was answered but not honored
+    (revoked key, something in front of it). Every caller reads per-user state,
+    and with no users to ask, a movie comes back with no plays, no watchers and
+    no favorite: the exact shape of one nobody wants, which is what makes it
+    deletable. Raise so callers fail closed instead of reading a broken answer
+    as an empty one."""
     users = _jellyfin_request("Users") or []
-    return [u.get("Id") for u in users if isinstance(u, dict) and u.get("Id")]
+    ids = [u.get("Id") for u in users if isinstance(u, dict) and u.get("Id")]
+    if not ids:
+        raise RuntimeError("Jellyfin listed no user accounts, so per-user watch history "
+                           "and favorites cannot be read.")
+    return ids
 
 
 def _jellyfin_item_ids_from_payload(item):
@@ -3287,13 +3317,18 @@ def _jellyfin_boxset_children(box_id, user_id):
             "Jellyfin stopped answering while checking protected collections. Nothing was "
             "deleted. Check that Jellyfin is running, then run again.",
             detail=f"BoxSet {box_id}, no child endpoint answered: {'; '.join(query_errors[:3])}",
-            phase="scanning",
         )
     return ids, paths, imdb_ids, tmdb_ids
 
 
 def _jellyfin_protected_items():
-    """Movie IDs, paths and provider IDs in any protected Jellyfin collection."""
+    """Movie IDs, paths and provider IDs in any protected Jellyfin collection.
+
+    Self-gated on USE_JELLYFIN for the same reason as fetch_protected_paths:
+    the collection names outlive the server being deselected, and the callers
+    that reach this from the marked queue all forgot to check."""
+    if not USE_JELLYFIN:
+        return set(), set(), set(), set()
     wanted = _protected_name_set(JELLYFIN_PROTECTED_COLLECTIONS)
     if not wanted:
         return set(), set(), set(), set()
@@ -3305,7 +3340,7 @@ def _jellyfin_protected_items():
     except Exception as e:
         _abort_api_failure("Jellyfin stopped answering while checking protected collections. "
                            "Nothing was deleted. Check that Jellyfin is running, then run again.",
-                           detail=f"listing users: {e}", phase="scanning")
+                           detail=f"listing users: {e}")
     user_id = users[0] if users else None
     log(f"Jellyfin protection: wanted={sorted(wanted)} | users={len(users)} | using user_id={user_id or 'none'}")
 
@@ -3332,7 +3367,6 @@ def _jellyfin_protected_items():
             "Jellyfin stopped answering while checking protected collections. Nothing was "
             "deleted. Check that Jellyfin is running, then run again.",
             detail=f"listing collections: {'; '.join(listing_errors[:3])}",
-            phase="scanning",
         )
     log(f"Jellyfin protection: found {len(boxsets)} collection(s) via {used_path or 'n/a'}: "
         f"{sorted(str(b.get('Name')) for b in boxsets)[:20]}")
@@ -3371,7 +3405,7 @@ def _jellyfin_protected_items():
                 f"Protected Jellyfin {_noun} {_names} {_verb} not visible to MediaReducer, so "
                 f"nothing was deleted. Check the {_noun} still {_exist} and that the API key's "
                 f"user can see {_it}, or uncheck {_it} under Configuration → Protected collections.",
-                phase="scanning")
+                names=_missing)
         log(f"WARN Jellyfin protected {_noun} {_names} not found — renamed, deleted, or not "
             f"visible to the API key's user? A deleting run would stop here rather than "
             f"run unprotected.")
@@ -3474,7 +3508,13 @@ def get_all_movies_from_jellyfin():
     log(f"Jellyfin returned {len(rows)} movies.")
 
     # Aggregate per-user play data (Jellyfin has no cross-user total).
-    for uid in _jellyfin_user_ids():
+    try:
+        _uids = _jellyfin_user_ids()
+    except Exception as e:
+        _abort_api_failure("Jellyfin answered but listed no user accounts, so watch history and "
+                           "favorites could not be read. Nothing was deleted. Check the Jellyfin "
+                           "API key, then run again.", detail=str(e))
+    for uid in _uids:
         try:
             items = (_jellyfin_request(f"Users/{uid}/Items", {
                 "IncludeItemTypes": "Movie",
@@ -3484,7 +3524,7 @@ def get_all_movies_from_jellyfin():
         except Exception as e:
             _abort_api_failure("Jellyfin stopped answering while reading watch history. Nothing was "
                                "deleted. Check that Jellyfin is running, then run again.",
-                               detail=f"user={uid}: {e}", phase="scanning")
+                               detail=f"user={uid}: {e}")
         for item in items:
             row = rows.get(item.get("Id"))
             if not row:
@@ -3687,6 +3727,21 @@ def get_all_movies():
     else:
         jelly_rows = []
 
+    # Both servers on and exactly one came back empty: that is a broken source,
+    # not a library. Falling through would quietly drop to single-source mode and
+    # every movie would lose the missing server's watch history, favorites and
+    # collection protection while the run still deleted. Both empty is fine —
+    # there is nothing to delete either way — and so is a genuinely empty library
+    # on a single-server setup.
+    if USE_PLEX and USE_JELLYFIN and bool(plex_rows) != bool(jelly_rows):
+        _empty, _other = ("Plex", "Jellyfin") if not plex_rows else ("Jellyfin", "Plex")
+        _other_n = len(plex_rows or jelly_rows)
+        _abort_api_failure(
+            f"{_empty} returned an empty library while {_other} returned {_other_n:,} movies. "
+            f"Nothing was deleted — with one catalog missing, every movie would lose its "
+            f"{_empty} watch history and protection. Check that {_empty} is running and its "
+            f"library has finished scanning, then run again.")
+
     if not jelly_rows:
         return plex_rows
     if not plex_rows:
@@ -3788,7 +3843,14 @@ def get_all_movies():
             # so its Plex vs Jellyfin identity was never reconciled. Tag it so the
             # scan skips it (never delete on an unreconciled identity) and flags the
             # run completed-with-errors, mirroring the merged-row identity check.
+            # BOTH rows, not just this one. They point at one film, and the Plex
+            # side carries no _jf_favorite or _jf_protected (those are written
+            # only onto rows that merged, above) — so tagging the Jellyfin copy
+            # alone left the Plex copy a full deletion candidate stripped of its
+            # Jellyfin protection, deleted while the summary said "skipped, not
+            # deleted". Whichever row the scan reaches first, it stops.
             r["_unmerged_plex_twin"] = {"title": prow.get("title"), "file": prow.get("file")}
+            prow["_unmerged_jf_twin"] = {"title": r.get("title"), "file": r.get("file")}
             log("WARN merge near-miss: same filename identified on both servers but "
                 "paths did not match — this movie will be SKIPPED (not deleted) and the "
                 "run flagged with errors.")
@@ -4026,8 +4088,15 @@ def _reverify_marked_queue(store, snapshot_by_path, to_free_bytes, *, now=None, 
     def _covering():
         """The File-size-optimized covering set for to_free_bytes on the current
         effective scores — the SAME _pop_next_deletion a real delete uses (quiet:
-        this runs in a convergence loop and must not spam the log)."""
-        pool = sorted(paths, key=lambda p: (eff[p], str(p)))
+        this runs in a convergence loop and must not spam the log).
+
+        By effective score alone: the sort is stable, so movies whose scores tie
+        keep the plan's order, which is where the tiebreaks live. Adding the path
+        as a second key ordered them alphabetically instead, and this tick then
+        started the delete-delay clock on a different movie than Simulate marked —
+        the two selectors disagreeing every cycle, so marks churned and clocks
+        restarted."""
+        pool = sorted(paths, key=lambda p: eff[p])
         pend = [{"retention_score": eff[p], "file_size": _size(p),
                  "title": str(store[p].get("title") or p), "_p": p} for p in pool]
         tie, chosen, freed = [], [], 0
@@ -4063,7 +4132,7 @@ def _reverify_marked_queue(store, snapshot_by_path, to_free_bytes, *, now=None, 
     # freshly-watched movie whose score jumped stays sandwiched among the low-scored
     # marks instead of sinking to its new place. The stored order drives the display,
     # the "#N" labels, and the redline-only deficit prefix, so keep it current.
-    reordered = {p: store[p] for p in sorted(paths, key=lambda p: (eff[p], str(p)))}
+    reordered = {p: store[p] for p in sorted(paths, key=lambda p: eff[p])}
     for p, e in store.items():          # carry any non-dict rows through unchanged
         if p not in reordered:
             reordered[p] = e
@@ -4352,13 +4421,19 @@ def _pop_from_tie_group(tie_group: list, remaining_bytes, *, quiet=False):
     """Pick from the boundary tie group: if any single member covers the
     remaining target, the lowest-scoring one that covers it goes; otherwise
     the largest tied file goes first. quiet suppresses the log line (the tick's
-    mark re-selection runs this in a convergence loop and must not spam)."""
+    mark re-selection runs this in a convergence loop and must not spam).
+
+    When score and size both tie, the earliest member wins — the comparison is
+    strict, and the group arrives in plan order, which is where the remaining
+    tiebreaks live (never-watched, lowest IMDb rating, oldest added). Comparing
+    titles here instead ordered them alphabetically, so the movie deleted was
+    not the one the queue showed at the top."""
     best_i = None
     best_key = None
     for i, c in enumerate(tie_group):
         size = parse_int(c.get("file_size"), 0)
         if size >= remaining_bytes:
-            key = (c["retention_score"], size, str(c.get("title") or ""))
+            key = (c["retention_score"], size)
             if best_key is None or key < best_key:
                 best_key = key
                 best_i = i
@@ -4373,7 +4448,7 @@ def _pop_from_tie_group(tie_group: list, remaining_bytes, *, quiet=False):
     best_i = 0
     best_key = None
     for i, c in enumerate(tie_group):
-        key = (-parse_int(c.get("file_size"), 0), c["retention_score"], str(c.get("title") or ""))
+        key = (-parse_int(c.get("file_size"), 0), c["retention_score"])
         if best_key is None or key < best_key:
             best_key = key
             best_i = i
@@ -4539,7 +4614,7 @@ def build_candidates():
         _abort_api_failure(
             f"No movie library is mounted at {LIBRARY_ROOT}, so the storage may be offline. "
             "Nothing was deleted and your saved plan is untouched. Check the mount, then "
-            "run again.", phase="scanning")
+            "run again.")
 
     # Everything from here to the merge is the "Reading library" step: asking
     # each server what it holds, and resolving those rows to real files. It used
@@ -4579,7 +4654,7 @@ def build_candidates():
     except Exception as e:
         _abort_api_failure("A media server stopped answering while reading your library. Nothing "
                            "was deleted. Check that it is running, then run again.",
-                           detail=str(e), phase="scanning")
+                           detail=str(e))
     total_movies = len(movies)
 
     # Remove stale cache entries (Plex movies no longer present). The metadata
@@ -4782,20 +4857,24 @@ def build_candidates():
         # not merge has an unreconciled Plex↔Jellyfin identity. Never delete on
         # one: count it with the identity mismatches so the run completes with
         # errors and the summary names the file.
-        twin = item.get("_unmerged_plex_twin")
+        _twin_on_plex = item.get("_unmerged_plex_twin")    # this row is the Jellyfin one
+        _twin_on_jf   = item.get("_unmerged_jf_twin")      # this row is the Plex one
+        twin = _twin_on_plex or _twin_on_jf
         if twin:
+            here, there = ("Jellyfin", "Plex") if _twin_on_plex else ("Plex", "Jellyfin")
+            _ids = {"plex_imdb": "—", "jellyfin_imdb": "—",
+                    "plex_tmdb": "—", "jellyfin_tmdb": "—"}
+            _ids[f"{here.lower()}_imdb"] = _norm_id(imdb_id) or "—"
+            _ids[f"{here.lower()}_tmdb"] = str(tmdb_id or "").strip() or "—"
             stats["identity_mismatch"] += 1
             identity_mismatches.append({
-                "title":         f"{title} (Jellyfin) ↔ {twin.get('title')} (Plex, unmerged paths)",
+                "title":         f"{title} ({here}) ↔ {twin.get('title')} ({there}, unmerged paths)",
                 "path":          resolved_path,
-                "plex_imdb":     "—",
-                "jellyfin_imdb": _norm_id(imdb_id) or "—",
-                "plex_tmdb":     "—",
-                "jellyfin_tmdb": str(tmdb_id or "") or "—",
+                **_ids,
             })
             _snapshot_by_path[_snap_key]["excluded"] = True  # not recomputable; keep the reconcile from re-admitting it
-            log(f"SKIP identity_mismatch (unmerged Plex twin) | jellyfin_title={title!r} | "
-                f"plex_title={twin.get('title')!r} | path={file_path}")
+            log(f"SKIP identity_mismatch (unmerged twin) | {here.lower()}_title={title!r} | "
+                f"{there.lower()}_title={twin.get('title')!r} | path={file_path}")
             continue
 
         # ── Cross-server identity check (path-based) ──────────────────────────
@@ -5467,9 +5546,24 @@ def reconcile_from_snapshot(trigger="config change", *, refetch_protection=False
     with db.transaction(DB_FILE) as conn:
         db.ensure_code_current(conn, code_checksum())   # a code change wipes a stale snapshot
     with db.connect(DB_FILE) as conn:
-        rows = (db.read_snapshot(conn) or {}).get("movies") or []
+        snapshot = db.read_snapshot(conn) or {}
+    rows = snapshot.get("movies") or []
     if not rows:
         log(f"Reconcile [{trigger}]: no library snapshot yet — run Simulate first.")
+        return
+
+    # A snapshot only holds what was on disk under the paths it was SCANNED
+    # under — which is why the scan records them beside it. Rebuilding from it
+    # after a monitored-path change gives a plan that cannot see the added
+    # branch, and write_plan_to_queue would then stamp that plan with the
+    # CURRENT paths, so it reads as fresh: Cleanup un-ghosts, arming is allowed,
+    # and the fast path deletes from a plan blind to part of the library. Only a
+    # real scan can answer for paths nothing has walked.
+    _snap_dirs = sorted(str(d) for d in (snapshot.get("monitor_dirs") or []))
+    if _snap_dirs != sorted(str(d) for d in (MONITOR_DIRS or [])):
+        log(f"Reconcile [{trigger}]: the monitored paths changed since the last scan, so the "
+            f"stored snapshot cannot answer for the library — run Simulate. "
+            f"(scanned: {_snap_dirs or 'none'} | now: {sorted(str(d) for d in (MONITOR_DIRS or [])) or 'none'})")
         return
 
     if refetch_protection:
@@ -5731,9 +5825,18 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     # fresh-watch fetch and the near-tie selection both need worst-first: fetch for
     # the movies actually most likely to delete, and let _pop_next_deletion's
     # near-tie window (which only bounds the upper side) form from the true worst.
+    #
+    # Score ALONE, and the sort is stable, so movies sharing a score keep the order
+    # the plan put them in — which is where the tiebreaks live: never-watched first,
+    # then lowest IMDb rating, oldest added, largest file (_deletion_sort_key). The
+    # queue stores none of those inputs, so a second key here cannot reconstruct
+    # them; it can only overwrite them with something the plan never used, and an
+    # emergency would then delete a different movie than the queue shows and than a
+    # full-scan Cleanup would pick. Score ties are common — everything unwatched and
+    # past the staleness window scores the same when the balance is all watch history.
     ordered = sorted(
         ((k, e) for k, e in store.items() if isinstance(e, dict)),
-        key=lambda kv: (float(kv[1].get("score") or 0.0), str(kv[0])))
+        key=lambda kv: float(kv[1].get("score") or 0.0))
     lead = []
     lead_bytes = 0
     for key, entry in ordered:
@@ -5766,6 +5869,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     # entries, never silently shorting the emergency.
     work = []          # (key, Path, size_bytes, entry)
     dead = []          # marks whose file is already gone; dropped from the queue
+    unmounted = 0      # marks whose branch is offline; left alone, not "gone"
     gone_snapshot: set = set()   # physically-gone files; pruned from the snapshot too
     covered = 0
     spared_watched = 0
@@ -5775,6 +5879,15 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
             log(f"Fast path: skipping (protected since marked): {entry.get('title') or key}")
             continue
         if not p.exists():
+            if not _monitored_root_present(key):
+                # ENOENT because this file's monitored branch is not mounted, not
+                # because the movie was removed. The gate above only asks whether
+                # ANY root is up, so one array dropping out of several still gets
+                # here — and purging would drop that whole branch from the queue
+                # AND the library snapshot, exactly what the same per-file guard
+                # in _revalidate_pending_marks exists to survive.
+                unmounted += 1
+                continue
             # The marked file is already gone (deleted out from under us since the
             # queue was built; e.g. the user removed the movie manually). Silently
             # drop the dead mark and keep consuming the next in line so the target
@@ -5792,8 +5905,10 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
         try:
             size = p.stat().st_size
         except FileNotFoundError:
-            # Vanished between the exists() check and stat(); treat as a dead mark.
-            dead.append(key)
+            # Vanished between the exists() check and stat(); a dead mark only if
+            # its branch is still mounted, same reason as above.
+            if _monitored_root_present(key):
+                dead.append(key)
             continue
         except OSError:
             continue
@@ -5808,6 +5923,10 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
         gone_snapshot.update(dead)
         log(f"Fast path: dropped {len(dead)} marked movie(s) whose file was already "
             f"gone from the queue.")
+    if unmounted:
+        log(f"Fast path: left {unmounted} marked movie(s) queued whose library branch is "
+            f"not mounted — they are not gone, the storage is. Coverage may fall short, "
+            f"which routes this run to the full scan.")
     if covered < to_free_bytes:
         if dead:
             save_pending(store, snapshot_delete_paths=gone_snapshot)
@@ -5838,11 +5957,13 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     # _pop_next_deletion assumes SCORE-ASCENDING input (its near-tie window only
     # bounds the upper side); the stored queue is in file-size-optimized order from
     # the last Simulate, NOT pure score order, so sort worst-first here first.
+    # Stable and by score alone, so tied movies keep the plan's tiebreak order —
+    # see the fuller note on the same sort above.
     pend = [{"retention_score": float(entry.get("score") or 0.0),
              "file_size": size, "title": str(entry.get("title") or p.name),
              "_key": key, "_path": p, "_entry": entry}
             for key, p, size, entry in work]
-    pend.sort(key=lambda c: (c["retention_score"], c["title"]))
+    pend.sort(key=lambda c: c["retention_score"])
     tie_group = []
     # A Stop (SIGTERM → SystemExit) between deletions still saves the queue as
     # trimmed so far; otherwise already-deleted files would linger as marked
@@ -5990,7 +6111,7 @@ def _debug_cleanup_delete_preview(to_free_bytes):
     join = _snapshot_by_store_key(store)
     ordered = sorted(
         ((k, e) for k, e in store.items() if isinstance(e, dict)),
-        key=lambda kv: (float(kv[1].get("score") or 0.0), str(kv[0])))
+        key=lambda kv: float(kv[1].get("score") or 0.0))
     lead, lead_bytes = [], 0
     for key, entry in ordered:
         if is_protected(key, entry, join.get(key)):
@@ -6054,7 +6175,9 @@ def _debug_cleanup_delete_preview(to_free_bytes):
     # Sort worst-first: _pop_next_deletion assumes score-ascending input (the stored
     # queue is in file-size-optimized order, not pure score order), so the near-tie
     # window forms from the true worst movie, not the head of the stored order.
-    pend.sort(key=lambda c: (c["retention_score"], c["title"]))
+    # By score alone and stable, so this preview names the same movie the real
+    # delete would take — see the note on the fast path's copy of this sort.
+    pend.sort(key=lambda c: c["retention_score"])
     tie_group = []
     would_count, would_bytes = 0, 0
     would_items = []
@@ -7408,6 +7531,14 @@ def main():
                 e = {"title": c["title"], "score": round(c["retention_score"], 3),
                      "marked_at": None,
                      "size_bytes": parse_int(c.get("file_size"), 0)}
+            # Radarr identity on every entry, every rebuild. An incremental queue
+            # delete (manual Cleanup, redline emergency) reads it from the queue
+            # and nowhere else, and this rebuild replaces the WHOLE queue — so
+            # dropping it left every later deletion unlinking the file while
+            # Radarr kept the movie monitored and re-grabbed it, logging only
+            # "no TMDB ID available" where nobody looks.
+            e["tmdb_id"] = c.get("tmdb_id")
+            e["section_id"] = c.get("section_id")
             q[k] = e
         return q
 

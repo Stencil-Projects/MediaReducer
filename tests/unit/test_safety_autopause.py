@@ -28,7 +28,7 @@ def _save(cfg, **k):
     return True
 A.save_config = _save
 A._refresh_connection_health_cache = lambda cfg, probe=True: {"critical_ok": True}
-A.run_summary_sync = lambda: (True, "ok", {"library_gb": 100.0})
+A.run_summary_sync = lambda *a, **k: (True, "ok", {"library_gb": 100.0})
 A.run_summary = lambda: (calls.__setitem__("summary", calls["summary"] + 1), (True, "ok"))[1]
 A.cached_disk_stats = lambda s=None: {"total_gb": 1000, "used_gb": 500, "free_gb": 500, "pct_used": 50}
 A._space_threshold_state = lambda cfg, disk, library_gb=None: dict(_threshold)
