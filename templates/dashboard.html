@@ -1128,7 +1128,6 @@ let _active       = {{ 'true' if run_active else 'false' }};
 // say so. tojson raises on Undefined, so the page breaks loudly instead.
 const _bootRunCleanup      = {{ run_cleanup | tojson }};
 const _bootRunDebugCleanup = {{ run_debug_cleanup | tojson }};
-const _bootRunManual       = {{ run_manual | tojson }};
 // Mode flags are LIVE, not page-load constants: an autopause, a second tab, or
 // the CLI can change the mode while this page is open, and the countdown /
 // breach-note / red-warning branches all key off these. Updated from every
@@ -1609,11 +1608,11 @@ function renderProgress(p) {
   pill.classList.remove('is-done', 'is-neutral', 'is-danger', 'is-accent', 'is-warning');
   // The tone is the color of the BUTTON doing the work — red ONLY for the run
   // that deletes ("Cleaning"), yellow for Debug Cleanup, blue for every other
-  // run, which takes nothing away. The label separates the two blue cases: a
-  // Simulate the user just clicked says so, the scheduler's runs say "Running".
+  // run, which takes nothing away. Blue says "Running" however the run started;
+  // the trigger line beside this pill is what names which one it was.
   const [pillLabel, pillTone] =
       active   ? window.prRunTone({ cleanup: !isSim && !isInfo && !isDebugCleanup,
-                                    debugCleanup: isDebugCleanup, manual: !!p.manual })
+                                    debugCleanup: isDebugCleanup })
     // Failed = the run ABORTED (nothing or only part completed) — it must not
     // read "Done". "Done · errors" is reserved for runs that finished but
     // skipped some files; both route to the errors report section.
@@ -2592,9 +2591,9 @@ function _initDashboardTooltips() {
   });
 }
 
-function setRunning(on, live, debugLive, manual) {
+function setRunning(on, live, debugLive) {
   _active = on;
-  if (window.prSetHeaderRunning) window.prSetHeaderRunning(on, live, debugLive, manual);
+  if (window.prSetHeaderRunning) window.prSetHeaderRunning(on, live, debugLive);
   const stopBtn = document.getElementById('btn-stop');
   if (stopBtn) stopBtn.title = on ? 'Stop the active run' : 'No active run to stop';
   _applyButtonStates();
@@ -2766,10 +2765,10 @@ async function syncStatus({refreshLog = true} = {}) {
     _updateDeletedCounter(d.deleted_count || 0, d.deleted_reclaimed_bytes || 0, d.deleted_reclaimed_label || '',
                           d.marked_count !== undefined ? d.marked_count : null,
                           d.marked_imminent_count !== undefined ? d.marked_imminent_count : null);
-    if (d.run_active !== _active) setRunning(d.run_active, d.run_active && d.run_cleanup, d.run_active && d.run_debug_cleanup, d.run_active && d.run_manual);
-    // Keep the badge's Simulating/Running/Debugging label right even when the run
+    if (d.run_active !== _active) setRunning(d.run_active, d.run_active && d.run_cleanup, d.run_active && d.run_debug_cleanup);
+    // Keep the badge's Running/Cleaning/Debugging label right even when the run
     // was already active on load (no transition to carry the flags through).
-    else if (window.prSetHeaderRunning) window.prSetHeaderRunning(!!d.run_active, !!(d.run_active && d.run_cleanup), !!(d.run_active && d.run_debug_cleanup), !!(d.run_active && d.run_manual));
+    else if (window.prSetHeaderRunning) window.prSetHeaderRunning(!!d.run_active, !!(d.run_active && d.run_cleanup), !!(d.run_active && d.run_debug_cleanup));
     if (d.run_active) {
       startStream(false);
       if (refreshLog) await refreshLastLog(_ACTIVE_LOG_LINES);
@@ -2837,7 +2836,7 @@ async function triggerRun(mode) {
       return;
     }
     _setRunStartPending(false, pendingButtonId);
-    setRunning(true, mode === 'headroom', mode === 'debug_cleanup', true);
+    setRunning(true, mode === 'headroom', mode === 'debug_cleanup');
     startStream(true);
     _rpRunKey = null; _rpMaxIdx = 0;
     refreshProgress();
@@ -2892,7 +2891,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !document.getElementById('log-window')?.hidden) closeLogWindow();
 });
 if (_active) {
-  setRunning(true, _bootRunCleanup, _bootRunDebugCleanup, _bootRunManual);
+  setRunning(true, _bootRunCleanup, _bootRunDebugCleanup);
   startStream(false);
 }
 _applyCleanupButtonTitle();

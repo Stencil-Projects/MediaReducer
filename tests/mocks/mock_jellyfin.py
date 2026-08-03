@@ -4,7 +4,9 @@ counterpart to mock_tautulli.py. Serves the SAME 400-movie fixture library
 Simulate can run end to end with Jellyfin as the source.
 
 Endpoints get_all_movies_from_jellyfin() hits:
-  GET /Users                         -> the user list (play data is per-user)
+  GET /Users                         -> the user list (play data is per-user;
+                                        two of them, so a movie can have more
+                                        than one distinct viewer)
   GET /Items?IncludeItemTypes=Movie  -> the base library (Path/MediaSources/
                                         ProviderIds/DateCreated/RunTimeTicks)
   GET /Users/{uid}/Items?EnableUserData=true -> per-user PlayCount/LastPlayed/
@@ -34,7 +36,10 @@ def _iso(epoch):
 # 301-400 under /other. Same paths, so the engine's path translation maps them
 # under MEDIAREDUCER_LIBRARY exactly as it does for the Plex/Tautulli run.
 ITEMS = []
-USERDATA = []  # per-user watch state for user u1, keyed to the same items
+# Watch state per user, keyed to the same items. Two users, because one can never
+# show whether the engine counts distinct viewers or just assumes one: u2 watched
+# every third film u1 did, so those have two viewers and the rest have one.
+USERDATA = {"u1": [], "u2": []}
 for i in range(1, 401):
     folder = "movies" if i <= 300 else "other"
     added_at = 1_500_000_000 + i * 50_000
@@ -55,13 +60,22 @@ for i in range(1, 401):
             "MediaStreams": [{"Type": "Video", "Height": 1080 if i % 2 else 720}],
         }],
     })
-    USERDATA.append({
+    USERDATA["u1"].append({
         "Id": f"m{i}",
         "UserData": {
             "PlayCount": plays,
             "Played": plays > 0,
             "LastPlayedDate": _iso(last_played) if last_played else None,
             "IsFavorite": (i % 25 == 0),
+        },
+    })
+    USERDATA["u2"].append({
+        "Id": f"m{i}",
+        "UserData": {
+            "PlayCount": plays if (plays and i % 3 == 0) else 0,
+            "Played": bool(plays and i % 3 == 0),
+            "LastPlayedDate": _iso(last_played) if (last_played and i % 3 == 0) else None,
+            "IsFavorite": False,
         },
     })
 
@@ -86,17 +100,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._send({"ServerName": "e2e-jellyfin", "Version": "10.9.0",
                                "Id": "mock-server"})
         if path == "/Users":
-            return self._send([{"Id": "u1", "Name": "e2e"}])
+            return self._send([{"Id": "u1", "Name": "e2e"}, {"Id": "u2", "Name": "e2e-two"}])
         if "/Items" in path:
             filters = (q.get("Filters") or [""])[0]
             include = (q.get("IncludeItemTypes") or [""])[0]
+            uid = path.split("/")[2] if path.startswith("/Users/") else "u1"
             if "IsFavorite" in filters:
-                return self._send({"Items": [it for it, ud in zip(ITEMS, USERDATA)
+                return self._send({"Items": [it for it, ud in zip(ITEMS, USERDATA.get(uid, []))
                                              if ud["UserData"]["IsFavorite"]]})
             if "BoxSet" in include:
                 return self._send({"Items": []})
             if path.startswith("/Users/") and (q.get("EnableUserData") or [""])[0] == "true":
-                return self._send({"Items": USERDATA})
+                return self._send({"Items": USERDATA.get(uid, [])})
             if "ParentId" in q:
                 return self._send({"Items": []})
             return self._send({"Items": ITEMS})   # the base library scan

@@ -104,11 +104,13 @@ declared category nothing raises.
   blue is the primary action, yellow is Debug Cleanup, neutral is Simulate.
   `.pr-pill--state` plus one tone class is the whole vocabulary. Pills are flat
   where buttons are glassy, and hover moves the border only, since a status that
-  fills in under the pointer reads as clickable. `window.prRunTone()` picks the
-  label and tone from one place so the pills cannot word the same run
-  differently, which they used to. Whether a run says "Simulate" or "Running"
-  comes from `manual`, set by `run_script()` and restated by the engine.
-  Pinned by `e2e_status_pills`.
+  fills in under the pointer reads as clickable — except the header badge, which
+  is a link only so the run is one click away and holds still under the pointer.
+  `window.prRunTone()` picks the label and tone from one place so the pills
+  cannot word the same run differently, which they used to. What the label
+  answers is whether a run is deleting: "Cleaning" red, "Debugging" yellow,
+  "Running" blue for everything else, however that run started. Pinned by
+  `e2e_status_pills`.
 - **Sizes are formatted by where the number came from, not where it is shown.**
   Anything *measured* (free space, library size, a movie, an amount reclaimed)
   carries one decimal even when it is `.0`, so one reading never appears as

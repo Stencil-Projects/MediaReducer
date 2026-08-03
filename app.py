@@ -411,7 +411,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.5"
+APP_VERSION = "1.0.0-alpha.6"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -6402,7 +6402,6 @@ def dashboard():
                            # away" cue was missing for those first seconds.
                            run_cleanup=_run_active and _run_cleanup,
                            run_debug_cleanup=_run_active and _run_debug_cleanup,
-                           run_manual=_run_active and _run_manual,
                            last_run=last_run_time(),
                            last_run_ts=last_run_epoch(),
                            deleted_count=deleted["count"],

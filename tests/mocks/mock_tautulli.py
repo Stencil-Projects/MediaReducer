@@ -22,6 +22,21 @@ for i in range(1, 401):
         "file": f"/{folder}/Test Movie {i}/Test Movie {i}.mkv",
     })
 
+# Watch history, which is where the distinct-viewer count comes from. Each
+# played movie's plays are spread over a varying number of users, so a viewer
+# count is something other than "1 if it was ever played" — the shape the
+# media-info rows alone cannot tell apart.
+HISTORY = []
+for _i, _m in enumerate(MOVIES, 1):
+    _viewers = min(_m["play_count"], 1 + (_i % 4))
+    for _p in range(_m["play_count"]):
+        HISTORY.append({
+            "rating_key": _m["rating_key"],
+            "user_id": 100 + (_p % _viewers),
+            "user": f"user{_p % _viewers}",
+            "date": _m["last_played"] or 1600000000,
+        })
+
 CALLS = {"get_libraries": 0, "get_library_media_info": 0, "get_metadata": 0}
 
 
@@ -40,6 +55,13 @@ class Handler(BaseHTTPRequestHandler):
             start = int((q.get("start") or ["0"])[0])
             length = int((q.get("length") or ["25"])[0])
             data = {"recordsFiltered": len(MOVIES), "data": MOVIES[start:start + length]}
+        elif cmd == "get_history":
+            rk = (q.get("rating_key") or [""])[0]
+            rows = [h for h in HISTORY if not rk or h["rating_key"] == rk]
+            start = int((q.get("start") or ["0"])[0])
+            length = int((q.get("length") or ["25"])[0])
+            data = {"recordsFiltered": len(rows), "recordsTotal": len(HISTORY),
+                    "data": rows[start:start + length]}
         elif cmd == "get_metadata":
             rk = (q.get("rating_key") or [""])[0]
             idx = int(rk) - 1000

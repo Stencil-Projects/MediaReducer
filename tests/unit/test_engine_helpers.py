@@ -40,11 +40,26 @@ _pages = {
     "2": [{"file": "/m/Dup (2020)/dup.mkv", "play_count": 2, "last_played": 999, "rating_key": "c"}],
 }
 E.get_movie_section_ids = lambda: ["1", "2"]
+# Watch history, keyed by the same rating_keys. Dup was watched by two people
+# through section 1 and one of the same two through section 2; Solo by one.
+_history = {
+    "1": ([{"rating_key": "a", "user_id": 7}] * 3 + [{"rating_key": "a", "user_id": 9}]
+          + [{"rating_key": "b", "user_id": 7}]),
+    "2": [{"rating_key": "c", "user_id": 7}, {"rating_key": "c", "user_id": 7}],
+}
+_history_pages = []      # (section_id, start, length) actually requested
 def _fake_tautulli(cmd, **params):
     if cmd == "get_library_media_info":
         sid = str(params.get("section_id"))
         start = int(params.get("start", 0))
         return {"data": _pages.get(sid, [])[start:start + int(params.get("length", 1000))]}
+    if cmd == "get_history":
+        sid = str(params.get("section_id"))
+        start = int(params.get("start", 0))
+        length = int(params.get("length", 1000))
+        _history_pages.append((sid, start, length))
+        rows = _history[sid]
+        return {"recordsFiltered": len(rows), "data": rows[start:start + length]}
     return {}
 E.tautulli_api = _fake_tautulli
 
@@ -57,6 +72,29 @@ check("dedup preserves the Radarr section when either copy is in it",
       str(dup["_section_id"]) == "2")
 check("a single-section movie passes through untouched",
       E.parse_int(merged["/m/Solo (2019)/solo.mkv"]["play_count"], 0) == 1)
+
+# ── Distinct viewers come from the history, not from "was it ever played" ─────
+# The media-info rows carry a play count and nothing about who watched. Four
+# plays by two people is the case that matters: it is the movie two of the
+# household would miss, and counting it as one watcher is what feeds it to the
+# retention score as something nobody cares about.
+check("a movie's distinct viewers are counted, not assumed",
+      E.parse_int(dup["_plex_users"], 0) == 2)
+check("...and repeat plays by one person are still one viewer",
+      E.parse_int(merged["/m/Solo (2019)/solo.mkv"]["_plex_users"], 0) == 1)
+# Section 2's copy of Dup was watched by user 7, who also watched section 1's.
+# Adding the two sections' counts would invent a third viewer.
+check("the same viewer through two sections is not counted twice",
+      E._distinct_users_for_row(dup) == 2)
+check("the sweep asks each section for its own history",
+      {sid for sid, _, _ in _history_pages} == {"1", "2"})
+
+# A play on record with no attributable viewer still means someone watched it:
+# never zero while the play count says otherwise.
+check("a played movie with no history rows still counts one viewer",
+      E._distinct_users_for_row({"play_count": 3, "_plex_users": 0}) == 1)
+check("an unplayed movie counts none",
+      E._distinct_users_for_row({"play_count": 0, "_plex_users": 0}) == 0)
 
 # ── Config coercion helpers ──────────────────────────────────────────────────
 E.CONFIG_ERRORS = []

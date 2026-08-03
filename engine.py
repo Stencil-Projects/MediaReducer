@@ -3079,12 +3079,53 @@ def get_movie_section_ids():
     return [s["section_id"] for s in sections]
 
 
+def _plex_distinct_users_by_key(section_ids):
+    """rating_key -> how many distinct Tautulli users have played it.
+
+    The media-info rows carry a play count but no per-user breakdown, so a movie
+    four people watched read as one watcher — and "only one person ever cared
+    about this" is exactly what the retention score is looking for when it picks
+    something to delete. Tautulli does know: its per-item User Stats panel lists
+    them. That endpoint answers for ONE movie per call, which is a call per movie
+    in the library; the history is a single paged sweep whose cost follows how
+    much has been WATCHED rather than how much is stored, and on a normal library
+    that is a small fraction of it. Movies with no history simply do not appear,
+    which is the 0 watchers they should already have.
+    """
+    users_by_key: dict = {}
+    rows_seen = 0
+    for section_id in section_ids:
+        start = 0
+        length = 1000
+        while True:
+            data = tautulli_api("get_history", section_id=section_id,
+                                start=start, length=length,
+                                order_column="date", order_dir="desc")
+            rows = (data or {}).get("data") or []
+            if not rows:
+                break
+            rows_seen += len(rows)
+            for row in rows:
+                key = str(row.get("rating_key") or "").strip()
+                # user_id is the stable one; the display name is a fallback for
+                # rows an older Tautulli wrote without it.
+                who = str(row.get("user_id") or row.get("user") or "").strip()
+                if key and who:
+                    users_by_key.setdefault(key, set()).add(who)
+            if len(rows) < length:
+                break
+            start += length
+    log(f"Tautulli watch history: {rows_seen} play(s) across {len(users_by_key)} movie(s) "
+        f"— distinct viewers counted per movie.")
+    return {key: len(who) for key, who in users_by_key.items()}
+
+
 def get_all_movies_from_tautulli():
     """Fetch every movie from all active movie sections, tagged with _section_id.
 
     Rows sharing a file path across sections are merged: highest play_count, most
-    recent last_played, and RADARR_OVERSEERR_SECTION_ID preserved if either copy
-    was in it.
+    recent last_played, the most distinct viewers either copy saw, and
+    RADARR_OVERSEERR_SECTION_ID preserved if either copy was in it.
     """
     section_ids = get_movie_section_ids()
     raw_rows = []
@@ -3132,6 +3173,10 @@ def get_all_movies_from_tautulli():
 
     log(f"Tautulli returned {len(raw_rows)} total movie rows across all sections.")
 
+    viewers = _plex_distinct_users_by_key(section_ids)
+    for row in raw_rows:
+        row["_plex_users"] = viewers.get(str(row.get("rating_key") or "").strip(), 0)
+
     # Deduplicate by raw file key, merging play stats
     seen: dict = {}
 
@@ -3156,6 +3201,11 @@ def get_all_movies_from_tautulli():
             cur_lp = parse_int(existing.get("last_played"), 0)
             if new_lp > cur_lp:
                 existing["last_played"] = row["last_played"]
+
+            # Two copies of one film in different sections: the same people may
+            # have watched either, so take the larger count rather than the sum.
+            existing["_plex_users"] = max(parse_int(existing.get("_plex_users"), 0),
+                                          parse_int(row.get("_plex_users"), 0))
 
             # Preserve the Radarr section_id if either copy is in it
             if str(row.get("_section_id")) == str(RADARR_OVERSEERR_SECTION_ID):
@@ -3673,19 +3723,27 @@ def _merge_added_at(a, b):
 
 def _distinct_users_for_row(row):
     """Distinct watchers for a movie: the HIGHER of the Plex and Jellyfin counts,
-    never their sum. Tautulli exposes no per-user breakdown, so a played Plex
-    movie counts as 1 Plex watcher; Jellyfin carries a real per-user count. A
-    movie present on both servers takes whichever source saw more distinct
-    watchers (_plex_users / _jf_users are captured on the merged row at merge
-    time, before play stats are combined)."""
+    never their sum — the same household watches through both servers, so adding
+    them would count one person twice.
+
+    Both sides are real per-user counts: _plex_users from the Tautulli history
+    sweep, _jf_users from Jellyfin's per-user watch data. They are captured on the
+    merged row at merge time, before play stats are combined, so a movie on both
+    servers can still say what each server saw on its own.
+
+    A played movie with no counted viewers still means at least one person watched
+    it — an old history row Tautulli no longer attributes to a user, say — so it
+    never reads as zero while a play is on record."""
+    played = (parse_int(row.get("play_count"), 0) > 0
+              or parse_int(row.get("last_played"), 0) > 0)
     if str(row.get("rating_key") or "").startswith("jf:"):
-        return parse_int(row.get("_jf_users"), 0)               # Jellyfin-only row
-    if row.get("_jf_matched"):
-        return max(parse_int(row.get("_plex_users"), 0),        # on both servers
-                   parse_int(row.get("_jf_users"), 0))
-    # Plex-only row: Tautulli has no per-user data, so a played movie = 1 watcher.
-    return 1 if (parse_int(row.get("play_count"), 0) > 0
-                 or parse_int(row.get("last_played"), 0) > 0) else 0
+        counted = parse_int(row.get("_jf_users"), 0)            # Jellyfin-only row
+    elif row.get("_jf_matched"):
+        counted = max(parse_int(row.get("_plex_users"), 0),     # on both servers
+                      parse_int(row.get("_jf_users"), 0))
+    else:
+        counted = parse_int(row.get("_plex_users"), 0)          # Plex-only row
+    return max(counted, 1 if played else 0)
 
 
 def _norm_id(value):
@@ -3797,12 +3855,12 @@ def get_all_movies():
         jrow = next((jelly_index[k] for k in pks if k in jelly_index), None)
         if jrow is not None:
             matched_jf.add(id(jrow))
-            # Capture each source's OWN distinct-user count before merging play
-            # stats (play_count/last_played are combined below, which would
-            # otherwise hide whether Plex itself saw a play). Distinct users take
-            # the higher of the two, never the sum; see _distinct_users_for_row.
-            prow["_plex_users"] = 1 if (parse_int(prow.get("play_count"), 0) > 0
-                                        or parse_int(prow.get("last_played"), 0) > 0) else 0
+            # Each source's OWN distinct-user count, captured before play stats
+            # are merged below (combining those would otherwise hide what Plex
+            # itself saw). _plex_users already came from the Tautulli history
+            # sweep; keep it. Distinct users take the higher of the two, never
+            # the sum — see _distinct_users_for_row.
+            prow["_plex_users"] = parse_int(prow.get("_plex_users"), 0)
             prow["_jf_users"]   = parse_int(jrow.get("_jf_users"), 0)
             prow["added_at"]    = _merge_added_at(prow.get("added_at"), jrow.get("added_at"))
             prow["last_played"] = max(parse_int(prow.get("last_played"), 0), parse_int(jrow.get("last_played"), 0))

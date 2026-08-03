@@ -100,7 +100,7 @@ try {
       const TONE = { cleanup: 'is-danger', debugCleanup: 'is-warning',
                      manualSim: 'is-accent', scheduled: 'is-accent' };
       for (const [key, s, mode] of CASES) {
-        const setHeader = () => prSetHeaderRunning(true, s.cleanup, s.debugCleanup, s.manual);
+        const setHeader = () => prSetHeaderRunning(true, s.cleanup, s.debugCleanup);
         // The label is written synchronously, so read it in the same tick the
         // call returns — no window for the poll to slip in.
         setHeader();
@@ -159,10 +159,12 @@ try {
       check(`${theme}: the header and the run pill agree on "${key}"`,
             r.header[key].label === r.run[key].label, [r.header[key].label, r.run[key].label]);
     }
-    // A Cleanup deletes and a Simulate does not; the words have to say which.
-    check(`${theme}: a manual Simulate is named, not just "Running"`,
-          r.run.manualSim.label === 'Simulate', r.run.manualSim.label);
-    check(`${theme}: a scheduled run says "Running", not "Simulate"`,
+    // Blue says "Running" however the run started — what this badge is for is
+    // whether something is happening and whether it deletes, and who pressed the
+    // button changes neither. The run-progress card names the trigger itself.
+    check(`${theme}: a manual Simulate says "Running"`,
+          r.run.manualSim.label === 'Running', r.run.manualSim.label);
+    check(`${theme}: and so does a scheduled run`,
           r.run.scheduled.label === 'Running', r.run.scheduled.label);
     // Red is reserved for the run that deletes, and it has to SAY that. "Running"
     // in red is the alarm without the information — it describes every run.
@@ -192,19 +194,17 @@ try {
   const boot = await p.evaluate(async () => {
     const d = await (await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' })).json();
     const out = {
-      types: [typeof _bootRunCleanup, typeof _bootRunDebugCleanup, typeof _bootRunManual],
-      rendered: [_bootRunCleanup, _bootRunDebugCleanup, _bootRunManual],
-      api: [!!(d.run_active && d.run_cleanup), !!(d.run_active && d.run_debug_cleanup),
-            !!(d.run_active && d.run_manual)],
+      types: [typeof _bootRunCleanup, typeof _bootRunDebugCleanup],
+      rendered: [_bootRunCleanup, _bootRunDebugCleanup],
+      api: [!!(d.run_active && d.run_cleanup), !!(d.run_active && d.run_debug_cleanup)],
       byKind: {},
     };
     // setRunning is what the boot path calls; drive it the way each kind of run
     // would and read what the header ends up saying.
-    for (const [n, c, g, m] of [['cleanup', true, false, false],
-                                ['debugCleanup', false, true, false],
-                                ['manualSim', false, false, true],
-                                ['scheduled', false, false, false]]) {
-      setRunning(true, c, g, m);
+    for (const [n, c, g] of [['cleanup', true, false],
+                             ['debugCleanup', false, true],
+                             ['other', false, false]]) {
+      setRunning(true, c, g);
       const el = document.querySelector('.run-badge-desktop');
       out.byKind[n] = el.querySelector('.run-badge-label').textContent.trim()
         + ':' + [...el.classList].find(x => x.startsWith('is-'));
@@ -218,10 +218,8 @@ try {
         boot.byKind.cleanup === 'Cleaning:is-danger', boot.byKind.cleanup);
   check('...a Debug Cleanup yellow', boot.byKind.debugCleanup === 'Debugging:is-warning',
         boot.byKind.debugCleanup);
-  check('...a manual Simulate blue and named', boot.byKind.manualSim === 'Simulate:is-accent',
-        boot.byKind.manualSim);
-  check('...and a scheduled run blue', boot.byKind.scheduled === 'Running:is-accent',
-        boot.byKind.scheduled);
+  check('...and every run that deletes nothing blue', boot.byKind.other === 'Running:is-accent',
+        boot.byKind.other);
 
   // The above only proves setRunning honours what it is GIVEN. The bug was the
   // boot call not giving it anything, so drive the real thing: serve the page
@@ -229,8 +227,7 @@ try {
   // No engine is started — the served HTML is rewritten, which is exactly the
   // input the boot path reads — so this costs nothing and cannot race a run.
   for (const [name, patch, want] of [
-    ['a manual Simulate', h => h.replace(/const _bootRunManual\s*=\s*false;/, 'const _bootRunManual = true;'),
-     'Simulate:is-accent'],
+    ['a Simulate', h => h, 'Running:is-accent'],
     ['a Cleanup', h => h.replace(/const _bootRunCleanup\s*=\s*false;/, 'const _bootRunCleanup = true;'),
      'Cleaning:is-danger'],
   ]) {
@@ -264,6 +261,37 @@ try {
     check(`a page loaded mid-run opens on the right badge — ${name}`, got === want, { got, want });
     await q.close();
   }
+
+  // ── The header badge holds still under the pointer ─────────────────────────
+  // It is a link only so the run is one click away — it reports what the app is
+  // doing rather than offering to do something, and it lives in the chrome
+  // rather than beside the thing it describes. The mode pill beside it is the
+  // control that still reacts, so a badge that stopped moving proves the rule
+  // was aimed, not that hover went missing from every pill at once.
+  await p.evaluate(() => prSetHeaderRunning(true, false, false));
+  const borderOf = (sel) => p.evaluate((q) => {
+    // The badge pulses forever; .finish() throws on an infinite animation, and
+    // a border read mid-transition is neither the old color nor the new one.
+    document.getAnimations().forEach(a => { try { a.finish(); } catch (_) {} });
+    return getComputedStyle(document.querySelector(q)).borderTopColor;
+  }, sel);
+  // force: the pulse never settles, so the default actionability wait would
+  // sit here until it timed out.
+  const hoverBorders = async (sel) => {
+    await p.mouse.move(0, 0);
+    const rest = await borderOf(sel);
+    await p.hover(sel, { force: true });
+    await p.waitForTimeout(250);
+    const hovered = await borderOf(sel);
+    await p.mouse.move(0, 0);
+    return [rest, hovered];
+  };
+  const [badgeRest, badgeHover] = await hoverBorders('.run-badge-desktop');
+  const [modeRest, modeHover] = await hoverBorders('.dashboard-mode-link');
+  check('the header run badge does not react to hover',
+        badgeRest === badgeHover, [badgeRest, badgeHover]);
+  check('...while a pill that IS a control still does',
+        modeRest !== modeHover, [modeRest, modeHover]);
 
   check('no JS errors', errs.length === 0, errs.slice(0, 3));
 } catch (e) {

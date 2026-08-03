@@ -53,6 +53,23 @@ check('run wrote a non-empty library snapshot',
 check('snapshot carries a build time',
   Number(snap.built_at) > 0);
 
+// Distinct viewers, end to end through the real Tautulli history endpoint. The
+// media-info rows the catalog is built from carry a play count and nothing
+// about who watched, so before the history sweep every played movie read as
+// exactly one viewer — the figure the retention score treats as "nobody but one
+// person cares about this". The fixture spreads plays over 1-4 users.
+const viewerCounts = new Set(snap.movies.map(m => Number(m.users) || 0));
+const played = snap.movies.filter(m => Number(m.plays) > 0);
+check('the snapshot counts real distinct viewers, not one per played movie',
+  [...viewerCounts].some(n => n > 1), [...viewerCounts].sort((a, b) => a - b).join(','));
+check('every played movie has at least one viewer',
+  played.length > 0 && played.every(m => Number(m.users) >= 1));
+// "Never watched" means no plays AND no last-played date: a play count of zero
+// beside a real date is still someone having watched it.
+check('a movie nobody has watched has no viewers',
+  snap.movies.filter(m => !Number(m.plays) && !Number(m.last_played))
+             .every(m => Number(m.users) === 0));
+
 const s1 = r1.status || await status();
 // The fixture library sits well under the 100 GB headroom, so nothing is marked
 // for deletion — but the ENTIRE eligible library still enters the queue.

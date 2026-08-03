@@ -71,10 +71,23 @@ check("the merged row is marked present on both servers", m.get("_jf_matched") i
 # Plex played (=1 Plex watcher) vs Jellyfin's 4 distinct users → 4, not 5.
 check("distinct users on a both-servers row is the max, not the sum",
       E._distinct_users_for_row(m) == 4)
+# The household watches through both servers, so the same person shows up on
+# each. Summing would count them twice and inflate the retention of a film one
+# person watched on both.
+merged_same = run_merge(
+    [plex_row(play_count=3, _plex_users=3)],
+    [jf_row(play_count=3, _jf_users=3)],
+)[0]
+check("...and three people on each server is three, not six",
+      E._distinct_users_for_row(merged_same) == 3)
+check("...while the server that saw MORE of them wins",
+      E._distinct_users_for_row(run_merge(
+          [plex_row(play_count=1, _plex_users=1)],
+          [jf_row(play_count=5, _jf_users=5)])[0]) == 5)
 check("distinct users on a Jellyfin-only row reads its per-user count",
       E._distinct_users_for_row(jf_row(_jf_users=3)) == 3)
-check("distinct users on a played Plex-only row is 1",
-      E._distinct_users_for_row(plex_row(play_count=2)) == 1)
+check("distinct users on a Plex-only row reads its counted viewers",
+      E._distinct_users_for_row(plex_row(play_count=9, _plex_users=4)) == 4)
 check("distinct users on an unplayed Plex-only row is 0",
       E._distinct_users_for_row(plex_row(play_count=0, last_played=0)) == 0)
 

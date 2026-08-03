@@ -595,6 +595,15 @@
     a.pr-pill--state.is-accent:active  { border-color: var(--press-accent); }
     a.pr-pill--state.is-neutral:active { border-color: var(--press-neutral); }
     a.pr-pill--state.is-warning:active { border-color: var(--press-warning); }
+    /* …except the header badge, which is a link only so the run is one click
+       away. It reports what the app is doing rather than offering to do
+       something, and it sits in the chrome instead of beside the thing it
+       describes, so it holds still under the pointer. The keyboard focus ring
+       above is deliberately left alone — it is still a link. */
+    a.header-run-badge.is-danger:hover,  a.header-run-badge.is-danger:active  { border-color: var(--text-danger); }
+    a.header-run-badge.is-accent:hover,  a.header-run-badge.is-accent:active  { border-color: var(--border-accent); }
+    a.header-run-badge.is-warning:hover, a.header-run-badge.is-warning:active { border-color: var(--border-warning); }
+    a.header-run-badge.is-neutral:hover, a.header-run-badge.is-neutral:active { border-color: var(--border); }
 
 
     /* ═══════ Log terminal ═══════ */
@@ -2802,18 +2811,20 @@ function showToast(msg, type = 'success') {
 //   red    — a Cleanup, files are going away
 //   yellow — a Debug Cleanup, which drives that path but deletes nothing
 //   blue   — every other run, nothing is being deleted
-// The two blue cases differ only in name: a Simulate the user clicked says so,
-// the scheduler's own runs say "Running".
+// Blue says "Running" whichever way the run started. What matters here is
+// whether anything is being deleted, and the colour-plus-word pair already
+// carries that; who pressed the button does not change what is happening, and
+// the run-progress card names the trigger beside its own pill anyway.
 window.prRunTone = function (s) {
   if (s.debugCleanup) return ['Debugging', 'is-warning'];
   if (s.cleanup)      return ['Cleaning', 'is-danger'];
-  return [s.manual ? 'Simulate' : 'Running', 'is-accent'];
+  return ['Running', 'is-accent'];
 };
-window.prSetHeaderRunning = function (on, live, debugLive, manual) {
+window.prSetHeaderRunning = function (on, live, debugLive) {
   const h = document.querySelector('.site-header');
   if (!h) return;
   const [label, tone] = window.prRunTone(
-    { cleanup: !!live, debugCleanup: !!debugLive, manual: !!manual });
+    { cleanup: !!live, debugCleanup: !!debugLive });
   h.classList.toggle('is-running', !!on);
   h.querySelectorAll('.header-run-badge').forEach(el => {
     el.classList.remove('is-danger', 'is-accent', 'is-warning');
@@ -3004,7 +3015,7 @@ window.prSetConfigTabError = function (on) {
       const r = await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' });
       if (r.ok) {
         const d = await r.json();
-        window.prSetHeaderRunning(!!d.run_active, !!d.run_cleanup, !!d.run_debug_cleanup, !!d.run_manual);
+        window.prSetHeaderRunning(!!d.run_active, !!d.run_cleanup, !!d.run_debug_cleanup);
         window.prSetConfigTabError(!!d.config_attention);
         // Page hook: lets a page react to run-state changes without its own
         // /api/status poll (the explorer locks Filtering & Scoring with it).
