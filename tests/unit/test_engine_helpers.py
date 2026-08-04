@@ -89,6 +89,42 @@ check("the same viewer through two sections is not counted twice",
 check("the sweep asks each section for its own history",
       {sid for sid, _, _ in _history_pages} == {"1", "2"})
 
+# A server free to cap the page size below what was asked for: "short page"
+# means "that is all I send at once", not "that is all there is". Reading it as
+# the end stops at page one and quietly under-counts every viewer whose plays
+# sit further back — the movie four people watched last year reads as one.
+_capped = {"1": [{"rating_key": "z", "user_id": u} for u in range(1, 8)]}
+def _capping_tautulli(cmd, **params):
+    if cmd == "get_history":
+        rows = _capped.get(str(params.get("section_id")), [])
+        start = int(params.get("start", 0))
+        return {"recordsFiltered": len(rows), "data": rows[start:start + 2]}   # caps at 2
+    return {}
+_saved_api = E.tautulli_api
+E.tautulli_api = _capping_tautulli
+try:
+    _swept = E._plex_distinct_users_by_key(["1"])
+finally:
+    E.tautulli_api = _saved_api
+check("a server that caps the page size does not truncate the sweep",
+      _swept.get("z") == 7)
+
+# ...and one that ignores `start` entirely must not spin forever. Bounded, with
+# whatever it did manage to read.
+_stuck_calls = []
+def _stuck_tautulli(cmd, **params):
+    if cmd == "get_history":
+        _stuck_calls.append(1)
+        return {"data": [{"rating_key": "y", "user_id": 1}]}   # no recordsFiltered, same page
+    return {}
+E.tautulli_api = _stuck_tautulli
+try:
+    _stuck = E._plex_distinct_users_by_key(["1"])
+finally:
+    E.tautulli_api = _saved_api
+check("a server that ignores paging is bounded, not an endless run",
+      len(_stuck_calls) <= 1002 and _stuck.get("y") == 1)
+
 # A play on record with no attributable viewer still means someone watched it:
 # never zero while the play count says otherwise.
 check("a played movie with no history rows still counts one viewer",

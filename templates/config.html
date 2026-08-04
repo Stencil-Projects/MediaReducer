@@ -535,8 +535,15 @@
            asking for the Simulate the user just ran. #}
         {% set monitor_locked_text = monitor_locked_reason | default('Run Simulate first — this enables automatically once the scan finishes.') %}
 
+        {# Dismissible: it reports a switch that already happened, so once it has
+           been read there is nothing left for it to warn about. The X clears the
+           stored reason, which is why it does not come back on the next load. #}
         {% if config.get('_RUN_MODE_AUTOPAUSE_REASON') and config.RUN_MODE == 'paused' %}
-        <div class="config-inline-warning mb-3">Automatic Cleanup was switched to Monitor Only automatically: {{ config.get('_RUN_MODE_AUTOPAUSE_REASON') }}</div>
+        <div class="config-inline-warning is-dismissible mb-3" id="autopause-note">
+          <span>Automatic Cleanup was switched to Monitor Only automatically: {{ config.get('_RUN_MODE_AUTOPAUSE_REASON') }}</span>
+          <button type="button" class="config-inline-dismiss" id="autopause-note-dismiss"
+                  aria-label="Dismiss this note" title="Dismiss">&times;</button>
+        </div>
         {% endif %}
         <div class="form-check config-card run-mode-card" id="mode-card-off" aria-disabled="false">
           <input class="form-check-input" type="radio" name="RUN_MODE" id="mode-off"
@@ -4459,6 +4466,30 @@ function _wireRunModeCardClicks() {
   });
 }
 _wireRunModeCardClicks();
+
+// Dismissing the autopause note CLEARS the stored reason rather than hiding the
+// element: hidden client-side it would be back on the next load and still be
+// there on every other device, and the same stale sentence would resurface the
+// next time the mode happened to be Monitor Only. The button holds itself
+// disabled while the write is in flight so a double click cannot post twice.
+(function wireAutopauseDismiss() {
+  const btn = document.getElementById('autopause-note-dismiss');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/run-mode/autopause-note/dismiss', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!d.ok) throw new Error(d.message || 'Could not dismiss the note.');
+      document.getElementById('autopause-note')?.remove();
+    } catch (e) {
+      // The note stays put. It is still true, and swallowing this would hide a
+      // /config write problem behind a message that looked like it worked.
+      btn.disabled = false;
+      showToast(e.message || 'Could not dismiss the note.', 'danger');
+    }
+  });
+})();
 _applySpaceThresholdLock();
 syncSavedVisibilitySections();
 // Initialize the protected-collection pickers from the saved config on load.

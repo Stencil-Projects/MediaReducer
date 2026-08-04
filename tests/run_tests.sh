@@ -201,6 +201,7 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_server_toggle node tests/e2e/e2e_server_toggle.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_mode_stale   node tests/e2e/e2e_mode_stale.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_breach_note  node tests/e2e/e2e_breach_note.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_last_run_colon node tests/e2e/e2e_last_run_colon.mjs
 
       # A Debug-mode dashboard (its own app + isolated OUTPUT_DIR): the Cleanup
       # button morphs to Debug Cleanup, which must stay enabled through status

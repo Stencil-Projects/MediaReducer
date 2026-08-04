@@ -600,10 +600,12 @@
        something, and it sits in the chrome instead of beside the thing it
        describes, so it holds still under the pointer. The keyboard focus ring
        above is deliberately left alone — it is still a link. */
+       The three tones prSetHeaderRunning can apply, and only those: it never
+       paints the badge neutral, so a fourth rule here would be answering a
+       question nothing asks. */
     a.header-run-badge.is-danger:hover,  a.header-run-badge.is-danger:active  { border-color: var(--text-danger); }
     a.header-run-badge.is-accent:hover,  a.header-run-badge.is-accent:active  { border-color: var(--border-accent); }
     a.header-run-badge.is-warning:hover, a.header-run-badge.is-warning:active { border-color: var(--border-warning); }
-    a.header-run-badge.is-neutral:hover, a.header-run-badge.is-neutral:active { border-color: var(--border); }
 
 
     /* ═══════ Log terminal ═══════ */
@@ -1605,6 +1607,27 @@
       padding: 10px 12px;
       font-size: .8rem;
     }
+    /* A note that reports something ALREADY DONE can be dismissed; one that
+       reports a condition still in effect cannot, because hiding it would not
+       change the condition and the page would then be lying by omission. The X
+       sits on the right and never wraps under the text. */
+    .config-inline-warning.is-dismissible {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding-right: 8px;
+    }
+    .config-inline-warning.is-dismissible > :first-child { flex: 1 1 auto; }
+    .config-inline-dismiss {
+      flex: 0 0 auto;
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; margin: -2px 0 0;
+      padding: 0; border: 0; border-radius: 6px;
+      background: transparent; color: inherit;
+      font-size: 1rem; line-height: 1; cursor: pointer;
+      opacity: .65; transition: opacity .12s ease, background-color .12s ease;
+    }
+    .config-inline-dismiss:hover  { opacity: 1; background: var(--surface-tint-warning); }
+    .config-inline-dismiss:active { opacity: .8; }
+    .config-inline-dismiss:disabled { opacity: .35; cursor: default; background: transparent; }
 
     /* Locked-section ghosting: the pages decide what dims; the not-allowed
        cursor on the controls is common to both. */

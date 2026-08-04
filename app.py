@@ -411,7 +411,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.6"
+APP_VERSION = "1.0.0-alpha.7"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -1717,8 +1717,9 @@ _run_active    = False
 _run_cleanup      = False         # True while the active run is a deleting run, not a simulation
 _run_debug_cleanup = False        # True while the active run is a Debug Cleanup (live path, no deletions)
 # True while the active run was started from a button rather than the scheduler.
-# The status pills read it: a Simulate the user just clicked says "Simulate",
-# the same mode fired by the scheduler says "Running".
+# Reported on /api/status as a fact about the run; nothing in the UI branches on
+# it — the status pills answer whether a run is DELETING, which is the same
+# either way.
 _run_manual    = False
 _run_start     = None          # datetime
 _run_process   = None          # subprocess.Popen
@@ -6029,6 +6030,26 @@ def api_reset_mark_delays():
                                f"{delay} day(s) from today."})
 
 
+@app.route("/api/run-mode/autopause-note/dismiss", methods=["POST"])
+def api_dismiss_autopause_note():
+    """Clear the note explaining why Automatic Cleanup switched itself to Monitor
+    Only — the X on the Configuration banner.
+
+    It rewrites that one key and nothing else, deliberately: a dismissal must not
+    carry whatever is half-typed in the form on screen into config.json the way a
+    full save would. Only the note goes; the mode it describes already changed and
+    stays where it is."""
+    cfg = load_config()
+    if not cfg.get("_RUN_MODE_AUTOPAUSE_REASON"):
+        return jsonify({"ok": True, "dismissed": False})   # already gone; nothing to write
+    cfg.pop("_RUN_MODE_AUTOPAUSE_REASON", None)
+    if not save_config(cfg):
+        return jsonify({"ok": False,
+                        "message": "Could not write to /config — the note stays "
+                                   "until that is fixed."}), 500
+    return jsonify({"ok": True, "dismissed": True})
+
+
 def _normalized_monitor_dirs(cfg: dict) -> list[str]:
     out = []
     for raw in cfg.get("MONITOR_DIRS") or []:
@@ -6577,8 +6598,7 @@ def api_status():
         # A Debug Cleanup drives the cleanup path but deletes nothing; the dashboard
         # header badge and run pill read "Debugging" in yellow for it.
         "run_debug_cleanup":          _run_active and _run_debug_cleanup,
-        # Started from a button, not the scheduler; the header badge says
-        # "Simulate" for one the user clicked and "Running" for a scheduled run.
+        # Started from a button rather than the scheduler. Informational only.
         "run_manual":                 _run_active and _run_manual,
         "summary_active":          _summary_active,
         "last_run":                last_run_time(),

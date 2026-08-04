@@ -3097,11 +3097,13 @@ def _plex_distinct_users_by_key(section_ids):
     for section_id in section_ids:
         start = 0
         length = 1000
+        total = None
+        pages = 0
         while True:
             data = tautulli_api("get_history", section_id=section_id,
                                 start=start, length=length,
-                                order_column="date", order_dir="desc")
-            rows = (data or {}).get("data") or []
+                                order_column="date", order_dir="desc") or {}
+            rows = data.get("data") or []
             if not rows:
                 break
             rows_seen += len(rows)
@@ -3112,9 +3114,25 @@ def _plex_distinct_users_by_key(section_ids):
                 who = str(row.get("user_id") or row.get("user") or "").strip()
                 if key and who:
                     users_by_key.setdefault(key, set()).add(who)
-            if len(rows) < length:
+            # Advance by what ARRIVED, and stop on the count the server reports
+            # rather than on a page coming back short. A server free to cap the
+            # page size below what was asked for makes "short page" mean "that is
+            # all I send at once", not "that is all there is" — reading it as the
+            # end would stop at the first page and quietly under-count every
+            # viewer whose plays sit further back in the history.
+            start += len(rows)
+            if total is None:
+                total = parse_int(data.get("recordsFiltered"), 0) or None
+            if total is not None and start >= total:
                 break
-            start += length
+            # Backstop for a server that ignores `start` and keeps serving page
+            # one: without it the sweep never ends and no run ever finishes.
+            pages += 1
+            if pages > 1000:
+                log(f"WARN Tautulli watch history: section {section_id} kept returning pages "
+                    f"past {rows_seen} rows — stopping the sweep. Viewer counts for older "
+                    f"plays may be low until this is looked at.")
+                break
     log(f"Tautulli watch history: {rows_seen} play(s) across {len(users_by_key)} movie(s) "
         f"— distinct viewers counted per movie.")
     return {key: len(who) for key, who in users_by_key.items()}

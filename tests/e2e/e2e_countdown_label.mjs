@@ -47,6 +47,20 @@ const R = await p.evaluate(() => {
     _paused = true;
     _nextTickIsDaily = true;  out.monitorDaily = read();
     _nextTickIsDaily = false; out.monitorRoutine = read();
+    // No next_run_time is FOUR different states, and only two of them are worth
+    // reporting. Starting a Simulate under Automatic Cleanup hits the other two:
+    // the Summary alongside it holds the clock for about half a second, and the
+    // Cleanup button is disabled that whole time — which is what this line used
+    // to read as "your Connections are broken".
+    _paused = false; _nextRunTime = null;
+    _cleanupOk = false; _cleanupGateBlocked = false; out.busyButHealthy = read();
+    _cleanupOk = true;  _cleanupGateBlocked = false; out.idleAndHealthy = read();
+    _cleanupOk = false; _cleanupGateBlocked = true;  out.reallyBlocked = read();
+    // Monitor Only reaches the same window on a Simulate. Everything that
+    // standingly explains a missing tick — nothing monitored, scheduler fully
+    // paused — is checked before this branch, so no next tick here can only be
+    // a run or the Summary beside it holding the clock.
+    _paused = true; _nextTickTime = null; out.monitorBusy = read();
   } finally {
     _paused = saved.paused; _schedOff = saved.off; _nextRunTime = saved.run;
   }
@@ -66,6 +80,13 @@ check('no mode still shows the bare "Next run in"',
 check('Monitor Only wording is unchanged',
   /^Daily scan in \d+:\d\d$/.test(R.monitorDaily)
   && /^Next refresh in \d+:\d\d$/.test(R.monitorRoutine));
+check('a run or Summary holding the clock does not blame Connections',
+  R.busyButHealthy === 'Next run: calculating\u2026');
+check('...and neither does a healthy idle moment', R.idleAndHealthy === R.busyButHealthy);
+check('a genuinely blocked scheduler still says what to fix',
+  /^No run scheduled — fix Connections \/ Space Thresholds first$/.test(R.reallyBlocked));
+check('Monitor Only gets the same answer while the clock is held',
+  R.monitorBusy === 'Next run: calculating\u2026');
 check('no JS errors', errs.length === 0);
 console.log('R:', JSON.stringify(R));
 console.log('RESULT:', ok ? 'PASS' : 'FAIL');

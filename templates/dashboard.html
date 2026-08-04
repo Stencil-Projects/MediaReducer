@@ -271,6 +271,18 @@
     display: block;
     color: var(--text-primary);
   }
+  /* While a run is going, the colon in the last-run time ticks once a second —
+     the clock-face cue that something is live, next to the timestamp that is
+     about to be replaced. step-end rather than a fade: a blink is on or off,
+     and easing it reads as a rendering glitch at this size. The colon keeps its
+     own width whichever half of the second it is in, so the time does not jitter
+     (visibility, not display). The global prefers-reduced-motion rule in
+     base.html turns it off. */
+  #last-run-value .last-run-colon { display: inline-block; }
+  #last-run-value.is-running .last-run-colon {
+    animation: pr-last-run-colon 1s step-end infinite;
+  }
+  @keyframes pr-last-run-colon { 50% { visibility: hidden; } }
   #next-run-sub {
     margin-top: 3px;
     color: var(--text-muted);
@@ -1146,6 +1158,14 @@ let _simulateOk = {{ 'false' if cleanup_state.simulate_disabled else 'true' }};
 // _cleanupOk / _cleanupDisabledMessage to the debug state so the initial JS matches the
 // debug-aware server render and stays matched after status polls (_applyCleanupState).
 let _cleanupOk = {{ 'false' if (cleanup_state.debug_disabled if debug_mode else cleanup_state.cleanup_disabled) else 'true' }};
+// The two conditions the SERVER gates next_run_time on, mirrored with the same
+// defaults. The countdown needs them separately from _cleanupOk: that one is the
+// Cleanup BUTTON's state, which is also false during a run, during a background
+// Summary, and while a plan is stale — so using it to explain why there is no
+// next run blamed Connections and Space Thresholds for all of those.
+{% set _crit_ok = cleanup_state.connection_health.get('critical_ok', True) %}
+{% set _thr_ok = cleanup_state.space_thresholds.get('ok_for_cleanup', False) %}
+let _cleanupGateBlocked = {{ 'true' if (not _crit_ok or not _thr_ok) else 'false' }};
 let _summaryDisabledMessage = {{ (cleanup_state.summary_tooltip or 'Connect the selected media server first.')|tojson }};
 let _simulateDisabledMessage = {{ (cleanup_state.simulate_tooltip or 'Fix Space Thresholds first.')|tojson }};
 let _cleanupDisabledMessage = {{ ((cleanup_state.debug_tooltip if debug_mode else cleanup_state.cleanup_tooltip) or 'Fix Space Thresholds first.')|tojson }};
@@ -1913,20 +1933,36 @@ function _fetchJson(url, options = {}, timeoutMs = 8000) {
 }
 
 
+// The time's colon gets its own element so it can blink while a run is going.
+// Built as nodes rather than markup: the text comes from our own formatter, but
+// this is the one place a timestamp reaches the page, and there is no reason for
+// it to be a place where markup could. Only the FIRST colon is wrapped — the
+// date half has none today, and a second one would be a separator, not a clock.
+function _renderLastRunValue(el, text) {
+  const s = String(text ?? '');
+  const i = s.indexOf(':');
+  el.replaceChildren();
+  if (i < 0) { el.textContent = s; return; }
+  const colon = document.createElement('span');
+  colon.className = 'last-run-colon';
+  colon.textContent = ':';
+  el.append(s.slice(0, i), colon, s.slice(i + 1));
+}
+
 function _updateLastRunDisplay(ts, fallback) {
   const el = document.getElementById('last-run-value');
   if (!el) return;
   if (ts !== null && ts !== undefined && ts !== '') {
     el.dataset.lastRunTs = ts;
-    el.textContent = prFormatEpoch(ts, false);
+    _renderLastRunValue(el, prFormatEpoch(ts, false));
   } else {
-    el.textContent = fallback || '—';
+    _renderLastRunValue(el, fallback || '—');
   }
 }
 
 function _formatInitialTimestamps() {
   const el = document.getElementById('last-run-value');
-  if (el && el.dataset.lastRunTs) el.textContent = prFormatEpoch(el.dataset.lastRunTs, false);
+  if (el && el.dataset.lastRunTs) _renderLastRunValue(el, prFormatEpoch(el.dataset.lastRunTs, false));
 }
 
 function _formatReclaimedBytes(bytes, fallbackLabel = '') {
@@ -2281,6 +2317,13 @@ function _applyCleanupState(cleanupState) {
   // load (re-blocking on a safety target, or un-ghosting with no queue).
   const _cleanupButtonBlocked = _debugMode ? cleanupState.debug_disabled : cleanupState.cleanup_disabled;
   _cleanupOk = !_cleanupButtonBlocked;
+  // Same two flags the server gates next_run_time on, with its .get() defaults:
+  // connection health absent means healthy, thresholds absent means not ready.
+  // See the declaration for why the button's own state will not do.
+  const _health = cleanupState.connection_health || {};
+  const _thresholds = cleanupState.space_thresholds || {};
+  const _critOk = _health.critical_ok === undefined ? true : !!_health.critical_ok;
+  _cleanupGateBlocked = !_critOk || !_thresholds.ok_for_cleanup;
   _applyCleanupButtonTitle();
   _safetyBlocked =!!(cleanupState.space_thresholds && cleanupState.space_thresholds.safety_blocked);
   _simulateRequired = !!(cleanupState.space_thresholds && cleanupState.space_thresholds.simulate_required);
@@ -2594,6 +2637,9 @@ function _initDashboardTooltips() {
 function setRunning(on, live, debugLive) {
   _active = on;
   if (window.prSetHeaderRunning) window.prSetHeaderRunning(on, live, debugLive);
+  // The last-run time's colon ticks while a run is in flight — the timestamp
+  // beside it is the one this run is about to replace.
+  document.getElementById('last-run-value')?.classList.toggle('is-running', !!on);
   const stopBtn = document.getElementById('btn-stop');
   if (stopBtn) stopBtn.title = on ? 'Stop the active run' : 'No active run to stop';
   _applyButtonStates();
@@ -2951,17 +2997,30 @@ function _updateCountdown() {
       el.textContent = diff === 0 ? (_nextTickIsDaily ? 'Scanning now…' : 'Refreshing now…')
         : `${_evt} in ${m}:${s.toString().padStart(2, '0')}`;
     } else {
-      el.textContent = 'Monitor Only — refreshes every ~15 min';
+      // No next tick, having already ruled out every standing reason for one
+      // above: nothing monitored and a fully-paused scheduler both returned, so
+      // the only thing left holding the clock is a run or the Summary beside it.
+      // That is the same half-second Automatic Cleanup gets on a Simulate, and
+      // it deserves the same answer — the old line described the mode instead,
+      // which was true but read as the final word on a countdown that was about
+      // to come back.
+      el.textContent = 'Next run: calculating…';
     }
     return;
   }
   el.title = willPrune ? 'Over space limits — this run will prune.' : '';
   if (!_nextRunTime) {
-    // The server sends next_run_time=null while automatic runs are blocked
-    // (connection down, bad thresholds) — that's a real state, not a pending
-    // calculation, so don't promise one that will never finish.
-    el.textContent = _cleanupOk ? 'Next run: calculating…'
-      : 'No run scheduled — fix Connections / Space Thresholds first';
+    // Four different things null next_run_time: a run, a background Summary, a
+    // down connection, unusable thresholds. Only the last two are a real state
+    // to report — the first two are the clock being held for a moment and
+    // resolve on their own. Keying this off the Cleanup button's state named
+    // Connections and Space Thresholds for all four, so starting a Simulate in
+    // Automatic Cleanup flashed "fix Connections" at a setup with nothing wrong
+    // with it: the Summary that runs alongside takes the clock for about half a
+    // second, and the button is disabled for that whole time.
+    el.textContent = _cleanupGateBlocked
+      ? 'No run scheduled — fix Connections / Space Thresholds first'
+      : 'Next run: calculating…';
     return;
   }
   const diff = Math.max(0, new Date(_nextRunTime).getTime() - Date.now());
