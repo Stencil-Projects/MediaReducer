@@ -63,8 +63,8 @@ for label, linked_root in (("plain root", False), ("symlinked library root", Tru
     check(f"{label}: every child is named in the library's own namespace",
           listed and all(v.startswith(str(root) + "/") for v in listed.values()), listed)
 
-    # The regression: hand a listed path straight back, as the picker's click
-    # handler does. A real branch must survive the round trip.
+    # Hand a listed path straight back, as the picker's click handler does:
+    # a real branch must survive that round trip.
     body, status = browse(root, listed.get("Movies"))
     check(f"{label}: clicking a real folder is accepted back",
           status == 200 and body.get("ok"), f"{status} {body}")

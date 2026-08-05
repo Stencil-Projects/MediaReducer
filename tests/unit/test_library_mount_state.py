@@ -1,9 +1,10 @@
 """What the health check says when /library is not there.
 
-Three states that used to collapse into one message. Every path sample fails
-when the library root is missing, so the check reported "Plex paths do not line
-up with files under /library" and sent people looking for a Plex prefix mismatch
-that did not exist. The mount was simply absent.
+Three states that must not collapse into one message. Every path sample fails
+when the library root is missing, so a check that only knows "paths don't line
+up" reports "Plex paths do not line up with files under /library" and sends
+people looking for a prefix mismatch that does not exist. The mount is simply
+absent, and the message has to say so.
 
 Empty is worth separating too: on a NAS that is usually a share or disk that has
 not come up yet, not a library with no films in it.

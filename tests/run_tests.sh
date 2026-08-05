@@ -38,7 +38,7 @@ run() {
     echo "FAIL $name (log: $TMP/$name.log)"
     # The lines that actually FAILED, then the tail. A blind tail alone is only
     # right when the failure is last: checks run in a fixed order, so a suite
-    # that broke early and passed late printed five PASS lines and a bare
+    # that fails early and passes late tails as five PASS lines and a bare
     # "RESULT: FAIL" — and on CI, where the log file is an artifact nobody has
     # in front of them, that is the whole diagnosis.
     grep -E '^[[:space:]]*FAIL' "$TMP/$name.log" | grep -v 'RESULT:' | head -10 | sed 's/^/    /'
@@ -112,10 +112,10 @@ if [[ "$MODE" == "--integration" || "$MODE" == "--e2e" ]]; then
 
   # Boot an app instance against a fixture config on a port; wait for health.
   boot_app() { # <config> <library> <port>  -> echoes the app PID (only)
-    # Refuse a port something is already serving. This used to wait for ANY app
-    # to answer, so a stray instance left behind by a killed run answered at
-    # once and the tests silently ran against ITS fixtures: one baffling
-    # failure, then a clean pass after it had gone.
+    # Refuse a port something is already serving. Waiting for ANY app to answer
+    # instead lets a stray instance left behind by a killed run answer at once,
+    # and the tests then run silently against ITS fixtures: one baffling
+    # failure, then a clean pass after it has gone.
     if curl -sf "http://127.0.0.1:$3/api/status" >/dev/null 2>&1; then
       echo "ERROR: something is already serving http://127.0.0.1:$3" >&2
       echo "       Stop it, or set MR_E2E_PORT to a free base port." >&2
@@ -202,6 +202,8 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_mode_stale   node tests/e2e/e2e_mode_stale.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_breach_note  node tests/e2e/e2e_breach_note.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_last_run_colon node tests/e2e/e2e_last_run_colon.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_page_notes   node tests/e2e/e2e_page_notes.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_startup_mode_option node tests/e2e/e2e_startup_mode_option.mjs
 
       # A Debug-mode dashboard (its own app + isolated OUTPUT_DIR): the Cleanup
       # button morphs to Debug Cleanup, which must stay enabled through status

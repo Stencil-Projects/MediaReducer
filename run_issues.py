@@ -1,13 +1,12 @@
 """One vocabulary for everything a run can report as wrong.
 
-A run used to say "Completed with errors" and leave you to go read the log for
-what that meant. Worse, each surface said it differently: the log had its own
-wording, the dashboard showed a sentence the engine had glued together, and the
-notification said only that errors happened. Three descriptions of one event is
-three chances to disagree.
+"Completed with errors" says nothing on its own, and four surfaces — the log,
+the dashboard, the notification and the debug report — each have to say what
+went wrong. Wording them separately is three chances for them to disagree about
+one event.
 
-So the categories live here, and the engine, the app, the notification and the
-dashboard all label them from this table. `engine.record_issue()` is the only
+So the categories live here, and every surface labels them from this table.
+`engine.record_issue()` is the only
 way to raise one, which is what keeps a new failure from quietly inventing its
 own wording in a log line nobody parses.
 

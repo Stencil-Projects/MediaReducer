@@ -136,7 +136,7 @@ with tempfile.TemporaryDirectory() as td:
 # ── Debug Cleanup's upkeep PERSISTS (it's 'Cleanup minus deletion', not a dry run) ──
 # A marked file vanished. Running the debug_cleanup body must drop that dead mark from
 # the queue on disk (same as a real Cleanup's upkeep) — while still deleting no
-# real file. This is the behavior that changed: the upkeep is no longer dry.
+# real file. The upkeep is live; only the deletion is suppressed.
 with tempfile.TemporaryDirectory() as td:
     paths = setup(td)
     paths[0].unlink()                       # a marked file vanished → upkeep drops it
@@ -149,9 +149,9 @@ with tempfile.TemporaryDirectory() as td:
     check("debug_cleanup wrote no deleted.log", not engine.DELETED_LOG.exists())
 
 # ── The preview logs ONLY the covering prefix — no full-queue "spare" spam ────
-# Regression for a run where a tiny redline deficit against a 2,500-entry queue
-# logged a "Would spare (unverifiable)" line for every movie past the covering
-# prefix and buried the real WOULD DELETE lines under thousands of them.
+# A tiny redline deficit against a 2,500-entry queue must not log a "Would spare
+# (unverifiable)" line for every movie past the covering prefix — that buries the
+# real WOULD DELETE lines under thousands of them.
 with tempfile.TemporaryDirectory() as td:
     paths = setup(td)                      # 4 × 2 MB, target 2 MB → first file covers
     _logs = []

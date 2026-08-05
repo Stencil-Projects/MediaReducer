@@ -52,7 +52,7 @@ A._deletion_limits_exceeded = lambda cfg, disk, lib: True
 
 # Connect Tautulli and make its API raise an error that echoes a media path —
 # a remote error body can do this. The report must run it through redact(), not
-# print it raw (regression for the sanitizer-bypass security finding).
+# print it raw: an unsanitized error body is a path straight through redact().
 API_ERR_PATH = "/library/Movies HD/Blade Runner 2049/film.mkv"
 A._effective_connection_values = lambda cfg: {"tautulli_url": "http://tautulli.test", "tautulli_key": "k"}
 def _boom(*a, **k):

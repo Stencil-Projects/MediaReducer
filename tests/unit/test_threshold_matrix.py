@@ -24,8 +24,8 @@ atexit.register(shutil.rmtree, _OUT_DIR, True)
 # Hermetic library root: point MEDIAREDUCER_LIBRARY at a temp dir with a "movies"
 # subfolder (created BEFORE importing app/engine, which read the library root once
 # at import). The save handler validates that monitored dirs exist on disk; the
-# hardcoded DIRS "/library/movies" normalizes to <root>/movies, so the test no
-# longer depends on a real /library mount.
+# hardcoded DIRS "/library/movies" normalizes to <root>/movies, so the test does
+# not depend on a real /library mount.
 _LIB_DIR = tempfile.mkdtemp(prefix="mr-test-lib.")
 atexit.register(shutil.rmtree, _LIB_DIR, True)
 (Path(_LIB_DIR) / "movies").mkdir(parents=True, exist_ok=True)
@@ -160,9 +160,9 @@ for mode, h, r, c in ((False, 0, None, None), (False, 500, 200, None)):
 # The Redline-below-Headroom ceiling on the dashboard (_space_threshold_state)
 # must only apply while Headroom is TICKED. Unticking Headroom retires that ceiling —
 # even when a Library Size Cap is ALSO armed (redline + cap), which is not a
-# "redline-only" config but still has no Headroom target to sit under. Regression for
-# the false "Redline must be lower than Headroom" error shown with Headroom off +
-# Redline + Cap.
+# "redline-only" config but still has no Headroom target to sit under. Keeping the
+# ceiling there raises a false "Redline must be lower than Headroom" on a Headroom
+# off + Redline + Cap config.
 # ══════════════════════════════════════════════════════════════════════════
 
 # Neutralize the DB/plan-stamp parts — this exercises the hard-error validation only.
@@ -179,7 +179,8 @@ def tooltip(cfg):
 
 CEIL = "lower than Headroom"
 
-# 1. THE BUG: Headroom off (redline-only flag) + Redline + Library Size Cap.
+# 1. The case the ceiling must not fire on: Headroom off (redline-only flag)
+#    + Redline + Library Size Cap.
 cfg = {"REDLINE_ONLY_MODE": True, "HEADROOM_GB": 0, "REDLINE_GB": 500,
        "MAX_LIBRARY_GB": 10000, "MAX_HEADROOM_PCT": 15}
 check("headroom off + redline + cap: no false 'Redline must be lower than Headroom'",

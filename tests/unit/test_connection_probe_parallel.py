@@ -2,9 +2,9 @@
 
 Every Config save runs this check — connections can fail without any field
 changing, and the dependent UI locks read off the current probe. Run in
-sequence it cost the SUM of every server's latency: four health probes plus a
+sequence it costs the SUM of every server's latency: four health probes plus a
 media-path sample per media server, each waiting on the last, so a save against
-four servers on a 200 ms LAN took ~1.2 s before anything was written.
+four servers on a 200 ms LAN spends ~1.2 s before anything is written.
 
 The probes share no state and none feeds another, so they run together and the
 wall clock is the slowest single server instead of the total.

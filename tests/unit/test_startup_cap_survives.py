@@ -26,8 +26,8 @@ def check(name, cond):
     print(("PASS " if cond else "FAIL ") + name)
     ok = ok and cond
 
-# A large library (bigger than any cap here) — the old safety would have disabled
-# the cap on this basis; it must not anymore.
+# A large library, bigger than any cap here: a library already over its cap must
+# not be treated as grounds for disabling the cap.
 A.library_stats = lambda: {"library_gb": 1000.0}
 # Monitor Only also requires an up-to-date library database at startup; these
 # cases test the mode transitions themselves, so treat the database as fresh

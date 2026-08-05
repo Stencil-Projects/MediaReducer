@@ -22,9 +22,9 @@ MediaReducer is two Python processes plus a set of Jinja templates:
 ```
 
 **Run lock.** While a run is active, every Configuration section and the
-Filtering & Scoring card is ghosted. This used to be a hand-picked list of
-controls, which drifted; it is a sweep now (`prSetRunLock` in `base.html`), so a
-control added later is covered without anyone remembering to add it.
+Filtering & Scoring card is ghosted. It is a sweep (`prSetRunLock` in
+`base.html`) rather than a hand-picked list of controls, so a control added
+later is covered without anyone remembering to add it.
 
 The ordering in `_applyConfigRuntimeLocks` is the part to preserve: release the
 lock, let the per-section rules set each control's real state, then lay the lock
@@ -50,17 +50,16 @@ reports what happened. It never force-clears `_run_active` behind a process it
 failed to kill: one wedged in an uninterruptible syscall can wake later, and
 unlocking would let a second run start beside it.
 
-**Run issues.** A run used to report trouble three ways: a banner in the log, a
-sentence glued onto the progress message, and "Completed with errors" in the
-notification. Three descriptions of one event is three chances to disagree.
+**Run issues.** Trouble has to reach the log, the progress message and the
+notification. Worded separately that is three descriptions of one event and
+three chances to disagree.
 
-`engine.record_issue(category, detail)` is now the only way to raise one. It
+`engine.record_issue(category, detail)` is the only way to raise one. It
 appends to the run's issue list and writes the log line in a single call, from
 `run_issues.CATEGORIES`, so `lastrun.log` uses the words the dashboard and the
 notification use. `emit_progress` and `write_run_report` attach the folded list
 themselves, and `completed_with_errors` is derived rather than passed by each
-caller: an outcome flag disagreeing with its own issue list was the bug this
-replaces.
+caller, so an outcome flag cannot disagree with its own issue list.
 
 `test_run_issues` keeps it from rotting. It reads engine.py for bare
 `log("WARNING…")` lines that would never reach the dashboard, and flags any
@@ -107,7 +106,7 @@ declared category nothing raises.
   fills in under the pointer reads as clickable — except the header badge, which
   is a link only so the run is one click away and holds still under the pointer.
   `window.prRunTone()` picks the label and tone from one place so the pills
-  cannot word the same run differently, which they used to. What the label
+  cannot word the same run differently. What the label
   answers is whether a run is deleting: "Cleaning" red, "Debugging" yellow,
   "Running" blue for everything else, however that run started. Pinned by
   `e2e_status_pills`.
@@ -119,7 +118,7 @@ declared category nothing raises.
   `commafy(0)` / `prCommaNum(v, 0)` for settings; the latter pair drops trailing
   zeros, which is why measurements avoid them. `notify.py` has its own copy of
   the byte formatter (it cannot import `app`), pinned against it by
-  `test_size_format` after the two drifted to different units.
+  `test_size_format`, since two implementations can drift to different units.
 - **`static/`** — the favicon set: an SVG, a multi-size `.ico` and the iOS touch
   icon, all three generated from one set of constants so the vector and the
   rasters cannot drift. `/favicon.ico` has its own route
@@ -157,8 +156,14 @@ run, but a `MEDIAREDUCER_MODE_OVERRIDE` of `headroom` is a manual Cleanup too.
 
 **The lifecycle.** Automatic Cleanup is never simply "whatever was saved":
 
-- **Startup** always drops Automatic Cleanup to Monitor Only
-  (`force_paused_run_mode_on_startup`); a Paused scheduler stays paused.
+- **Startup** drops Automatic Cleanup to Monitor Only
+  (`force_paused_run_mode_on_startup`); a Paused scheduler stays paused. The one
+  way out is `PAUSE_CLEANUP_ON_STARTUP` ("Set to Monitor Only at startup", on by
+  default) turned off, and even then only with `_library_db_fresh` — a stale
+  plan demotes regardless, since resuming deletions against something nothing
+  has re-checked is exactly what the demote is for. Absence of the key reads as
+  ON in `_coerce_bool`, so an older config file cannot be mistaken for someone
+  having turned the safety off.
 - **Monitor Only requires a working set** — a connected server, a monitored
   path, an armed space trigger (a Headroom target, a Redline floor, or a
   Library Size Cap — `_any_space_trigger_armed`; with none there is nothing to
@@ -212,11 +217,11 @@ Only one run at a time — `_run_lock` + `_run_active` reject overlaps. **Stop**
 engine, which finishes the file it's on (unlink → `deleted.log`) before exiting.
 
 **Stages: the log and the stepper are one call.** The dashboard's five-step
-progress bar and the `====== TITLE ======` banners in `lastrun.log` used to be
-written independently, and drifted — the protected-collections query moved the
-step to Scoring while the log was still inside RUN CONTEXT, so a failure there
-pointed at a step the run had not reached. `engine.log_stage(title, phase=…)` now
-does both: it closes the previous stage with `------ TITLE finished in Xs ------`,
+progress bar and the `====== TITLE ======` banners in `lastrun.log` drift if
+written independently — the protected-collections query moves the step to
+Scoring while the log is still inside RUN CONTEXT, so a failure there points at
+a step the run has not reached. `engine.log_stage(title, phase=…)` does both:
+it closes the previous stage with `------ TITLE finished in Xs ------`,
 writes the new banner, records the phase, and emits the progress event. Adding a
 stage means one call, not two.
 
@@ -435,8 +440,8 @@ What actually paces MediaReducer is upstream of the floor — the tick that
 produces the between-run alerts runs every 15 minutes and each alert type is
 latched to fire once per state change — so the floor is only there to catch the
 pathological case. The user-facing wording is derived from the constant
-(`_interval_words`), not written out: it used to hardcode minutes, which reads
-correctly at 15 minutes and says "every 0 minutes" at 10 seconds.
+(`_interval_words`), not written out: hardcoded minutes read correctly at 15
+minutes and say "every 0 minutes" at 10 seconds.
 
 Two design points matter when reading it:
 

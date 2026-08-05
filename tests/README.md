@@ -111,7 +111,7 @@ log path named in the failure line is actually there to read.
 | `test_page_delivery` | Pages are gzipped and served entirely from this container. Fails if a template ever reintroduces a CDN link |
 | `test_progress_phases` | Each progress step fills 0→100 once; path resolution reports under the indeterminate step |
 | `test_log_stages` | Each log stage reports its own duration, in the right place. One `log_stage` call moves the dashboard step AND writes the banner, and a failure marks the stage that was actually open |
-| `test_size_format` | Measured sizes always carry one decimal, typed settings stay whole, and a missing reading is a dash rather than a confident zero. Also pins app and notify to the same byte formatting, which had drifted to GiB on one side |
+| `test_size_format` | Measured sizes always carry one decimal, typed settings stay whole, and a missing reading is a dash rather than a confident zero. Also pins app and notify to the same byte formatting, which each implement separately |
 | `test_debug_report` | The report carries the decision state and never leaks names, paths or IPs |
 | `test_deleted_log` | The history parser, with and without the optional rationale fields |
 | `test_radarr_cleanup` | Radarr forgets a movie when its own copy is deleted, and never on someone else's |

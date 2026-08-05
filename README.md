@@ -215,9 +215,14 @@ queue and library size current, and a daily Simulate keeps the plan fresh.
 **Automatic Cleanup** stays locked until setup is complete and the health check
 passes.
 
-Restarts keep Paused and Monitor Only as you left them. Automatic Cleanup always
-drops back to Monitor Only, and if the library database is missing or badly out
-of date the scheduler rests at Paused until you run Simulate again.
+Restarts keep Paused and Monitor Only as you left them. Automatic Cleanup drops
+back to Monitor Only, since a restart is usually an upgrade or a crash and the
+plan on disk may no longer describe the library. **Set to Monitor Only at
+startup**, at the bottom of that mode, is what does it; clear it and Automatic
+Cleanup comes back armed instead. Either way, a library database that is missing
+or badly out of date still demotes, because resuming deletions against a plan
+nothing has re-checked is the thing the demote exists to prevent. Run Simulate
+and turn it back on.
 
 ### 2. Connections
 
@@ -445,8 +450,9 @@ Once armed, the scheduler checks every 15 minutes:
 - **Time zone** is the clock all of this runs on. Auto follows the container
   clock, which is often UTC, so set your zone if you care when daily runs fire.
 
-After a container restart, Automatic Cleanup always drops back to Monitor Only.
-Stopping or restarting mid-run is safe: the engine finishes the file it's on,
+After a container restart, Automatic Cleanup drops back to Monitor Only unless
+you clear **Set to Monitor Only at startup** and the library database is still
+current. Stopping or restarting mid-run is safe: the engine finishes the file it's on,
 records it, and shuts down cleanly. And if your thresholds stop being safe while
 it's armed, say a bulk copy pushes the cap past the safety percentage, the
 scheduler switches back to Monitor Only and tells you why.

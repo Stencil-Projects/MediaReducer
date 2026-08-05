@@ -69,7 +69,7 @@ SIM = {
 t, b = notify.build_run_message(ALL_ON, SIM)
 check("simulate title is daily summary", t == "MediaReducer — daily summary")
 # One labeled fact per line, not a sentence of them joined by "·" — a phone
-# renders the old form as an unreadable run-on the moment there are three.
+# renders that as an unreadable run-on the moment there are three.
 check("plan block lists eligible/marked/next date as labeled rows",
       "Eligible in deletion order: 400" in b and "Marked for deletion: 12" in b
       and "Next deletion: 2026-08-02" in b)
@@ -298,8 +298,8 @@ check("error dispatch sends when enabled", len(sent) == 1 and "boom" in sent[0][
 
 # ── A failed run reads like the dashboard's run panel ────────────────────────
 # Same three things in the same order: the engine's sentence behind a ×, the
-# stage to quote, then anything the run had recorded before it died. It used to
-# be "a run failed, check the log", which is the trip the alert should save.
+# stage to quote, then anything the run had recorded before it died. "A run
+# failed, check the log" would be the exact trip the alert exists to save.
 sent.clear()
 notify.dispatch_error(
     {**DEST, "NOTIFY_ENABLED": True, "NOTIFY_ON_ERROR": True},

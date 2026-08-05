@@ -211,12 +211,10 @@ EXECUTABLE_RUN_MODES = ("debug_info", "debug_sim", "headroom", "debug_cleanup", 
 # ── Space thresholds ───────────────────────────────────────────────────────────
 # DISARMED, matching default_config.json. These are the values a run uses for any
 # key MISSING from config.json — the file reads are all `if "KEY" in cfg` — so an
-# absent key must never arm a trigger. They used to be example values from before
-# the shipped config existed (1000 GB of headroom, a 200 GB Redline floor), which
-# meant a config.json that lost those three lines to a hand-edit, a truncated
-# write, or an install predating them came up armed to delete on a 1 TB free-space
-# target instead of doing nothing. Absent means off; the GUI and the shipped
-# config are what arm anything.
+# absent key must never arm a trigger. Give these example values instead and a
+# config.json that loses those three lines to a hand-edit or a truncated write
+# comes up armed to delete against whatever number is written here. Absent means
+# off; the GUI and the shipped config are what arm anything.
 HEADROOM_GB = 0     # free space to maintain (once-per-day cleanup trigger).
                     # 0 turns the headroom trigger off (a Redline floor and/or a
                     # Library Size Cap can still drive cleanup).
@@ -442,9 +440,9 @@ ISSUE_DETAIL_CAP = 10
 def record_issue(category, detail="", *, count=1, log_detail=None):
     """Record one problem AND write its log line, in one call.
 
-    Two calls — a log line and a separate counter — is how the two drifted
-    before: a failure would get a WARNING nobody aggregated, or a count nobody
-    could read. The log line is built from run_issues.CATEGORIES, so the words
+    Two calls — a log line and a separate counter — is how the two drift: a
+    failure gets a WARNING nobody aggregated, or a count nobody can read. The
+    log line is built from run_issues.CATEGORIES, so the words
     in lastrun.log are the same words the dashboard and the notification use.
 
     `detail` travels to every surface. `log_detail` overrides it for the log
@@ -463,11 +461,11 @@ def record_issue(category, detail="", *, count=1, log_detail=None):
 def summary_message(headline, *rows):
     """The one-line-per-fact outcome message every run ends with.
 
-    A run's result used to be one long sentence with the facts joined by
-    semicolons and the errors bolted on the end, which is unreadable at a glance
-    on a phone. Now it is a lead line and a short list, and the issue list is a
-    separate structure the dashboard and the notification render themselves —
-    so no surface has to parse this string to find out what went wrong.
+    A lead line and a short list, rather than one sentence with the facts joined
+    by semicolons — that is unreadable at a glance on a phone. Errors are not in
+    here at all: the issue list is a separate structure the dashboard and the
+    notification render themselves, so no surface has to parse this string to
+    find out what went wrong.
 
     rows: (label, value) pairs; a falsy value drops the row.
     """
@@ -486,7 +484,7 @@ def run_issue_summary():
 
 def _has_errors() -> bool:
     """Did anything ERROR-severity happen? Derived, never passed in — a run's
-    outcome flag and its issue list disagreeing is the exact bug this replaces."""
+    outcome flag cannot then disagree with its own issue list."""
     return any(run_issues.severity_of(i["category"]) == run_issues.ERROR
                for i in _RUN_ISSUES)
 
@@ -1086,11 +1084,11 @@ def log_stage(title, *, phase=None, timed=True):
 
     `phase` names the dashboard step this stage belongs to, and moving the
     stepper is THIS function's job — not a separate emit_progress() sprinkled
-    near the code that happens to be running. When the two were set
-    independently they disagreed: the protected-collections query drove the
-    stepper to "Scoring" while the log was still inside RUN CONTEXT, so a run
-    that failed there pointed at the wrong stage. One call now sets both, which
-    is what makes a red x on a step findable in the log."""
+    near the code that happens to be running. Set independently the two
+    disagree: the protected-collections query drives the stepper to "Scoring"
+    while the log is still inside RUN CONTEXT, so a run that fails there points
+    at the wrong stage. One call sets both, which is what makes a red x on a
+    step findable in the log."""
     global _STAGE_TITLE, _STAGE_STARTED
     close_stage()
     log_blank()
@@ -2723,9 +2721,9 @@ def fetch_protected_paths():
     if not USE_PLEX:
         # Deselecting Plex leaves PROTECTED_COLLECTIONS in config.json — nothing
         # clears it — and asking a server the user turned off aborts the run. The
-        # gate belongs here rather than at each call site: the queue-based paths
-        # each forgot it, so a migration away from Plex broke every 15-minute
-        # tick and every redline emergency with a Plex error.
+        # gate belongs here rather than at each call site: a call site that
+        # forgets it turns every 15-minute tick and every redline emergency into
+        # a Plex error for someone who has migrated away from Plex.
         return set(), set(), set(), set()
     if not PROTECTED_COLLECTIONS:
         return set(), set(), set(), set()

@@ -200,13 +200,13 @@ check('the panel and the mode specs both read Off',
 
 // ── Every trigger off does NOT mean the panel goes blank ────────────────────
 // The figures and the bar answer "how much space is there, and how much of it
-// is the library" — the question the thresholds are set AGAINST. They used to
-// vanish the moment nothing was armed, which is exactly when a new install
-// needs them to confirm a monitored directory took effect.
+// is the library" — the question the thresholds are set AGAINST. Vanishing the
+// moment nothing is armed would take them away exactly when a new install needs
+// them to confirm a monitored directory took effect.
 //
-// Asserting the figures are merely PRESENT here proves nothing: they were
-// painted while the thresholds were still armed, and stale text looks identical
-// to live text. So move the disk first, with everything off, and require the
+// Asserting the figures are merely PRESENT here proves nothing: they may have
+// been painted while the thresholds were still armed, and stale text looks
+// identical to live text. So move the disk first, with everything off, and require the
 // panel to follow — that is the only version of this check that fails when the
 // figures stop being updated.
 await p.evaluate(() => _applyStatusPayload({

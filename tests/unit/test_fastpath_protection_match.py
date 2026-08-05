@@ -3,10 +3,10 @@
 queue-key path differs from the freshly-fetched protection path by a symlink,
 mount prefix, or case — the normal dual-server / Unraid user-share case.
 
-Regression for the exact-string protection match (`str(key) in {paths}`) that
-missed those and could DELETE a protected movie. `_make_protection_check` now
-mirrors the full scan: the _match_keys SET (as-built + symlink-resolved +
-lowercased) plus Plex rating_key / Jellyfin id / TMDB id."""
+An exact-string match (`str(key) in {paths}`) misses those and DELETES a
+protected movie, so `_make_protection_check` mirrors the full scan: the
+_match_keys SET (as-built + symlink-resolved + lowercased) plus Plex
+rating_key / Jellyfin id / TMDB id."""
 import os
 import sys
 import tempfile
@@ -39,7 +39,8 @@ with tempfile.TemporaryDirectory() as td:
     fav_via_symlink = str(lib / "PlexMovies" / "Film (2020)" / "film.mkv")  # protection form
     other_key = str(lib / "Movies" / "Other (2019)" / "other.mkv")
 
-    # The OLD code matched exactly like this — and missed the symlinked path:
+    # What an exact-string match does with these two paths, stated first so the
+    # checks below are measured against a comparison that demonstrably fails:
     check("baseline: exact-string match MISSES the symlinked protection path",
           queue_key not in {fav_via_symlink})
 

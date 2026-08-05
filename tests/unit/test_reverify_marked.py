@@ -74,7 +74,7 @@ check("the covering count matches the 2 GB deficit (still 2 marked)",
 check("D (beyond the deficit) was not pulled in", _store["D"]["marked_at"] is None)
 # The refreshed score reorders the queue to the current deletion order (worst first),
 # so the freshly-watched movie (A, now highest-scored) sinks to the END instead of
-# keeping its stale front slot — the fix for a re-scored mark showing in the wrong spot.
+# keeping its stale front slot, which would show a re-scored mark in the wrong place.
 check("the re-scored (watched) movie sinks to the end of the queue order",
       list(_store.keys()) == ["B", "C", "D", "A"])
 

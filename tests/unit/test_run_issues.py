@@ -1,9 +1,9 @@
 """The run-issue vocabulary: one set of categories, one wording, four surfaces.
 
-A run used to report trouble three different ways — a bespoke banner in the log,
-a sentence the engine glued onto the progress message, and "Completed with
-errors" in the notification. Three descriptions of one event is three chances to
-disagree, and none of them said WHAT went wrong or HOW MUCH.
+Trouble reaches the log, the progress message, the dashboard and the
+notification. Worded separately that is four descriptions of one event, four
+chances to disagree, and none of them obliged to say WHAT went wrong or HOW
+MUCH.
 
 So the categories live in run_issues.py and every surface renders from it. What
 is asserted here is the contract that makes that hold:
@@ -13,7 +13,7 @@ is asserted here is the contract that makes that hold:
   * a category that can only happen once per run states itself instead, since a
     "1" next to "IMDb ratings download failed" is noise;
   * every engine warning and failure goes through record_issue(), enforced by
-    reading engine.py — a hand-picked list is what drifted last time;
+    reading engine.py, since a hand-picked list drifts;
   * folding is idempotent, because the engine attaches the folded form to the
     run report (the dashboard is JS and can't fold) and the notifier folds
     whatever it is handed.
@@ -96,9 +96,9 @@ check("junk entries are ignored without taking the list down",
 
 
 # ── Nothing in the engine reports trouble outside the vocabulary ────────────
-# The old bug was a hand-maintained list that drifted. This is the guard: a new
-# failure written as a bare WARNING/ERROR log line would never reach the
-# dashboard or the notification, and this test is where that gets caught.
+# A hand-maintained list drifts, so engine.py is read instead: a new failure
+# written as a bare WARNING/ERROR log line would never reach the dashboard or
+# the notification, and this test is where that gets caught.
 source = (REPO / "engine.py").read_text(encoding="utf-8")
 strays = re.findall(r'log(?:_raw)?\(\s*f?"(?:\s*)(WARNING|ERROR)\b[^"]*"', source)
 check("no engine warning or failure bypasses record_issue()",

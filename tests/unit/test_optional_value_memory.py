@@ -139,7 +139,7 @@ code, body, cfg = save_cfg(BASE_SAVED, base_payload(HEADROOM_GB=0, REDLINE_GB=20
                                                     REDLINE_ONLY_MODE=True))
 check("unticking headroom (mode) saves and stores memory",
       code == 200 and cfg.get("HEADROOM_GB") == 0 and cfg.get("_HEADROOM_GB_LAST") == 500)
-# Headroom off (the explicit flag) may now carry a Library Size Cap — the cap
+# Headroom off (the explicit flag) may carry a Library Size Cap — the cap
 # drives the daily cleanup with Headroom off.
 code, body, cfg = save_cfg(BASE_SAVED, base_payload(HEADROOM_GB=0, REDLINE_GB=200, MAX_LIBRARY_GB=5000,
                                                     REDLINE_ONLY_MODE=True,

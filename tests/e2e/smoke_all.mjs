@@ -309,7 +309,7 @@ for (const path of ['/', '/config', '/explorer']) {
 // surface, border and label repaints at once. On a flip that meant ~150ms of
 // mixture — a card that had already turned light sitting on a still-dark page,
 // and "Paused" rendered in light text on a light card, i.e. briefly invisible.
-// prSetTheme now holds transitions off for the swap, so each frame is entirely
+// prSetTheme holds transitions off for the swap, so each frame is entirely
 // one theme or the other.
 {
   const p = await b.newPage({ viewport: { width: 448, height: 900 } });

@@ -359,11 +359,13 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
 
 <div class="page-shell app-form score-explorer-shell">
 
-<!-- One notice for the page, above the card rather than inside it: the card is
-     ghosted during a run, and the sentence explaining why should not be grayed
-     out along with the settings it is explaining. Matches the Configuration
-     page, which reports the run once above its accordion. -->
-<div id="exp-run-lock-note" class="config-inline-warning mb-3" hidden>A run is active. Settings are locked until it finishes.</div>
+<!-- Page-level notes, above the card rather than inside it: the card is ghosted
+     during a run, and the sentence explaining why should not be grayed out along
+     with the settings it is explaining. Same region and rule as the other two
+     pages — pinned first, dismissible underneath. -->
+<div class="page-notes">
+  <div id="exp-run-lock-note" class="config-inline-warning mb-3" hidden>A run is active. Settings are locked until it finishes.</div>
+</div>
 
 <div class="card" id="filter-score-card">
   <div class="slbl">Filtering &amp; Scoring</div>

@@ -6,6 +6,20 @@
 <div class="d-flex align-items-center mb-4 page-title-bar" style="gap:12px;">
   <span class="page-title">Dashboard</span>
 </div>
+{# Page-level notes, same region and same rule as Configuration: pinned first,
+   dismissible underneath, ordered by .page-notes rather than by markup.
+   Server-rendered so it is there on the first paint, and kept in step by the
+   status poll — a code change can wipe the store while this page is open. #}
+<div class="page-notes">
+  <div class="config-inline-note is-dismissible mb-3" id="store-reset-note"
+       {{ '' if code_reset_pending else 'hidden' }}>
+    <span>The database was reset because MediaReducer's code changed — the deletion plan
+          and library snapshot were rebuilt from scratch. Run <strong>Simulate</strong> to
+          build them again.</span>
+    <button type="button" class="config-inline-dismiss" data-dismiss-note="store-reset"
+            aria-label="Dismiss this note" title="Dismiss">&times;</button>
+  </div>
+</div>
 <script>window.__prDashboardOwnsBadge = true;</script>
 
 <style>
@@ -910,10 +924,9 @@
       cursor: pointer;
       transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease;
     }
-    /* Color on hover comes from .pr-pill--state, which moves the border only —
-       so this adds the lift and nothing else. It used to recolour to the accent
-       whatever the pill was reporting, which turned a red "Failed" blue under
-       the pointer. */
+    /* Color on hover comes from .pr-pill--state, which moves the border only,
+       so this adds the lift and nothing else. Recolouring to the accent here
+       would turn a red "Failed" blue under the pointer. */
     .rp-pill.log-jumpable:hover, .rp-pill.log-jumpable:focus-visible {
       transform: translateY(-1px);
     }
@@ -1527,16 +1540,15 @@ function _rpFinalizeEase(since) {
 
 // The engine's outcome message is a lead line plus "Label: value" rows, and the
 // issues arrive as a structured list. Split them here so the head keeps its
-// one-line headline and the detail lands in the panel where there is room —
-// the old single-sentence message was unreadable the moment a run had more than
-// two facts to report.
+// one-line headline and the detail lands in the panel where there is room. A
+// single sentence carrying every fact a run reports is unreadable past about
+// two of them.
 function _renderRunOutcome(p) {
   // Only the headline. The engine's message carries "Marked: ~34.6 GB" style
-  // rows after it, and they used to be rendered below as a definition list —
-  // but every one of them restated a stat box or the Marked & Eligible window,
-  // so the panel said the same numbers twice. The rest of the message is still
-  // produced (the notifier falls back to it, and the debug report echoes it);
-  // it just isn't repeated here.
+  // rows after it, and every one of them restates a stat box or the Marked &
+  // Eligible window, so drawing them here would say the same numbers twice.
+  // The rest of the message is still produced — the notifier falls back to it
+  // and the debug report echoes it — it just isn't repeated on this page.
   //
   // A run that FAILED has no result to headline — it has a reason, and a reason
   // is a thing that went wrong, so it belongs in the issue list below with
@@ -1882,8 +1894,8 @@ let _logWinDrag = null;
 function _logDragStart(e) {
   if (_isMobileLogView()) return;
   // Header BUTTONS are click targets, not drag handles — the drag's
-  // preventDefault() would otherwise swallow their clicks entirely
-  // (this is what broke "Show full log").
+  // preventDefault() would otherwise swallow their clicks entirely, and
+  // "Show full log" is one of them.
   if (e.target.closest('button')) return;
   const win = document.getElementById('log-window');
   if (!win) return;
@@ -2786,6 +2798,12 @@ async function syncStatus({refreshLog = true} = {}) {
     if (d.run_mode) _applyRunMode(d.run_mode);
     if (d.thresholds_configured !== undefined) _monitoringActive = !!d.thresholds_configured;
     _autopauseReason = d.run_mode_autopause_reason || '';
+    // A code change can wipe the store while this page is open, and a Simulate
+    // can clear the note the same way — both land here, so the note follows the
+    // poll rather than only the page load. Never re-shown once dismissed in this
+    // tab: the dismissal removes the element, and there is nothing to put back.
+    const _resetNote = document.getElementById('store-reset-note');
+    if (_resetNote) _resetNote.hidden = !d.code_reset_pending;
     _restingReason = d.run_mode_resting_reason || '';
     _applyCleanupState(d.cleanup_state);
     if (!_summaryPollActive) _summaryBusy = !!d.summary_active;
@@ -3001,9 +3019,8 @@ function _updateCountdown() {
       // above: nothing monitored and a fully-paused scheduler both returned, so
       // the only thing left holding the clock is a run or the Summary beside it.
       // That is the same half-second Automatic Cleanup gets on a Simulate, and
-      // it deserves the same answer — the old line described the mode instead,
-      // which was true but read as the final word on a countdown that was about
-      // to come back.
+      // it deserves the same answer. Describing the mode here instead would be
+      // true, but reads as the final word on a countdown about to come back.
       el.textContent = 'Next run: calculating…';
     }
     return;

@@ -534,8 +534,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
 # The queue is written in file-size-optimized order by Simulate (NOT pure score
 # order). _pop_next_deletion assumes score-ascending input, so the fast path must
 # re-sort worst-first before selecting — otherwise the near-tie window forms from
-# a high-scored head and would delete a GOOD movie over the WORST ones. (Regression
-# for the sim-vs-debug-live log mismatch.)
+# a high-scored head and would delete a GOOD movie over the WORST ones, which also
+# shows up as a Simulate and a Debug Cleanup disagreeing in the log.
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     lib = Path(td, "library"); movies = lib / "movies"
     out = Path(td, "out"); out.mkdir(parents=True, exist_ok=True)
@@ -570,8 +570,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
 # ══════════════════════════════════════════════════════════════════════════
 # Re-Simulating under a new scoring balance must keep each existing mark's AGE
 # (marked_at) but refresh its displayed score/title/size to the current plan.
-# Regression for write_plan_to_queue previously freezing the score at first-mark
-# time, so the deleted-history modal showed scores from a stale balance.
+# write_plan_to_queue must not freeze the score at first-mark time: the
+# deleted-history modal would then show scores from a stale balance.
 # ══════════════════════════════════════════════════════════════════════════
 
 import time

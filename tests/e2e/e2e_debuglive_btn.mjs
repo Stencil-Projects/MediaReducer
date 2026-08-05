@@ -1,9 +1,9 @@
-// Bug regression (dashboard): in Debug mode the Cleanup button becomes the yellow
-// "Debug Cleanup", which uses the SIMULATE gate — it deletes nothing, so it must
-// ignore the live/safety thresholds. The subtle bug: the server rendered the
-// button correctly, but the /api/status poll re-applied the button state from the
-// LIVE fields (_applyCleanupState), so a few seconds after load the poll re-blocked
-// Debug Cleanup on a safety-percentage target and slapped the safety tooltip on
+// Dashboard: in Debug mode the Cleanup button becomes the yellow "Debug Cleanup",
+// which uses the SIMULATE gate — it deletes nothing, so it must ignore the
+// live/safety thresholds. The subtle part is the poll rather than the render: the
+// server can hand over a correct button and the /api/status poll then re-apply its
+// state from the LIVE fields (_applyCleanupState), re-blocking Debug Cleanup on a
+// safety-percentage target seconds after load and slapping the safety tooltip on
 // it. Here we stub /api/status to report simulate-ok + live-blocked-by-safety and
 // prove the button stays live through the poll; then flip simulate to blocked and
 // prove it DOES disable (so it really tracks the simulate gate, not "always on").
@@ -104,9 +104,9 @@ const snap = () => p.evaluate(() => {
   };
 });
 
-// Wait for status polls to run _applyCleanupState (the moment the bug used to
-// strike) — counted, not timed, because the poll interval and a busy box are
-// not the same clock. The button must remain enabled with no safety tooltip.
+// Wait for status polls to run _applyCleanupState, the moment the button state
+// can be overwritten — counted, not timed, because the poll interval and a busy
+// box are not the same clock. The button must remain enabled, no safety tooltip.
 await afterStatusPolls(2);
 const overSafety = await snap();
 
@@ -151,7 +151,7 @@ const running = await p.evaluate(() => {
   const live = document.getElementById('btn-cleanup');
   return {
     headerLabel: (h?.querySelector('.run-badge-label')?.textContent || '').trim(),
-    // The badge and the pill now carry the same shared tone class — see
+    // The badge and the pill carry the same shared tone class — see
     // .pr-pill--state in base.html, applied from one prRunTone() call.
     headerDebug: !!h?.querySelector('.header-run-badge')?.classList.contains('is-warning'),
     headerCleanup: !!h?.querySelector('.header-run-badge')?.classList.contains('is-danger'),

@@ -95,8 +95,8 @@ check("drops-only change is silent", not sent)
 # what happened while it was muted is reported once when it is unmuted rather
 # than swallowed. Fully-Paused is always muted; Monitor Only is muted unless
 # "Alert in Monitor Only" is ticked, and that opt-in covers this alert too —
-# turning notifications off for a mode that never deletes used to still deliver
-# "a space check marked 34 more movies" a few minutes later.
+# without it, turning notifications off for a mode that never deletes would
+# still deliver "a space check marked 34 more movies" a few minutes later.
 sent.clear()
 ENTRIES.append(entry("/l/e.mkv", "Movie E", marked=True, delete_on="2026-08-03"))
 _saved_mode = CFG["RUN_MODE"]

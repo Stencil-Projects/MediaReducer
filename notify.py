@@ -555,10 +555,10 @@ def _fmt_size(num_bytes):
     """A byte count as the dashboard would show it.
 
     DECIMAL GB (10^9), like every other size in MediaReducer — disk figures,
-    the library size, the deletion history. This used to divide by 1024^3, so a
-    run the dashboard reported as freeing 32.3 GB was announced as 30.1 GB, and
-    1.5 TB came through as "1397.0 GB". Same bytes, two answers, and the one
-    that arrives on your phone was the wrong one.
+    the library size, the deletion history. Divide by 1024^3 here instead and a
+    run the dashboard reports as freeing 32.3 GB is announced as 30.1 GB, and
+    1.5 TB arrives as "1397.0 GB" — same bytes, two answers, and the wrong one
+    is the one that reaches your phone.
 
     Deliberately identical to app._format_reclaimed_size, including the TB and
     MB rollovers. The two cannot be shared (app imports notify, so notify

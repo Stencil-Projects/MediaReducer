@@ -1,15 +1,14 @@
-"""Regression: the Tautulli library scan must force a media-info refresh.
+"""The Tautulli library scan must force a media-info refresh.
 
 Tautulli's `get_library_media_info` serves a CACHED table that Tautulli only
 rebuilds on demand (`refresh=true`) or on its own schedule. A recently-added
 movie is absent from that stale cache even though Tautulli already tracks its
 play history — so the engine's scan would miss it, and with Jellyfin also
 enabled the movie reappears as a 0-play Jellyfin-only row that scores low and
-lands in the deletion queue despite being watched (observed live: a movie
-watched 3× was marked DRY RUN DELETE #1522).
+lands in the deletion queue despite being watched.
 
-The fix: `get_all_movies_from_tautulli` passes `refresh=true` on the first page
-of each section so the table is rebuilt before it's read. This models Tautulli's
+So `get_all_movies_from_tautulli` passes `refresh=true` on the first page of
+each section, rebuilding the table before it's read. This models Tautulli's
 real, STATEFUL behavior — a refresh makes the movie visible for the rest of the
 scan — and fails if the engine ever stops sending it."""
 import os

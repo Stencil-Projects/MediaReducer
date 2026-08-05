@@ -339,8 +339,14 @@ def ensure_code_current(conn, current_checksum: str) -> None:
     their meta) and re-stamp, keeping only last_cleanup_date. Called at the
     start of every engine write so no stale section survives a code change. The
     app never calls this (it has no checksum; it reads whatever the engine last
-    wrote)."""
-    if get_meta(conn, "code_checksum") == current_checksum:
+    wrote).
+
+    A wipe that followed a REAL code change sets code_reset_pending, which is
+    how the dashboard knows to say the plan is gone and why. A first run has no
+    stored checksum and nothing to lose, so it stamps quietly — a fresh install
+    has no business being told its database was reset."""
+    stored = get_meta(conn, "code_checksum")
+    if stored == current_checksum:
         return
     conn.execute("DELETE FROM metadata_cache")
     conn.execute("DELETE FROM movies")
@@ -348,6 +354,8 @@ def ensure_code_current(conn, current_checksum: str) -> None:
     for k in _CODE_DERIVED_META:
         conn.execute("DELETE FROM meta WHERE key=?", (k,))
     set_meta(conn, "code_checksum", current_checksum)
+    if stored:
+        set_meta(conn, "code_reset_pending", True)
 
 
 # ── row <-> dict mapping (the documented dict shapes) ─────────────────────────
@@ -541,7 +549,8 @@ def _compose(conn) -> dict:
     written are omitted (the composed dict carries only the keys actually set),
     so every dict-shaped caller (load_cache, the app's memoized read) is simple."""
     out = {}
-    for key in ("code_checksum", "config_hash", "last_cleanup_date", "dashboard_stats"):
+    for key in ("code_checksum", "config_hash", "last_cleanup_date", "dashboard_stats",
+                "code_reset_pending"):
         v = _get_meta_opt(conn, key)
         if v is not _MISSING:
             out[key] = v

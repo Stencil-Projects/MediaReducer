@@ -1,16 +1,15 @@
 """A Config save probes the media servers only when the answer could have moved.
 
-Every save used to re-probe every service, on the reasoning that connections can
-fail without any field changing. That is true, but a save is the wrong place to
-catch it and was never what protected anything:
+Connections can fail without any field changing, but a save is the wrong place
+to catch that, and probing on every save protects nothing:
 
   • /api/run re-probes and REFUSES TO START when a required server is down;
   • the scheduler tick re-probes before any automatic cleanup;
   • the engine fails closed on any API error mid-run.
 
 Saving a notification toggle or a scoring curve cannot make a media server
-unreachable, so the probe was pure latency on the Save button — and the Config
-page that displays the result already reuses this same cache without probing.
+unreachable, so a probe there is pure latency on the Save button — and the
+Config page that displays the result reuses this same cache without probing.
 
 What must still hold: anything that could genuinely change the verdict re-probes.
 That means every connection-relevant edit, and — importantly — a save made while

@@ -71,8 +71,8 @@ check("the name-bearing set is not empty (the walk found real calls)",
       any(h in NAME_BEARING for c in calls for h in holes(c.args[0])))
 
 # End to end, on the sentences the engine actually produces — including the two
-# that broke a regex attempt at this: the mount point in the same sentence as
-# the path, and an apostrophe inside a collection name.
+# a regex cannot handle: the mount point in the same sentence as the path, and
+# an apostrophe inside a collection name.
 OFF = json.loads((ROOT / "default_config.json").read_text())
 check("Movie names is off on a fresh install", OFF.get("NOTIFY_SHOW_MOVIES") is False)
 ON = {**OFF, "NOTIFY_SHOW_MOVIES": True}

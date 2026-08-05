@@ -2,8 +2,8 @@
 
 Under Docker the host side is remapped (-p 8080:7474) and nothing here changes.
 This is for running outside a container, where 7474 may already be taken and
-there is no host side to move; it used to be hardcoded, so the answer was "edit
-app.py".
+there is no host side to move, so the port has to be settable without editing
+app.py.
 
 Three things worth holding still:
 

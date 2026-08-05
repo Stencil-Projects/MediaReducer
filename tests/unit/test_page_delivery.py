@@ -4,9 +4,9 @@ Two properties that are easy to lose in a later edit and expensive when lost:
 
   • Nothing renders from a CDN. Bootstrap and the Inter webfont are both
     render-blocking, so a host with no outbound internet — a NAS on an isolated
-    LAN, the normal deployment for this app — used to sit on a blank page until
-    each request timed out. Serving them locally is the fix; a re-added
-    https:// stylesheet or script in a template silently undoes it.
+    LAN, the normal deployment for this app — would sit on a blank page until
+    each request timed out. Both are served locally, and an https:// stylesheet
+    or script added to a template silently undoes that.
   • The favicon resolves, including the bare /favicon.ico browsers request on
     their own.
   • Responses are gzipped. Flask serves this app directly (no proxy in the

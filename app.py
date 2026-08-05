@@ -411,7 +411,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.7"
+APP_VERSION = "1.0.0-alpha.8"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -436,12 +436,17 @@ def _host_time_zone_name() -> str:
 
 # ── Config helpers ────────────────────────────────────────────────────────────
 
-def _coerce_bool(value) -> bool:
+def _coerce_bool(value, *, default: bool = False) -> bool:
+    """`default` is what a MISSING value means. Almost every flag here is off
+    when absent, but one defaults on — a config with no PAUSE_CLEANUP_ON_STARTUP
+    must not read as someone having turned the startup safety demote off."""
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
         return value != 0
-    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _normalize_library_path(value: str | None) -> str | None:
@@ -651,7 +656,7 @@ def _config_file_issues(saved: dict) -> list[dict]:
             bad("REDLINE_GB", "must be lower than HEADROOM_GB (or untick Headroom)")
     for key in ("SKIP_UNPLAYED_MOVIES", "PROTECT_JELLYFIN_FAVORITES", "USE_PLEX",
                 "USE_JELLYFIN", "KEEP_INTERRUPTED_LOGS", "DEBUG_MODE",
-                "REDLINE_ONLY_MODE"):
+                "REDLINE_ONLY_MODE", "PAUSE_CLEANUP_ON_STARTUP"):
         if key in saved and not isinstance(saved[key], bool):
             bad(key, "must be true or false")
     # "off" = the scheduler is fully paused (no ticks do anything); "paused" =
@@ -792,6 +797,10 @@ def _build_config() -> tuple[dict, list]:
     cfg["PROTECT_JELLYFIN_FAVORITES"] = _coerce_bool(cfg.get("PROTECT_JELLYFIN_FAVORITES"))
     cfg["USE_PLEX"] = _coerce_bool(cfg.get("USE_PLEX"))
     cfg["USE_JELLYFIN"] = _coerce_bool(cfg.get("USE_JELLYFIN"))
+    # Absent means ON: the safety demote is the shipped behaviour, and a config
+    # missing the key must not read as someone having turned it off.
+    cfg["PAUSE_CLEANUP_ON_STARTUP"] = _coerce_bool(
+        cfg.get("PAUSE_CLEANUP_ON_STARTUP", True), default=True)
     _normalize_retention_scoring(cfg)
     _normalize_library_paths(cfg)
     # REDLINE_ONLY_MODE is DERIVED: the headroom trigger is armed iff
@@ -1056,13 +1065,29 @@ def force_paused_run_mode_on_startup():
         # A fully-paused scheduler ("off") is already the safest state; a
         # restart keeps it off rather than promoting it to Monitor Only.
         if cfg.get("RUN_MODE") not in ("off", "paused"):
-            cfg["RUN_MODE"] = "paused"
-            # Recorded so the dashboard/config can EXPLAIN the flip; a silent reset
-            # read as "my Automatic Cleanup setting didn't stick". Cleared by the next config save
-            # (the form never posts internal underscore keys).
-            cfg["_RUN_MODE_AUTOPAUSE_REASON"] = "Automatic Cleanup is paused automatically after every restart."
-            if save_config(cfg):
-                print("Startup safety: RUN_MODE reset to paused.", flush=True)
+            # The demote is the default and the safe answer, because a restart
+            # is usually an upgrade or a crash and the plan waiting on disk may
+            # no longer describe the library. Turning it off says "resume where
+            # I left off" — but only when there is nothing to be wrong about:
+            # a snapshot built for THESE monitored paths, inside the full-scan
+            # window. A stale one still demotes, whatever the setting says,
+            # since resuming deletions against a plan nothing has re-checked is
+            # the thing the demote exists to prevent.
+            if not cfg.get("PAUSE_CLEANUP_ON_STARTUP", True) and _library_db_fresh(cfg):
+                print("Startup: Automatic Cleanup resumed — 'Set to Monitor Only at "
+                      "startup' is off and the library database is current.", flush=True)
+            else:
+                cfg["RUN_MODE"] = "paused"
+                # Recorded so the dashboard/config can EXPLAIN the flip; a silent reset
+                # read as "my Automatic Cleanup setting didn't stick". Cleared by the next config save
+                # (the form never posts internal underscore keys).
+                cfg["_RUN_MODE_AUTOPAUSE_REASON"] = (
+                    "Automatic Cleanup is paused automatically after every restart."
+                    if cfg.get("PAUSE_CLEANUP_ON_STARTUP", True) else
+                    "Automatic Cleanup did not resume after the restart: the library database is "
+                    "out of date. Run Simulate, then turn it back on.")
+                if save_config(cfg):
+                    print("Startup safety: RUN_MODE reset to paused.", flush=True)
         # Monitor Only also needs an up-to-date library database. A missing or
         # stale snapshot (never scanned, wiped by a code/schema-change store
         # rebuild, or a container stopped past the full-scan window) rests the
@@ -2127,10 +2152,10 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
         wants_notify = _is_cleanup_mode(effective_mode) or (is_sim and scheduled)
         # A muted mode swallows the run summary AND leaves the baseline alone,
         # so the marks this run made are reported once if the opt-in is later
-        # turned on. This used to hand them straight to the marked-changes
-        # alert instead, which meant switching run notifications off in Monitor
-        # Only produced a "34 movies marked" message minutes later; the
-        # opposite of what turning them off asks for.
+        # turned on. Handing them to the marked-changes alert instead would mean
+        # switching run notifications off in Monitor Only produces a "34 movies
+        # marked" message minutes later: the opposite of what turning them off
+        # asks for.
         muted = _notifications_muted_by_mode(cfg)
         # Is anything still listening for these marks if this run's own summary
         # doesn't go out? With the marked-changes alert off, nobody is, so the
@@ -6030,24 +6055,65 @@ def api_reset_mark_delays():
                                f"{delay} day(s) from today."})
 
 
-@app.route("/api/run-mode/autopause-note/dismiss", methods=["POST"])
-def api_dismiss_autopause_note():
-    """Clear the note explaining why Automatic Cleanup switched itself to Monitor
-    Only — the X on the Configuration banner.
+def code_reset_pending() -> bool:
+    """The engine wiped the store because the code changed, and no scan has
+    rebuilt it since.
 
-    It rewrites that one key and nothing else, deliberately: a dismissal must not
-    carry whatever is half-typed in the form on screen into config.json the way a
-    full save would. Only the note goes; the mode it describes already changed and
-    stays where it is."""
+    Two conditions, because the note has two ways to stop being true: the user
+    dismisses it, or a Simulate rebuilds the snapshot and there is nothing left
+    to warn about. Without the second, the note would still be telling someone to
+    run a Simulate they had already run."""
+    data = _cache_file_data()
+    return bool(data.get("code_reset_pending")) and not isinstance(
+        data.get("library_snapshot"), dict)
+
+
+def _dismiss_autopause_note() -> tuple[bool, bool, str]:
+    """(ok, dismissed_something, error). Rewrites that one config key and nothing
+    else, deliberately: a dismissal must not carry whatever is half-typed in the
+    form on screen into config.json the way a full save would. Only the note
+    goes; the mode it describes already changed and stays where it is."""
     cfg = load_config()
     if not cfg.get("_RUN_MODE_AUTOPAUSE_REASON"):
-        return jsonify({"ok": True, "dismissed": False})   # already gone; nothing to write
+        return True, False, ""
     cfg.pop("_RUN_MODE_AUTOPAUSE_REASON", None)
     if not save_config(cfg):
-        return jsonify({"ok": False,
-                        "message": "Could not write to /config — the note stays "
-                                   "until that is fixed."}), 500
-    return jsonify({"ok": True, "dismissed": True})
+        return False, False, "Could not write to /config — the note stays until that is fixed."
+    return True, True, ""
+
+
+def _dismiss_store_reset_note() -> tuple[bool, bool, str]:
+    """(ok, dismissed_something, error). Clears the engine's marker only; the
+    empty store it describes is rebuilt by a Simulate, not by reading this."""
+    try:
+        with _store_write() as conn:
+            if not db.get_meta(conn, "code_reset_pending", False):
+                return True, False, ""
+            db.set_meta(conn, "code_reset_pending", False)
+    except Exception as e:
+        return False, False, f"Could not update the database: {e}"
+    return True, True, ""
+
+
+# Notes the user can dismiss, by the name the page posts. Each reports something
+# ALREADY DONE, which is what makes dismissing it safe: there is no condition
+# left for hiding it to conceal.
+_DISMISSIBLE_NOTES = {
+    "autopause": _dismiss_autopause_note,
+    "store-reset": _dismiss_store_reset_note,
+}
+
+
+@app.route("/api/notes/<name>/dismiss", methods=["POST"])
+def api_dismiss_note(name):
+    """Dismiss one of the notes above, clearing whatever made it true."""
+    handler = _DISMISSIBLE_NOTES.get(str(name or "").strip())
+    if handler is None:
+        return jsonify({"ok": False, "message": f"Unknown note: {name}"}), 404
+    ok, dismissed, err = handler()
+    if not ok:
+        return jsonify({"ok": False, "message": err}), 500
+    return jsonify({"ok": True, "dismissed": dismissed})
 
 
 def _normalized_monitor_dirs(cfg: dict) -> list[str]:
@@ -6405,6 +6471,7 @@ def dashboard():
                                            if (cfg.get("RUN_MODE") == "off"
                                                and not cfg.get(RUN_MODE_USER_PAUSED_KEY)) else ""),
                            thresholds_configured=_has_monitored_dirs(cfg),
+                           code_reset_pending=code_reset_pending(),
                            headroom_gb=cfg.get("HEADROOM_GB"),
                            redline_gb=cfg.get("REDLINE_GB"),
                            redline_only=_redline_only_mode_cfg(cfg),
@@ -6637,6 +6704,10 @@ def api_status():
         # safety, forced pause on save, etc.
         "run_mode_autopause_reason": (str(cfg.get("_RUN_MODE_AUTOPAUSE_REASON") or "")
                                       if cfg.get("RUN_MODE") == "paused" else ""),
+        # The engine wiped the store on a code change and no scan has rebuilt it
+        # — the dashboard says the plan is gone and why. Clears itself once a
+        # Simulate lands, so it can never ask for one that already happened.
+        "code_reset_pending":      code_reset_pending(),
         # A fully-paused scheduler has two very different causes: the user chose
         # it, or the system is RESTING until a scan lands. Both render as
         # "Paused", so the dashboard needs the reason to avoid describing a
@@ -8210,11 +8281,12 @@ def _error_banner_start(lines: list):
     the run-end error report, or None when the run has none.
 
     The prefix, not the whole phrase: the banner is run_issues.headline()
-    uppercased, so it reads "COMPLETED WITH 1 KIND OF ERROR AND 1 WARNING" and
-    has for a while. Matching the old literal found nothing, and the errors view
-    silently fell through to its flagged-lines fallback — a filtered list where
-    the structured block was available. A warnings-only run prints the same
-    headline in a dashed, un-uppercased banner, which this still skips.
+    uppercased, so it reads like "COMPLETED WITH 1 KIND OF ERROR AND 1 WARNING"
+    and varies with the run. Matching a fixed literal finds nothing, and the
+    errors view then falls through to its flagged-lines fallback without a word
+    — a filtered list where the structured block was available. A warnings-only
+    run prints the same headline in a dashed, un-uppercased banner, which this
+    still skips.
     """
     return next((i for i, ln in enumerate(lines) if "COMPLETED WITH " in ln), None)
 

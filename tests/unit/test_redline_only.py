@@ -58,8 +58,8 @@ HR_CFG = {"HEADROOM_GB": 500, "REDLINE_GB": 200, "MAX_LIBRARY_GB": None}
 # ── Mode detection ───────────────────────────────────────────────────────────
 check("mode on: flag + redline", A._redline_only_mode_cfg(RL_CFG) is True)
 # Value-derived: headroom 0 + a redline floor IS redline-only whatever the
-# stored flag says — the flag itself is derived from the value on load, so a
-# ticked-at-0 third state no longer exists to be distinguished from.
+# stored flag says. The flag itself is derived from the value on load, so there
+# is no ticked-at-0 third state to distinguish.
 check("mode is value-derived: headroom 0 with redline IS the mode, flag or not",
       A._redline_only_mode_cfg({"HEADROOM_GB": 0, "REDLINE_GB": 200}) is True)
 check("mode off: headroom set", A._redline_only_mode_cfg(HR_CFG) is False)
@@ -76,7 +76,7 @@ _DIRS = {"MONITOR_DIRS": ["/library/movies"]}
 check("file validator: headroom 0 without redline is the valid no-thresholds state",
       not any(i["key"] == "HEADROOM_GB"
               for i in A._config_file_issues(dict(_DIRS, HEADROOM_GB=0, REDLINE_GB=None))))
-check("file validator: headroom off WITH a cap and redline is now valid",
+check("file validator: headroom off WITH a cap and redline is valid",
       not A._config_file_issues(dict(_DIRS, HEADROOM_GB=0, REDLINE_GB=200,
                                      REDLINE_ONLY_MODE=True, MAX_LIBRARY_GB=5000)))
 check("file validator: headroom off with a cap and NO redline is valid",
@@ -263,7 +263,7 @@ try:
     errs, _t, _m = engine._space_threshold_errors()
     check("engine validator: every threshold off at once is valid (rests at Paused)",
           errs == [])
-    # Headroom off WITH a cap (no redline) is now valid — the cap drives cleanup.
+    # Headroom off WITH a cap (no redline) is valid — the cap drives cleanup.
     engine.MAX_LIBRARY_GB = 5000
     errs, _t, _m = engine._space_threshold_errors()
     check("engine validator: headroom off with a cap (no redline) is valid", errs == [])

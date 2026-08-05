@@ -199,6 +199,20 @@
     display: block;
     margin-top: 2px;
   }
+  /* A setting that belongs to ONE mode, sitting at the bottom of its card. The
+     rule above it separates it from the mode's own description, so it does not
+     read as more of that sentence. Indented to the same column as the mode name
+     so it lines up under the text rather than under the radio. */
+  .run-mode-option {
+    margin: 10px 0 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .run-mode-option .form-check-label { font-size: .82rem; }
+  .run-mode-option .form-text { margin-top: 3px; }
+  /* Ghosted with the rest of the card when the mode itself cannot be picked:
+     a setting for a mode you cannot select has nothing to act on. */
+  .run-mode-card.run-mode-disabled .run-mode-option { opacity: .55; }
   /* Automatic Cleanup's settings summary: three label-over-value specs rather
      than three pills. A pill reads as a status you might act on; these are just
      the numbers the mode will use, so they sit quietly under the mode name and
@@ -498,9 +512,23 @@
 </div>
 
 <form id="cfg-form" class="app-form" onsubmit="return false;">
-<!-- One note for the whole page: every section locks during a run, so saying
-     it once above them beats repeating it in each. -->
-<div id="config-run-lock-note" class="config-inline-warning mb-3" hidden></div>
+<!-- Page-level notes, above the sections they concern. Pinned ones first,
+     dismissible ones underneath — .page-notes orders them, so the rule holds
+     however they are written here. Notes scoped to ONE section stay in that
+     section: hoisted here they would lose the thing they refer to. -->
+<div class="page-notes">
+  <div id="config-run-lock-note" class="config-inline-warning mb-3" hidden></div>
+  {# Reports a switch that already happened, so once it has been read there is
+     nothing left for it to warn about. The X clears the stored reason, which is
+     why it does not come back on the next load. #}
+  {% if config.get('_RUN_MODE_AUTOPAUSE_REASON') and config.RUN_MODE == 'paused' %}
+  <div class="config-inline-note is-dismissible mb-3" id="autopause-note">
+    <span>Automatic Cleanup was switched to Monitor Only automatically: {{ config.get('_RUN_MODE_AUTOPAUSE_REASON') }}</span>
+    <button type="button" class="config-inline-dismiss" data-dismiss-note="autopause"
+            id="autopause-note-dismiss" aria-label="Dismiss this note" title="Dismiss">&times;</button>
+  </div>
+  {% endif %}
+</div>
 
 <div class="accordion" id="cfg-accordion">
 
@@ -535,16 +563,6 @@
            asking for the Simulate the user just ran. #}
         {% set monitor_locked_text = monitor_locked_reason | default('Run Simulate first — this enables automatically once the scan finishes.') %}
 
-        {# Dismissible: it reports a switch that already happened, so once it has
-           been read there is nothing left for it to warn about. The X clears the
-           stored reason, which is why it does not come back on the next load. #}
-        {% if config.get('_RUN_MODE_AUTOPAUSE_REASON') and config.RUN_MODE == 'paused' %}
-        <div class="config-inline-warning is-dismissible mb-3" id="autopause-note">
-          <span>Automatic Cleanup was switched to Monitor Only automatically: {{ config.get('_RUN_MODE_AUTOPAUSE_REASON') }}</span>
-          <button type="button" class="config-inline-dismiss" id="autopause-note-dismiss"
-                  aria-label="Dismiss this note" title="Dismiss">&times;</button>
-        </div>
-        {% endif %}
         <div class="form-check config-card run-mode-card" id="mode-card-off" aria-disabled="false">
           <input class="form-check-input" type="radio" name="RUN_MODE" id="mode-off"
                  value="off" {{ 'checked' if config.RUN_MODE == 'off' else '' }}>
@@ -581,6 +599,16 @@
             </div>
             <span id="desc-headroom" class="run-mode-desc" data-enabled-text="{{ cleanup_desc }}" data-disabled-text="{{ cleanup_disabled_text }}">{{ cleanup_desc if cleanup_mode_ok else cleanup_disabled_text }}</span>
           </label>
+          {# Outside the <label>: inside it, a click here would toggle the mode
+             radio as well. The card's click-to-select handler skips it too. #}
+          <div class="run-mode-option">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="PAUSE_CLEANUP_ON_STARTUP"
+                     name="PAUSE_CLEANUP_ON_STARTUP"
+                     {{ 'checked' if config.get('PAUSE_CLEANUP_ON_STARTUP', True) else '' }}>
+              <label class="form-check-label" for="PAUSE_CLEANUP_ON_STARTUP">Set to Monitor Only at startup</label>
+            </div>
+          </div>
         </div>
 
         <hr class="config-divider my-3">
@@ -1493,9 +1521,9 @@ function _filesystemBlockingText() {
 // Paths and Space Thresholds. It reads the LIVE checkboxes against the SAVED
 // health, which needs care: health is only probed for the servers the saved
 // config had selected, so a deselected server's flag reads false because
-// nothing asked, not because it failed. Ticking one back on used to be
-// indistinguishable from it being down, which locked both sections behind
-// "Connect or uncheck the selected media server first" — advice that couldn't
+// nothing asked, not because it failed. Left at that, ticking one back on is
+// indistinguishable from it being down, which locks both sections behind
+// "Connect or uncheck the selected media server first" — advice that can't
 // help, since Check for Errors only adopts a probe when the form still matches
 // what was saved. A newly ticked server is therefore treated as unknown until a
 // save probes it, while a server the SAVED config selected is still held to its
@@ -1542,9 +1570,9 @@ function _mediaServerBlockText() {
     : 'Connect or uncheck the selected media server first.';
 }
 
-// The run-active reason, named because it is now filtered OUT of the per-section
+// The run-active reason, named because it is filtered OUT of the per-section
 // notices: the page-level note above the accordion already says it, and five
-// copies of one sentence buried the section-specific reasons that actually
+// copies of one sentence bury the section-specific reasons that actually
 // differ from each other.
 const _RUN_ACTIVE_REASON = 'A run is active. Try again when it finishes.';
 
@@ -2108,9 +2136,9 @@ function _monitorDirRowsMatchConfig(cfg) {
   return _arraysMatch(_monitorDirInputSuffixes(), _monitorDirSuffixesFromConfig(cfg));
 }
 // The notification fields, once. Reading the form, writing it, comparing it for
-// dirty state, resetting the section, and the test-send payload each used to
-// list all nineteen keys separately — five lists to keep in step, and a default
-// that drifted between two of them reads as a form that is dirty on load.
+// dirty state, resetting the section, and the test-send payload all need the
+// same nineteen keys. Listed separately that is five lists to keep in step, and
+// a default that drifts between two of them reads as a form dirty on load.
 // kind: check = boolean · text = trimmed string · int = whole number, min 1 ·
 // lines = one URL per line in the box, an array in the config.
 const _NOTIFY_FIELDS = [
@@ -2296,8 +2324,7 @@ function _applySpaceThresholdLock() {
 
   if (!hasSavedDirs) {
     // Pre-onboarding presentation mirrors the SAVED state — on a fresh
-    // install that is every threshold off (headroom unticked, blank value),
-    // not the retired ticked-at-0 look this used to force.
+    // install that is every threshold off: headroom unticked, blank value.
     const headroomToggle = document.getElementById('headroom-enabled');
     if (headroomToggle) headroomToggle.checked = !_savedConfig?.REDLINE_ONLY_MODE;
     if (headroomInput) headroomInput.value =
@@ -2570,6 +2597,9 @@ function populateForm(cfg) {
   const sd  = (id, dis) => { const e = document.getElementById(id); if (e) e.disabled = dis; };
   const cfgHasMonitorDirs = _monitorDirsFromConfig(cfg).length > 0;
 
+  // Absent means ON: the safety demote is the shipped behaviour, so a config
+  // without the key must not render as someone having turned it off.
+  sc('PAUSE_CLEANUP_ON_STARTUP', cfg.PAUSE_CLEANUP_ON_STARTUP !== false);
   const uiMode = cfg.RUN_MODE === 'headroom' ? 'headroom' : (cfg.RUN_MODE === 'off' ? 'off' : 'paused');
   const modeEl = document.querySelector(`input[name="RUN_MODE"][value="${uiMode}"]`);
   if (modeEl) modeEl.checked = true;
@@ -2670,6 +2700,7 @@ function getFormConfig() {
   const savedLibraryCap = _positiveNumOrNull(_savedConfig?.MAX_LIBRARY_GB);
   return {
     RUN_MODE: document.querySelector('input[name="RUN_MODE"]:checked')?.value ?? 'paused',
+    PAUSE_CLEANUP_ON_STARTUP: chk('PAUSE_CLEANUP_ON_STARTUP'),
     // Headroom's toggle stores 0 when off (redline-only mode) — the same
     // value-memory pattern as Redline/Cap, with 0 instead of null. While the
     // section is locked (no saved dirs, or the media API is down) the SAVED
@@ -3302,6 +3333,10 @@ function _setRunModeDisabled(modeName, disabled, alert = false) {
   card.classList.toggle('run-mode-disabled', !!disabled);
   card.classList.toggle('run-mode-disabled--alert', !!disabled && !!alert);
   card.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+  // A setting that belongs to this mode goes with it. The card already paints
+  // its controls not-allowed when the mode is blocked, and one that still took
+  // a click would be making a promise the mode cannot keep.
+  card.querySelectorAll('.run-mode-option input').forEach(el => { el.disabled = !!disabled; });
 }
 
 // True only when Automatic Cleanup is blocked specifically by a safety-percentage violation
@@ -3408,8 +3443,8 @@ function _updateRunModeAvailability() {
 //   Cap       library size > cap           (a different axis: the library)
 // `pct` is the fraction of the way to firing — 100% is the moment the
 // threshold trips, not the moment the disk is full. The bar above the rows
-// shows the disk itself, so this is no longer drawn; it survives because it is
-// what decides the "nearly there" warning color.
+// shows the disk itself, so the fraction is never drawn on its own — it exists
+// to decide the "nearly there" warning color.
 // `pending` is getFormConfig()'s output, passed in by the one caller so the
 // form is read once per update rather than once per consumer.
 function _thresholdRows(pending) {
@@ -4454,6 +4489,10 @@ function _wireRunModeCardClicks() {
     card.addEventListener('click', (event) => {
       // Let native radio clicks work normally, but make the rest of the card select it too.
       if (event.target?.matches?.('input[name="RUN_MODE"]')) return;
+      // ...except the card's own settings. Ticking "Set to Monitor Only at
+      // startup" must not also arm Automatic Cleanup — that is a deletion mode
+      // turned on by a click aimed at something else entirely.
+      if (event.target?.closest?.('.run-mode-option')) return;
 
       const radio = card.querySelector('input[name="RUN_MODE"]');
       if (!radio || radio.disabled || card.getAttribute('aria-disabled') === 'true') return;
@@ -4467,29 +4506,6 @@ function _wireRunModeCardClicks() {
 }
 _wireRunModeCardClicks();
 
-// Dismissing the autopause note CLEARS the stored reason rather than hiding the
-// element: hidden client-side it would be back on the next load and still be
-// there on every other device, and the same stale sentence would resurface the
-// next time the mode happened to be Monitor Only. The button holds itself
-// disabled while the write is in flight so a double click cannot post twice.
-(function wireAutopauseDismiss() {
-  const btn = document.getElementById('autopause-note-dismiss');
-  if (!btn) return;
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    try {
-      const r = await fetch('/api/run-mode/autopause-note/dismiss', { method: 'POST' });
-      const d = await r.json().catch(() => ({}));
-      if (!d.ok) throw new Error(d.message || 'Could not dismiss the note.');
-      document.getElementById('autopause-note')?.remove();
-    } catch (e) {
-      // The note stays put. It is still true, and swallowing this would hide a
-      // /config write problem behind a message that looked like it worked.
-      btn.disabled = false;
-      showToast(e.message || 'Could not dismiss the note.', 'danger');
-    }
-  });
-})();
 _applySpaceThresholdLock();
 syncSavedVisibilitySections();
 // Initialize the protected-collection pickers from the saved config on load.

@@ -1,11 +1,10 @@
 """No shipped module may reference a name that does not exist.
 
-This exists because one did, and nothing noticed. app.py's notification
-dispatch read `marked_alert_armed`, which was never defined — in a `finally:`
-block, so the `except Exception: pass` above it did not catch the NameError,
-and short-circuit evaluation hid it on every run whose summary went out. It
-only fired when the summary did NOT go out, which is the exact case that branch
-existed to handle: the thread died and the marked baseline was never updated.
+An undefined name hides well. Put one in a `finally:` block and the
+`except Exception: pass` above it never sees the NameError; put it behind a
+short-circuit and it stays quiet on every run that takes the common path,
+firing only in the branch that exists for the rare case — which is the branch
+nobody is watching.
 
 A test suite cannot reach every branch of 19k lines, and this class does not
 need one to — an undefined name is decidable by reading the source. Scoped

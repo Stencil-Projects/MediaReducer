@@ -1,8 +1,8 @@
-// Bug regression: on the Config page, ticking Debug mode must ghost the
-// Scheduler Mode → Automatic Cleanup option IMMEDIATELY, with a visible reason — using
-// the same .run-mode-disabled card styling + desc-headroom reason text the
-// server-side gates use. (The bug: it ghosted only after a click, via a raw
-// `disabled` toggle with no card styling and no reason.) Toggling the checkbox
+// On the Config page, ticking Debug mode must ghost the Scheduler Mode →
+// Automatic Cleanup option IMMEDIATELY, with a visible reason — using the same
+// .run-mode-disabled card styling + desc-headroom reason text the server-side
+// gates use, not a raw `disabled` toggle that leaves the card unstyled, gives no
+// reason, and only takes hold after a click. Toggling the checkbox
 // exercises the exact sync() → _updateRunModeAvailability() path that also runs
 // on page load, so this covers the on-load ghost too.
 const BASE = process.env.MR_BASE_URL || 'http://127.0.0.1:7474';

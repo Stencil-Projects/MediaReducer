@@ -215,8 +215,7 @@ check("an empty snapshot reconciles to an empty queue (no crash)", queue_now() =
 # config by a hand-edit); since the reconcile re-stamps the plan as current WITHOUT a
 # rescan, it must drop a now-ineligible extension — otherwise a Cleanup would delete
 # files the new config excludes (a full Simulate skips them as bad_extension).
-# Regression for MOVIE_EXTENSIONS being a plan key the reconcile stamped but never
-# applied.
+# MOVIE_EXTENSIONS is a plan key, so stamping it without applying it is the trap.
 # ══════════════════════════════════════════════════════════════════════════
 
 E.log = lambda *a, **k: None
@@ -279,7 +278,7 @@ with tempfile.TemporaryDirectory() as td:
 # keep a genuinely-protected movie protected even when the snapshot's stored path
 # (symlink-RESOLVED) differs from the freshly-fetched protection path (as-built) —
 # otherwise a symlinked library clears the flag and re-admits the movie to the
-# eligible queue. Regression for the exact-path compare; it now uses the same robust
+# eligible queue. An exact-path compare cannot do that, so this uses the same
 # _make_protection_check the deletion paths use.
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -308,7 +307,7 @@ with tempfile.TemporaryDirectory() as td:
     E._jellyfin_protected_items = lambda: (set(), set(), set(), set())
     E._jellyfin_favorite_paths = lambda: set()
 
-    # Sanity: the OLD exact compare would have cleared it.
+    # Sanity: an exact compare of these two paths clears the flag.
     check("baseline: resolved row path != as-built protection path",
           resolved_row_path not in {protection_via_symlink})
 

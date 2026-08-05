@@ -5,21 +5,19 @@ Auto Detect can read an API key out of a service's own config file.
 Nothing else reads them — the engine talks to every service over HTTP — so a
 missing mount is a convenience lost, never a failure.
 
-The cards used to report something else entirely: whether a marker FILE existed,
-gated on the Plex/Jellyfin checkboxes. On a clean install with nothing ticked
-that read "(Not enabled)" for Tautulli and Jellyfin while Radarr — ungated —
-said "verified", which is three inconsistent answers to one question. Worse,
-"verified" was claimed for a config file that held no key at all.
-
 So the contract asserted here is: report what the mount CONTRIBUTES, derived
-from the same detection Auto Detect runs, independent of any checkbox.
+from the same detection Auto Detect runs, independent of any checkbox. A card
+keyed off a marker FILE and gated on the Plex/Jellyfin checkboxes instead gives
+three inconsistent answers to one question on a clean install — "(Not enabled)"
+for Tautulli and Jellyfin, "verified" for ungated Radarr — and claims
+"verified" for a config file holding no key at all.
 
 There is deliberately NO Jellyfin mount: Jellyfin issues API keys from its own
-dashboard and stores none on disk, so the mount could only ever have supplied
-its HTTP port — and ports are no longer taken from appdata at all. Every URL
-default now uses the service's documented port, so what the form suggests is
-predictable and matches each project's own docs instead of coming from a second
-source of truth that only mattered for the setup least likely to rely on it.
+dashboard and stores none on disk, so the mount could only ever supply its HTTP
+port, and ports are not taken from appdata at all. Every URL default uses the
+service's documented port, so what the form suggests is predictable and matches
+each project's own docs rather than a second source of truth that would only
+matter for the setup least likely to rely on it.
 """
 import atexit
 import json
@@ -53,8 +51,8 @@ pms_ip = 10.0.0.5
 pms_port = 32400
 pms_token = PLEXTOK
 """
-# A real config.ini that simply has no API key set yet — the case the old
-# file-exists check reported as "verified".
+# A real config.ini that simply has no API key set yet — the case a
+# file-exists check would report as "verified".
 _TAUT_KEYLESS = """[General]
 http_port = 8181
 [PMS]
@@ -87,7 +85,7 @@ def verify(**dirs):
 
 
 # ── Everything mounted, and NO server checkbox ticked ────────────────────────
-# The clean-install case from the bug report. Reading a file off disk does not
+# The clean-install case: nothing ticked. Reading a file off disk does not
 # depend on which server is selected, so the status must not either.
 A.load_config()["USE_PLEX"] = False
 d = verify()
@@ -98,7 +96,7 @@ check("no status depends on a server checkbox being ticked",
       not any("enabled" in json.dumps(v).lower() for v in d.values()))
 
 # ── The claim is verified, not assumed ──────────────────────────────────────
-# The old check asked "does config.ini exist"; a key-less config answered yes.
+# Asking "does config.ini exist" is not enough: a key-less config answers yes.
 d = verify(TAUTULLI_APPDATA_DIR=_appdata("taut_empty", {"config.ini": _TAUT_KEYLESS}))
 check("a mounted config with no key in it reports NO key",
       d["tautulli"]["mounted"] is True and d["tautulli"]["keys"] == [])
@@ -127,15 +125,15 @@ check("...and no Jellyfin appdata path is derived for the engine either",
       not hasattr(A, "JELLYFIN_APPDATA_DIR")
       and "JELLYFIN_APPDATA" not in A._build_config()[0])
 
-# Every save wrote the derived key into config.json while it existed, so an
-# install that predates its removal still carries one. Left alone it would show
-# up in `mr config show` as though it were a real setting, so load prunes it.
+# JELLYFIN_APPDATA is not a setting, but a config.json can carry one — a hand
+# edit, or a file written by an install that derived it. Left alone it shows up
+# in `mr config show` as though it were real, so load prunes it.
 _stale = json.load(open(os.environ["MEDIAREDUCER_CONFIG"]))
 _stale.update({"JELLYFIN_APPDATA": "/jellyfin", "USE_JELLYFIN": True,
                "JELLYFIN_URL": "http://10.0.0.9:8096", "JELLYFIN_API_KEY": "k"})
 json.dump(_stale, open(os.environ["MEDIAREDUCER_CONFIG"], "w"))
 _rebuilt = A._build_config()[0]
-check("a retired key left in an existing config.json is pruned on load",
+check("a key that is not a setting is pruned out of config.json on load",
       "JELLYFIN_APPDATA" not in _rebuilt)
 check("...without disturbing Jellyfin the SERVICE, which is unaffected",
       _rebuilt.get("USE_JELLYFIN") is True
@@ -143,8 +141,8 @@ check("...without disturbing Jellyfin the SERVICE, which is unaffected",
       and _rebuilt.get("JELLYFIN_API_KEY") == "k")
 
 # ── Ports always come from the documentation, never from appdata ─────────────
-# A detected port was a second source of truth that only ever differed for a
-# non-standard setup — exactly the setup that types its own URL anyway.
+# A detected port would be a second source of truth, and it only ever differs
+# for a non-standard setup — exactly the setup that types its own URL anyway.
 A.TAUTULLI_APPDATA_DIR = _appdata("taut_oddports", {"config.ini": """[General]
 http_port = 9999
 api_key = TAUTKEY
@@ -169,8 +167,8 @@ check("every URL default lands on its documented port",
 check("Jellyfin's default is still offered — 8096 on the host that reached us",
       urls["JELLYFIN_URL"] == "http://10.0.0.9:8096")
 
-# A Tautulli config with a key but NO pms_ip used to yield nothing at all,
-# because the key read sat inside the host check.
+# The key read must sit outside the host check: inside it, a Tautulli config
+# with a key but NO pms_ip yields nothing at all.
 A.TAUTULLI_APPDATA_DIR = _appdata(
     "taut_nohost", {"config.ini": "[General]\napi_key = ONLYKEY\n"})
 check("a key with no host in the config is still detected",

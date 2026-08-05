@@ -146,10 +146,10 @@ finally:
     E.time.time = _real_time
 
 # ── A stage moves the dashboard step, from the same call ────────────────────
-# The banner and the stepper used to be set independently, and drifted: the
-# protected-collections query drove the step to "Scoring" while the log was
-# still inside RUN CONTEXT, so a failure there pointed at a step the run had not
-# reached. One call now sets both.
+# One call sets both, because setting them independently lets them drift: the
+# protected-collections query driving the step to "Scoring" while the log is
+# still inside RUN CONTEXT makes a failure there point at a step the run has not
+# reached.
 fresh()
 _emitted = []
 _real_emit = E.emit_progress

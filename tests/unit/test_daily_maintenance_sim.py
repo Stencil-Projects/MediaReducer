@@ -346,8 +346,8 @@ check("Debug Cleanup is silent (watched live, like a manual Simulate)",
       dispatch("headroom", "debug_cleanup", monitor_toggle=True, scheduled=False) == 0)
 
 # ── A failed run alerts with the engine's own words ─────────────────────────
-# The alert used to read "a MediaReducer run failed — check the detailed log",
-# which is the trip it should be saving. The engine's last progress write says
+# "A MediaReducer run failed — check the detailed log" would be the exact trip
+# the alert exists to save. The engine's last progress write says
 # what stopped answering and which stage it died in; this is where the app picks
 # that up. A run that FAILED never has a report, so this alert is the only thing
 # it can send — which is why the Errors toggle turning it off means silence.

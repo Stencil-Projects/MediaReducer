@@ -1,4 +1,4 @@
-"""One rule for every size the app prints, and the two ways it has broken.
+"""One rule for every size the app prints, and the two ways it breaks.
 
 A size the app MEASURED — free space, a disk total, the library, one movie,
 an amount reclaimed — always shows one decimal, even when it is .0. A size the
@@ -6,15 +6,15 @@ user TYPED — a Headroom target, a Redline floor, a Library Size Cap — is who
 GB, quoted as entered. The point is that one reading cannot appear as "400" on
 one screen and "400.0" on another.
 
-Both failures this guards against are real ones, not hypotheticals:
+Two failure modes it guards against:
 
-  • A missing reading rendered as a confident zero. Number(None)/float("") sit
+  • A missing reading rendering as a confident zero. Number(None)/float("") sit
     a hair away from 0, and "0.0 GB free" does not read as "no measurement" —
     it reads as a full disk, which is the one thing the user would act on.
-  • The empty-state fallbacks drifted from the formatter. The lifetime-reclaimed
+  • The empty-state fallbacks drift from the formatter. The lifetime-reclaimed
     figure has two sources — a measured label and a hardcoded zero for "nothing
-    yet" — and when only the formatter moved to one decimal, the same zero
-    printed as "0 GB" or "0.0 GB" depending on which path set it.
+    yet" — so a precision change on one side alone prints the same zero as
+    "0 GB" or "0.0 GB" depending on which path set it.
 
 The JS twins (prMeasuredGb / prCommaNum) are exercised by the browser tests;
 what is checked here is the server side plus the template literals that have to
@@ -60,8 +60,8 @@ for value, want in [(500, "500"), (1500.7, "1,501"), (12730, "12,730")]:
     check(f"setting {value!r} -> {want}", c(value, 0) == want, c(value, 0))
 
 # ── Reclaimed sizes carry one decimal at every magnitude ────────────────────
-# This used to give two decimals between 1 and 10 GB and none below 1, so the
-# same column mixed three precisions.
+# Precision by magnitude — two decimals between 1 and 10 GB, none below 1 —
+# would mix three precisions in one column.
 r = A._format_reclaimed_size
 for by, want in [(5_000_000_000, "5.0 GB"), (32_400_000_000, "32.4 GB"),
                  (1_500_000_000_000, "1.5 TB"), (512_000_000, "512.0 MB"),
@@ -82,11 +82,10 @@ for rel in ("templates/dashboard.html", "app.py"):
           not stale, stale)
 
 # ── The notification formats a byte count the same way the dashboard does ───
-# These are two implementations of one fact, and they had diverged: notify.py
-# divided by 1024**3 while everything else divides by 1e9, so a run the
-# dashboard reported as freeing 32.3 GB was announced on your phone as 30.1 GB,
-# and 1.5 TB arrived as "1397.0 GB". Same bytes, two answers, and the wrong one
-# was the one that left the house.
+# These are two implementations of one fact, and they diverge easily: divide by
+# 1024**3 on one side and 1e9 on the other, and a run the dashboard reports as
+# freeing 32.3 GB is announced on your phone as 30.1 GB, with 1.5 TB arriving as
+# "1397.0 GB". Same bytes, two answers, and the wrong one leaves the house.
 #
 # They cannot be shared — app imports notify, so notify importing app would be
 # circular — so they are pinned against each other here, the way tests/parity

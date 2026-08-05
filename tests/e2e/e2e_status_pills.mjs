@@ -3,12 +3,11 @@
 // one is supposed to wear the color of the BUTTON that does that thing: red is
 // the Cleanup button, blue is the primary action button, neutral is Simulate.
 //
-// They were written independently and drifted: the header badge was blue for a
-// simulation and a dimmer red for a Cleanup than the Cleanup button, the run
-// pill used a third red again, and Last Run showed the mode that DELETES in
-// green. This asserts the pill and its button resolve to the same border, text
-// and fill, so a token changed on one side cannot quietly leave the other
-// behind.
+// Written independently they drift, and every drift is a lie about what the
+// pill means — a dimmer red than the Cleanup button, a third red somewhere
+// else, the mode that DELETES shown in green. This asserts the pill and its
+// button resolve to the same border, text and fill, so a token changed on one
+// side cannot quietly leave the other behind.
 //
 // Colors are compared as numbers, not strings: the same token serializes as
 // rgba() on one element and color(srgb …) or oklab() on another, so an equal
@@ -131,8 +130,8 @@ try {
     });
 
     // Two channels within 2/255 is "the same color" — enough slack for a
-    // rounding difference between color spaces, far tighter than any of the
-    // mismatches this replaces (the old reds were 40+ apart).
+    // rounding difference between color spaces, and far tighter than a genuine
+    // mismatch, which runs tens of points apart.
     const same = (a, c) => a && c && a.every((v, i) => Math.abs(v - c[i]) <= 2);
     const sameSkin = (a, c) => same(a.bd, c.bd) && same(a.fg, c.fg);
     const wears = (label, pillSkin, btn) => {
@@ -221,9 +220,10 @@ try {
   check('...and every run that deletes nothing blue', boot.byKind.other === 'Running:is-accent',
         boot.byKind.other);
 
-  // The above only proves setRunning honours what it is GIVEN. The bug was the
-  // boot call not giving it anything, so drive the real thing: serve the page
-  // as it renders mid-manual-Simulate and watch the badge from the first paint.
+  // The above only proves setRunning honours what it is GIVEN — a boot call
+  // that hands it nothing passes that just as happily. So drive the real thing:
+  // serve the page as it renders mid-manual-Simulate and watch the badge from
+  // the first paint.
   // No engine is started — the served HTML is rewritten, which is exactly the
   // input the boot path reads — so this costs nothing and cannot race a run.
   for (const [name, patch, want] of [

@@ -617,9 +617,9 @@
       padding: 14px 16px; margin: 0; border-radius: 0 0 16px 16px;
       border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
       scrollbar-color: var(--border-strong) var(--term-bg);
-      /* Reaching the end of the log used to hand the rest of the wheel gesture
-         to the page, which scrolled 40px underneath the floating log window —
-         measured. The log is where the pointer is, so the scroll stops here. */
+      /* The log is where the pointer is, so the wheel gesture stops here.
+         Without this, reaching the end hands the rest of it to the page, which
+         scrolls underneath the floating log window. */
       overscroll-behavior: contain;
     }
     /* Each log line is its own block: long lines wrap in place with a hanging
@@ -1609,13 +1609,42 @@
     }
     /* A note that reports something ALREADY DONE can be dismissed; one that
        reports a condition still in effect cannot, because hiding it would not
-       change the condition and the page would then be lying by omission. The X
-       sits on the right and never wraps under the text. */
-    .config-inline-warning.is-dismissible {
+       change the condition and the page would then be lying by omission.
+       Amber is for the second kind — something to act on — so the dismissible
+       ones wear the accent instead: they are telling you what happened, not
+       asking for anything. Same shape, so a column of notes still reads as one
+       list, and the colour is what says which are still waiting on you. */
+    .config-inline-note {
+      border: 1px solid var(--border-accent);
+      background: var(--surface-tint);
+      color: var(--text-accent);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: .8rem;
+    }
+    /* Page-level notes, above the sections they concern. The pinned ones come
+       first and the dismissible ones sit underneath — enforced here by `order`
+       rather than by markup, so a note added in the wrong place still lands in
+       the right half. Spacing stays on the notes themselves (mb-3), so a hidden
+       one takes up no room; a gap on this container would leave a hole where
+       every note happened to be hidden. */
+    .page-notes { display: flex; flex-direction: column; }
+    .page-notes > .is-dismissible { order: 1; }
+
+    /* The X sits on the right and never wraps under the text. */
+    .config-inline-warning.is-dismissible,
+    .config-inline-note.is-dismissible {
       display: flex; align-items: flex-start; gap: 10px;
       padding-right: 8px;
     }
-    .config-inline-warning.is-dismissible > :first-child { flex: 1 1 auto; }
+    /* …and `hidden` still wins over that display. Bootstrap's reboot happens to
+       carry [hidden]{display:none!important}, so this is currently a no-op —
+       but a note that reappears the day the vendored CSS changes is not a
+       dependency worth having. */
+    .config-inline-warning[hidden],
+    .config-inline-note[hidden] { display: none !important; }
+    .config-inline-warning.is-dismissible > :first-child,
+    .config-inline-note.is-dismissible > :first-child { flex: 1 1 auto; }
     .config-inline-dismiss {
       flex: 0 0 auto;
       display: inline-flex; align-items: center; justify-content: center;
@@ -1625,7 +1654,7 @@
       font-size: 1rem; line-height: 1; cursor: pointer;
       opacity: .65; transition: opacity .12s ease, background-color .12s ease;
     }
-    .config-inline-dismiss:hover  { opacity: 1; background: var(--surface-tint-warning); }
+    .config-inline-dismiss:hover  { opacity: 1; background: var(--surface-2); }
     .config-inline-dismiss:active { opacity: .8; }
     .config-inline-dismiss:disabled { opacity: .35; cursor: default; background: transparent; }
 
@@ -2239,10 +2268,10 @@
 </style>
 
 <!-- Shared confirmation dialog for the actions that delete, or that arm
-     deleting. It replaced a two-click "Are you sure?" on the button itself,
-     which had to keep its warning alive in a sticky toast off to the side —
-     the decision and the reason for it now sit in one place the user has to
-     answer. prConfirm() below fills and drives it. -->
+     deleting. The decision and the reason for it sit in one place the user has
+     to answer, rather than a two-click "Are you sure?" on the button with its
+     warning kept alive in a sticky toast off to the side. prConfirm() below
+     fills and drives it. -->
 <div class="modal fade pr-popup pr-confirm" id="pr-confirm-modal" tabindex="-1"
      aria-hidden="true" aria-labelledby="pr-confirm-title"
      aria-describedby="pr-confirm-body">
@@ -2826,7 +2855,7 @@ function showToast(msg, type = 'success') {
 // badge is visible no matter where you are while a run is active.
 // What a run in flight is called, and which button's color it borrows. One
 // place decides, because the header badge and the run pill report the same run
-// and used to word it differently.
+// and must not word it differently.
 //
 // Red is reserved for the run that means to delete something, and it says
 // "Cleaning" rather than "Running": red plus a word that describes any run is
@@ -2855,6 +2884,31 @@ window.prSetHeaderRunning = function (on, live, debugLive) {
   });
   h.querySelectorAll('.run-badge-label').forEach(el => { el.textContent = label; });
 };
+// Dismissing a note CLEARS whatever made it true, server-side. Hidden in the
+// browser it would be back on the next load, still there on every other device,
+// and — for the ones keyed off stored state — ready to resurface later saying
+// something that had since stopped being so. Delegated from the document so a
+// note rendered after load (the dashboard's, from a status poll) needs no extra
+// wiring, and keyed by data-dismiss-note so a new note is markup alone.
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest?.('[data-dismiss-note]');
+  if (!btn) return;
+  const note = btn.closest('.config-inline-note, .config-inline-warning');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/notes/${encodeURIComponent(btn.dataset.dismissNote)}/dismiss`,
+                          { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!d.ok) throw new Error(d.message || 'Could not dismiss the note.');
+    note?.remove();
+  } catch (err) {
+    // The note stays put. It is still true, and swallowing this would hide a
+    // write problem behind something that looked like it worked.
+    btn.disabled = false;
+    showToast(err.message || 'Could not dismiss the note.', 'danger');
+  }
+});
+
 // The badge links to the Dashboard's run-progress card. Already on the
 // Dashboard, smooth-scroll to it instead of a full reload.
 document.querySelectorAll('.header-run-badge').forEach(a => {
