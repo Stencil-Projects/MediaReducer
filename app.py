@@ -3459,7 +3459,10 @@ def _new_tv_row(*, title, year, path, seasons, added_at, status, source_id=None,
 
 
 def _new_season_bucket(n: int) -> dict:
-    return {"n": n, "eps": 0, "size_bytes": 0,
+    # added_at = the NEWEST episode file's added date: a season that just
+    # received content reads fresh (kept), and only a season whose files have
+    # all sat untouched ages toward stale.
+    return {"n": n, "eps": 0, "size_bytes": 0, "added_at": 0,
             "eps_watched": 0, "last_played": 0, "plays": 0, "users": 0}
 
 
@@ -3477,7 +3480,7 @@ def _jellyfin_series_inventory(url: str, key: str) -> list | None:
         }, timeout=30) or {}).get("Items")
         episodes = (_jellyfin_get(url, key, "/Items", {
             "IncludeItemTypes": "Episode", "Recursive": "true",
-            "Fields": "MediaSources,ParentIndexNumber,SeriesId",
+            "Fields": "MediaSources,ParentIndexNumber,SeriesId,DateCreated",
         }, timeout=60) or {}).get("Items")
         if not isinstance(series, list) or not isinstance(episodes, list):
             return None
@@ -3502,6 +3505,13 @@ def _jellyfin_series_inventory(url: str, key: str) -> list | None:
         b = per.setdefault(sid, {}).setdefault(n, _new_season_bucket(n))
         b["eps"] += 1
         b["size_bytes"] += size
+        raw_added = str(it.get("DateCreated") or "")
+        if raw_added:
+            try:
+                b["added_at"] = max(b["added_at"], int(
+                    datetime.fromisoformat(raw_added.replace("Z", "+00:00")).timestamp()))
+            except ValueError:
+                pass
     rows = []
     for s in series:
         if not isinstance(s, dict) or not s.get("Id") or not s.get("Name"):
@@ -3589,6 +3599,10 @@ def _plex_series_inventory(conn: dict) -> list | None:
                 b = show["seasons"].setdefault(n, _new_season_bucket(n))
                 b["eps"] += 1
                 b["size_bytes"] += size
+                try:
+                    b["added_at"] = max(b["added_at"], int(ep.get("addedAt") or 0))
+                except (TypeError, ValueError):
+                    pass
                 # A show with no Location still needs a folder: derive the
                 # series dir from an episode file (file → season dir → series).
                 if not show["path"] and first_file:
@@ -3634,6 +3648,7 @@ def _merge_tv_sources(jf_rows: list | None, px_rows: list | None) -> list:
             if other:
                 s["size_bytes"] = max(s["size_bytes"], other["size_bytes"])
                 s["eps"] = max(s["eps"], other["eps"])
+                s["added_at"] = max(s.get("added_at") or 0, other.get("added_at") or 0)
         base["tv_seasons"] = sorted((base.get("tv_seasons") or []) + list(theirs.values()),
                                     key=lambda x: x["n"])
         base["size_bytes"] = sum(s["size_bytes"] for s in base["tv_seasons"])
@@ -4060,11 +4075,9 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
             excluded["favorite"] += len(seasons)
             continue
         # The shared series-level filters, mirroring the movie skip ladder.
+        # (The grace period applies at SEASON grain below, on each season's
+        # own added date — a brand-new season of an old show is graced too.)
         added_at = r.get("added_at") or 0
-        if ss["grace_days"] and added_at > 0 \
-                and (now - added_at) < ss["grace_days"] * 86400:
-            excluded["recently_added"] += len(seasons)
-            continue
         rating = r.get("rating")
         if imdb_in_use and rating is None:
             excluded["no_imdb_data"] += len(seasons)
@@ -4086,6 +4099,11 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
         for s in seasons:
             if continuing and (s.get("n") or 0) == latest_n:
                 excluded["latest_of_continuing"] += 1
+                continue
+            s_added = s.get("added_at") or added_at
+            if ss["grace_days"] and s_added > 0 \
+                    and (now - s_added) < ss["grace_days"] * 86400:
+                excluded["recently_added"] += 1
                 continue
             eps, watched = (s.get("eps") or 0), (s.get("eps_watched") or 0)
             if ss["skip_unplayed"] and watched <= 0 and not (s.get("last_played") or 0):

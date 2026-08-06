@@ -1132,7 +1132,10 @@ function seasonStatus(m,cfg){
   if(!m.tvInScope)return 'tv_oos';
   if(m.protected)return 'protected';
   if(cfg.JF_FAV&&m.favorite)return 'favorite';
-  if(cfg.GRACE>0&&m.addedDays!=null&&m.addedDays<cfg.GRACE)return 'grace';
+  // Grace on the SEASON's own added date (its newest episode file), falling
+  // back to the show's — a brand-new season of an old show is graced too.
+  const sAdded=(m.seasonAddedDays!=null)?m.seasonAddedDays:m.addedDays;
+  if(cfg.GRACE>0&&sAdded!=null&&sAdded<cfg.GRACE)return 'grace';
   if(imdbInUse(cfg)&&m.rating==null)return 'nodata';
   if(cfg.CUTOFF!=null&&m.rating!=null&&m.rating>cfg.CUTOFF)return 'cutoff';
   if(m.latestOfContinuing)return 'tv_latest';
@@ -1162,7 +1165,8 @@ function seasonScore(m,cfg){
   const users=Math.max(0,Math.floor(((m.seasonUsers!=null)?m.seasonUsers:m.users)||0));
   const staleScale=(Number(cfg.STALE)||SCORING.RECENCY_DEFAULT_MONTHS)/SCORING.RECENCY_DEFAULT_MONTHS;
   const effScale=staleScale*Math.min(SCORING.USER_DECAY_MAX_MULT,1+SCORING.USER_DECAY_PER_USER*users);
-  const recDays=(m.seasonLastPlayedDays!=null)?m.seasonLastPlayedDays:((m.addedDays!=null)?m.addedDays:null);
+  const recDays=(m.seasonLastPlayedDays!=null)?m.seasonLastPlayedDays
+    :((m.seasonAddedDays!=null)?m.seasonAddedDays:((m.addedDays!=null)?m.addedDays:null));
   let rec=0,shelfPts=0;
   if(recDays!=null){
     for(const [maxDays,pts] of SCORING.RECENCY_TIERS){ if(recDays<=maxDays*effScale){rec=pts;break;} }
@@ -1687,6 +1691,7 @@ async function loadPool(){
         seasonPlays:(s.plays!=null)?s.plays:(s.eps_watched||0),
         seasonUsers:(s.users!=null)?s.users:(m.users||0),
         seasonLastPlayedDays:(s.last_played>0)?Math.max(0,(now-s.last_played)/86400):null,
+        seasonAddedDays:(s.added_at>0)?Math.max(0,(now-s.added_at)/86400):null,
         // The latest season is shielded unless the show is KNOWN ended —
         // Plex states no status, and unknown gets the benefit of the doubt.
         latestOfContinuing:(m.tv_status!=='ended')&&((s.n||0)===latestN),

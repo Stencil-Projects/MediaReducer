@@ -110,6 +110,16 @@ graced = A._tv_season_plan(
     dict(CFG, GRACE_PERIOD_DAYS=30), now=NOW)
 check("the grace period holds back a freshly-added show",
       not graced["order"] and graced["excluded"]["recently_added"] == 1, graced["excluded"])
+# Grace is judged per SEASON on its own added date: a brand-new season of an
+# old show is graced while its old sibling stays in the order.
+new_season = A._tv_season_plan(
+    [series("Old Show", [dict(season(1), added_at=NOW - 700 * DAY),
+                         dict(season(2), added_at=NOW - 3 * DAY)],
+            added=NOW - 700 * DAY)],
+    dict(CFG, GRACE_PERIOD_DAYS=30), now=NOW)
+check("a brand-new season of an OLD show is graced; its old sibling is not",
+      [(e["title"], e["season"]) for e in new_season["order"]] == [("Old Show", 1)]
+      and new_season["excluded"]["recently_added"] == 1, new_season["excluded"])
 
 imdb_cfg = dict(CFG, SCORE_BALANCE=70, MAX_IMDB_RATING=7.5)
 cut = A._tv_season_plan(

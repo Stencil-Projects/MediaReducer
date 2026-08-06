@@ -124,9 +124,10 @@ def season_retention_score(season: dict, series: dict, *,
                   (1.0-2.0) sets what a full season-watch is worth — at 2.0
                   those 12 plays count like two movie watches.
       recency     the movie RECENCY_TIERS + soft shelf on this season's last
-                  watch, falling back to the SERIES added date when never
-                  watched (a new show's untouched seasons read fresh, an old
-                  show's read stale). Distinct-watcher decay stretch applies,
+                  watch, falling back to the SEASON's own added date (its
+                  newest episode file), then the series added date — a fresh
+                  season of an old show reads fresh, an old show's untouched
+                  seasons read stale. Distinct-watcher decay stretch applies,
                   from THIS season's watcher count — exactly as a movie's own
                   watchers stretch its decay.
       multi-user  the movie curve on THIS season's distinct watchers — a
@@ -174,7 +175,9 @@ def season_retention_score(season: dict, series: dict, *,
                      1.0 + SCORING["USER_DECAY_PER_USER"] * users)
     eff_scale = stale_scale * decay_mult
     last_played = int(_num(season.get("last_played")))
-    recency_at = last_played if last_played > 0 else int(_num(series.get("added_at")))
+    recency_at = (last_played if last_played > 0
+                  else int(_num(season.get("added_at")))
+                  or int(_num(series.get("added_at"))))
     rec_pts = 0.0
     shelf_pts = 0.0
     if recency_at > 0:

@@ -40,9 +40,12 @@ JF_SERIES = [
      "ProductionYear": 2011},   # no episodes on disk → skipped
 ]
 JF_EPISODES = [
-    {"SeriesId": "j1", "ParentIndexNumber": 1, "MediaSources": [{"Size": 2 * GB}]},
-    {"SeriesId": "j1", "ParentIndexNumber": 1, "MediaSources": [{"Size": 3 * GB}]},
-    {"SeriesId": "j1", "ParentIndexNumber": 2, "MediaSources": [{"Size": 4 * GB}]},
+    {"SeriesId": "j1", "ParentIndexNumber": 1, "MediaSources": [{"Size": 2 * GB}],
+     "DateCreated": "2020-02-01T00:00:00Z"},
+    {"SeriesId": "j1", "ParentIndexNumber": 1, "MediaSources": [{"Size": 3 * GB}],
+     "DateCreated": "2020-03-01T00:00:00Z"},
+    {"SeriesId": "j1", "ParentIndexNumber": 2, "MediaSources": [{"Size": 4 * GB}],
+     "DateCreated": "2021-06-01T00:00:00Z"},
 ]
 def fake_jf_get(url, key, path, params=None, timeout=15):
     kinds = (params or {}).get("IncludeItemTypes")
@@ -62,6 +65,10 @@ check("the row carries the Jellyfin identity, never a Sonarr one",
 check("seasons carry real episode counts and on-disk sizes",
       [(s["n"], s["eps"], s["size_bytes"]) for s in row["tv_seasons"]]
       == [(1, 2, 5 * GB), (2, 1, 4 * GB)], row["tv_seasons"])
+check("each season's added date is its NEWEST episode file's",
+      row["tv_seasons"][0]["added_at"] == 1583020800
+      and row["tv_seasons"][1]["added_at"] > row["tv_seasons"][0]["added_at"],
+      [s["added_at"] for s in row["tv_seasons"]])
 check("series totals sum the seasons",
       row["size_bytes"] == 9 * GB and row["tv_episodes"] == 3, row)
 check("status, IMDb id, year, added date and the server path ride along",
@@ -80,7 +87,7 @@ PLEX_ROUTES = {
         {"ratingKey": "78", "title": "Beta Show", "year": 2012, "addedAt": 1_650_000_000},
     ]}},
     "/library/sections/2/all?type=4": {"MediaContainer": {"Metadata": [
-        {"grandparentRatingKey": "77", "parentIndex": 1,
+        {"grandparentRatingKey": "77", "parentIndex": 1, "addedAt": 1_700_000_000,
          "Media": [{"Part": [{"size": 6 * GB, "file": "/data/tv/Alpha Show/Season 01/e1.mkv"}]}]},
         {"grandparentRatingKey": "77", "parentIndex": 3,
          "Media": [{"Part": [{"size": 7 * GB, "file": "/data/tv/Alpha Show/Season 03/e1.mkv"}]}]},
@@ -121,6 +128,8 @@ check("...season sizes keep the larger measurement, and a season only one "
       "side lists is kept",
       [(s["n"], s["size_bytes"]) for s in both["tv_seasons"]]
       == [(1, 6 * GB), (2, 4 * GB), (3, 7 * GB)], both["tv_seasons"])
+check("...and a merged season keeps the LATER added date",
+      both["tv_seasons"][0]["added_at"] == 1_700_000_000, both["tv_seasons"][0])
 check("...and the series totals follow the merged seasons",
       both["size_bytes"] == 17 * GB and both["tv_episodes"] == 4, both)
 

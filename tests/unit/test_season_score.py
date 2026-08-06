@@ -86,6 +86,23 @@ delta = score(duo, NOBODY_SHOW, bump=0) - score(lone, NOBODY_SHOW, bump=0)
 check("two season watchers add the movie MULTI_USER points exactly",
       abs(delta - SCORING["MULTI_USER_PTS"] * 2) < 1e-9, delta)
 
+# ── A season's OWN added date is its never-watched freshness ────────────────
+# The fallback chain is last watch → season added → series added: a fresh
+# season of an old show reads fresh (top recency tier), not stale.
+fresh_season = {"eps": 10, "eps_watched": 0, "plays": 0, "users": 0,
+                "last_played": 0, "added_at": NOW - 5 * DAY}
+old_season = {"eps": 10, "eps_watched": 0, "plays": 0, "users": 0,
+              "last_played": 0, "added_at": NOW - 800 * DAY}
+OLD_SHOW = {"eps": 50, "eps_watched": 0, "users": 0,
+            "added_at": NOW - 3000 * DAY, "rating": None, "votes": 0}
+check("a fresh season of an OLD show reads fresh, not the show's age",
+      score(fresh_season, OLD_SHOW) > score(old_season, OLD_SHOW),
+      (score(fresh_season, OLD_SHOW), score(old_season, OLD_SHOW)))
+no_date = {"eps": 10, "eps_watched": 0, "plays": 0, "users": 0, "last_played": 0}
+check("a season with no date of its own falls back to the series added date",
+      abs(score(no_date, OLD_SHOW)
+          - score(dict(no_date, added_at=NOW - 3000 * DAY), OLD_SHOW)) < 1e-9)
+
 # ── Pre-plays rows fall back, never to zero ─────────────────────────────────
 legacy = {"eps": 10, "eps_watched": 10, "last_played": NOW - 100 * DAY}
 modern = {"eps": 10, "eps_watched": 10, "plays": 10, "users": 1,
