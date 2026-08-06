@@ -594,6 +594,7 @@
         <div class="dashboard-last-run metric-main">
           <span class="value" id="last-run-value" data-last-run-ts="{{ last_run_ts or '' }}">{{ last_run or '—' }}</span>
           <div class="sub" id="next-run-sub">{% if not thresholds_configured or run_mode == 'off' %}Scheduler paused{% elif run_mode == 'paused' %}Monitor Only — next check…{% else %}Next run: calculating…{% endif %}</div>
+          <div class="sub" id="tv-pass-sub" hidden></div>
         </div>
         <div class="dashboard-history-row metric-bottom">
           <button type="button" class="dashboard-history-btn dashboard-marked-btn"
@@ -1962,6 +1963,37 @@ function _renderLastRunValue(el, text) {
   el.append(s.slice(0, i), colon, s.slice(i + 1));
 }
 
+// The TV pass's one-line state under Last run: what the pass riding the last
+// run did (or why it refused), and the standing mark count. Hidden when the
+// TV switch is off; a fail-closed abort shows in the warning tint because it
+// silently hands the whole deficit to the movie side.
+function _renderTvPassNote(tv) {
+  const el = document.getElementById('tv-pass-sub');
+  if (!el) return;
+  if (!tv) { el.hidden = true; return; }
+  let text;
+  if (tv.aborted) {
+    text = 'TV pass: aborted — ' + tv.aborted;
+  } else if (!tv.armed) {
+    // Disarmed outranks history: a stale "deleted 2 seasons" line would read
+    // as a pass that still runs.
+    text = 'TV pass: not armed — needs a media server and a space trigger';
+  } else if (tv.date) {
+    const bits = [];
+    if (tv.deleted_seasons) bits.push('deleted ' + tv.deleted_seasons + ' season' + (tv.deleted_seasons === 1 ? '' : 's') + ' (' + tv.freed_gb + ' GB)');
+    if (tv.marked_new) bits.push('marked ' + tv.marked_new + ' new');
+    if (tv.held_by_delay) bits.push(tv.held_by_delay + ' waiting out the delay');
+    if (tv.skipped) bits.push(tv.skipped + ' skipped — see the log');
+    if (!bits.length) bits.push(tv.marked ? tv.marked + ' season' + (tv.marked === 1 ? '' : 's') + ' marked' : 'nothing to do');
+    text = 'TV pass (' + tv.date + '): ' + bits.join(' · ');
+  } else {
+    text = 'TV pass: fires with the next Simulate or Cleanup';
+  }
+  el.textContent = text;
+  el.style.color = (tv.aborted || tv.skipped) ? 'var(--text-warning)' : '';
+  el.hidden = false;
+}
+
 function _updateLastRunDisplay(ts, fallback) {
   const el = document.getElementById('last-run-value');
   if (!el) return;
@@ -2827,6 +2859,7 @@ async function syncStatus({refreshLog = true} = {}) {
       _markedEvent = { on: d.marked_event_on, count: d.marked_event_count, bytes: d.marked_event_bytes };
     }
     _updateStorageCard(d.disk, d.library_gb);
+    _renderTvPassNote(d.tv_pass);
     _renderTargetRows(d);
     _applyButtonStates();
     // Progress only changes while a run is active — skip the second fetch on

@@ -32,6 +32,8 @@ SAFE = {
     "label", "LIBRARY_ROOT", "_noun", "_verb", "_it", "_exist",
     "IMDB_RATINGS_PATH", "IMDB_RATINGS_URL", "age_days", "refresh_days",
     "_empty", "_other", "_other_n",
+    # The wrong-library tripwire's sample counts — numbers, never titles.
+    "size_mismatch", "verified + size_mismatch",
 }
 # …and the ones that DO, which must be declared.
 NAME_BEARING = {"unmatched[0]", "_names"}

@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY engine.py app.py db.py notify.py run_issues.py cli.py entrypoint.py scoring_constants.py default_config.json ./
+COPY engine.py app.py db.py notify.py run_issues.py cli.py entrypoint.py scoring_constants.py shared.py default_config.json ./
 COPY templates/ templates/
 # Bootstrap + the Inter webfont, served from here rather than a CDN so the UI
 # loads at full speed on a host with no outbound internet.

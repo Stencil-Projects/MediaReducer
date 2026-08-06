@@ -69,27 +69,35 @@ movie files at `/library`.
 
 ## Path Requirement
 
-MediaReducer deletes files from its own `/library` mount. Plex, Tautulli, and
-Jellyfin may report different path prefixes, but each movie's path suffix must
-line up with a real file under `/library`.
-
-This is OK:
-
-```text
-MediaReducer: /library/movies/Bob (2020)/Bob.mkv
-Plex:         /data/movies/Bob (2020)/Bob.mkv
-Jellyfin:     /data/library/movies/Bob (2020)/Bob.mkv
-```
-
-This is not OK:
+MediaReducer deletes files from its own `/library` mount. The media servers
+may see the same files under completely different paths — files are matched by
+**fingerprint** (the movie's folder name + file name, with the server's byte
+count disambiguating same-named copies), so mount prefixes and nesting never
+need to line up:
 
 ```text
 MediaReducer: /library/movies/Bob (2020)/Bob.mkv
-Plex:         /downloads/Bob.mkv
+Plex:         /data/movies/Bob (2020)/Bob.mkv        ✓ same folder + file name
+Jellyfin:     /media/x/films/Bob (2020)/Bob.mkv      ✓ same folder + file name
 ```
 
-If the suffix cannot be matched, the health check blocks setup and run
-controls. Click **Check for Errors** after fixing mounts.
+What must agree is the movie's folder and file name. A server that sees a
+bare file with no movie folder (`/downloads/Bob.mkv`) can only match through
+a unique (file name, size) hit, and a bare name alone never matches — that
+could be a different film.
+
+The file on disk is the size authority. A file whose bytes differ from the
+server's count (typically a quality upgrade the server hasn't rescanned yet)
+still matches by folder + name, and plans, deletions, and history all carry
+the on-disk bytes. But when **most** sampled files disagree in size, that
+looks like the wrong library — a stale backup or copy mounted at `/library`
+— and MediaReducer treats it as an error: the configuration check fails, and
+a run's pre-check aborts before anything is scored or deleted.
+
+If files cannot be matched at all, the health check blocks setup and run
+controls. **Check for Errors** re-runs the whole check against the current
+disk, and so does saving your Monitored paths — so a fixed mount clears the
+error immediately, and a new problem shows just as fast.
 
 ## Install
 
@@ -323,13 +331,20 @@ history comes from Jellyfin and Tautulli. **Sonarr is optional and
 cleanup-only**: it never supplies the inventory, and is only asked to
 unmonitor a season before deletion so it isn't re-downloaded. With a media
 server connected, TV cleanup enabled (Filtering & Scoring → Cleanup scope)
-and a Headroom target or Library Size Cap armed, a TV pass runs once a day
-after the daily run time:
+and a Headroom target or Library Size Cap armed, a TV pass fires with EVERY
+run, right before the movie engine: a Simulate or Debug Cleanup marks, a
+real Cleanup also deletes due marks — the same gesture as the movies. Each
+pass:
 
 1. It refreshes everything from the live servers — the media servers'
    inventory, watch history, favorites, and protected collections. If any
    configured source fails to answer, the pass aborts without touching a
-   file.
+   file. Series folders match under your monitored paths by folder name
+   (mount prefixes never need to line up, same as movies), and the files
+   deleted are the server's own fresh listing joined under that folder. The
+   disk is the size authority: a file the server describes at different
+   bytes (its metadata lagging an upgrade) still deletes at its on-disk
+   size, noted in the log.
 2. It rebuilds the season plan: every in-scope season ranked worst-kept first,
    with protected and favorited shows, shows outside your monitored paths, and
    a continuing show's newest season held back entirely.
@@ -353,8 +368,11 @@ after the daily run time:
 
 A season leaves the marked list the moment the plan stops taking it — the cap
 was raised, the show got protected or favorited, someone started watching it,
-or enough space came back. Redline stays a movie-only emergency: a breach
-frees space immediately from the movie order and never deletes TV.
+or enough space came back. Each pass's outcome shows on the Dashboard under
+Last run and rides the run notification; a fail-closed abort is called out
+there, since it silently hands the whole deficit to the movie side. Redline
+stays a movie-only emergency: a breach frees space immediately from the
+movie order and never deletes TV.
 
 ### 5. Notifications
 
@@ -428,9 +446,13 @@ tab.
 
 ### TV show settings curve
 
-Two sliders that translate season watch history onto the shared scale, both
-previewing live in the library table:
+TV-only rules, all previewing live in the library table:
 
+- **Season eligibility** — which of a show's seasons may delete: **only the
+  oldest season** (default), **any season except the newest** (the most
+  recently *added* season — which may not be the latest), or **all seasons**.
+  A continuing show's current season is always held back, and the eligibility
+  filters above still apply.
 - **TV show watch weight** (100–200%) — a season's plays convert to
   movie-watch equivalents: plays ÷ episodes × this weight, run through the
   same play curve a movie's watch count uses. At 100%, playing all 12

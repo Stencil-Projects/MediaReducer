@@ -146,27 +146,27 @@ td{padding:5px 8px;border-bottom:1px solid var(--border);vertical-align:middle;w
 tr:last-child td{border-bottom:none}
 tr.fx td{opacity:.32}
 .ordcell{color:var(--text-muted);font-variant-numeric:tabular-nums;font-size:11.5px;text-align:right;padding-right:4px}
-/* Brackets around the boundary tie group — cells 10/11 are Size and Retention.
+/* Brackets around the boundary tie group — cells 11/12 are Size and Retention (the Type column shifted everything right by one).
    tie-* classes are only set while sorted by # with an Over headroom target. */
 .twrap{--tie-bracket:color-mix(in srgb,var(--border-accent) 62%,transparent)}
-tr.tie-start td:nth-child(10),tr.tie-mid td:nth-child(10),tr.tie-end td:nth-child(10),
-tr.tie-start td:nth-child(11),tr.tie-mid td:nth-child(11),tr.tie-end td:nth-child(11){position:relative}
+tr.tie-start td:nth-child(11),tr.tie-mid td:nth-child(11),tr.tie-end td:nth-child(11),
+tr.tie-start td:nth-child(12),tr.tie-mid td:nth-child(12),tr.tie-end td:nth-child(12){position:relative}
 /* vertical rails */
-tr.tie-start td:nth-child(10)::before,tr.tie-mid td:nth-child(10)::before,tr.tie-end td:nth-child(10)::before{
-  content:'';position:absolute;left:2px;top:0;bottom:0;width:2px;background:var(--tie-bracket)}
 tr.tie-start td:nth-child(11)::before,tr.tie-mid td:nth-child(11)::before,tr.tie-end td:nth-child(11)::before{
+  content:'';position:absolute;left:2px;top:0;bottom:0;width:2px;background:var(--tie-bracket)}
+tr.tie-start td:nth-child(12)::before,tr.tie-mid td:nth-child(12)::before,tr.tie-end td:nth-child(12)::before{
   content:'';position:absolute;right:2px;top:0;bottom:0;width:2px;background:var(--tie-bracket)}
 /* rounded rail ends where a group opens and closes */
-tr.tie-start td:nth-child(10)::before{top:4px;border-top-left-radius:3px}
-tr.tie-start td:nth-child(11)::before{top:4px;border-top-right-radius:3px}
-tr.tie-end td:nth-child(10)::before{bottom:4px;border-bottom-left-radius:3px}
-tr.tie-end td:nth-child(11)::before{bottom:4px;border-bottom-right-radius:3px}
+tr.tie-start td:nth-child(11)::before{top:4px;border-top-left-radius:3px}
+tr.tie-start td:nth-child(12)::before{top:4px;border-top-right-radius:3px}
+tr.tie-end td:nth-child(11)::before{bottom:4px;border-bottom-left-radius:3px}
+tr.tie-end td:nth-child(12)::before{bottom:4px;border-bottom-right-radius:3px}
 /* short bracket caps */
-tr.tie-start td:nth-child(10)::after{content:'';position:absolute;left:2px;top:4px;width:9px;height:2px;background:var(--tie-bracket)}
-tr.tie-end td:nth-child(10)::after{content:'';position:absolute;left:2px;bottom:4px;width:9px;height:2px;background:var(--tie-bracket)}
-tr.tie-start td:nth-child(11)::after{content:'';position:absolute;right:2px;top:4px;width:9px;height:2px;background:var(--tie-bracket)}
-tr.tie-end td:nth-child(11)::after{content:'';position:absolute;right:2px;bottom:4px;width:9px;height:2px;background:var(--tie-bracket)}
-tr.tie-start td:nth-child(11) .scbar,tr.tie-mid td:nth-child(11) .scbar,tr.tie-end td:nth-child(11) .scbar{
+tr.tie-start td:nth-child(11)::after{content:'';position:absolute;left:2px;top:4px;width:9px;height:2px;background:var(--tie-bracket)}
+tr.tie-end td:nth-child(11)::after{content:'';position:absolute;left:2px;bottom:4px;width:9px;height:2px;background:var(--tie-bracket)}
+tr.tie-start td:nth-child(12)::after{content:'';position:absolute;right:2px;top:4px;width:9px;height:2px;background:var(--tie-bracket)}
+tr.tie-end td:nth-child(12)::after{content:'';position:absolute;right:2px;bottom:4px;width:9px;height:2px;background:var(--tie-bracket)}
+tr.tie-start td:nth-child(12) .scbar,tr.tie-mid td:nth-child(12) .scbar,tr.tie-end td:nth-child(12) .scbar{
   background:color-mix(in srgb,var(--bg-accent) 35%,var(--bubble-field-bg))}
 .tbl-footnote{margin-top:7px;font-size:11px;line-height:1.5;color:var(--text-muted)}
 @media (max-width:520px){
@@ -489,8 +489,17 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
 
   <div class="filter-score-group">
     <div class="filter-score-heading">TV show settings curve</div>
-    <div class="filter-score-subhead">How season watches translate onto the shared scale. Both preview live below.</div>
+    <div class="filter-score-subhead">TV-only rules; everything previews live below.</div>
     <div class="filter-score-grid">
+      <div class="filter-score-card">
+        <label class="input-label" for="c-tv-elig">Season eligibility</label>
+        <select class="form-select form-select-sm" id="c-tv-elig" onchange="onExpFilterInput()">
+          <option value="oldest">Only the oldest season</option>
+          <option value="except_newest">Any season except the newest</option>
+          <option value="all">All seasons</option>
+        </select>
+        <div class="filter-score-help">Which of a show's seasons may delete. "Newest" = most recently added, even if it isn't the latest season. A continuing show's current season is always held back, and the other filters still apply.</div>
+      </div>
       <div class="filter-score-card">
         <label class="input-label" for="c-tv-weight">TV show watch weight</label>
         <div class="score-balance-labels">
@@ -763,6 +772,7 @@ function canonCfg(c){
     STALE:clamp(Math.round(Number(c.STALE ?? 36)||36),1,120),
     TVBUMP:clamp(Math.round((Number(c.TVBUMP ?? 10)||0)*10)/10,0,25),
     TVWEIGHT:clamp(Math.round(Number(c.TVWEIGHT ?? 100)||100),100,200),
+    TVELIG:['oldest','except_newest','all'].includes(c.TVELIG)?c.TVELIG:'oldest',
   };
 }
 function readCfg(){
@@ -781,6 +791,7 @@ function readCfg(){
     STALE:num('c-stale',36),
     TVBUMP:num('c-tv-bump',10),
     TVWEIGHT:num('c-tv-weight',100),
+    TVELIG:document.getElementById('c-tv-elig')?.value,
   });
 }
 function cfgFromServer(cfg){
@@ -796,6 +807,7 @@ function cfgFromServer(cfg){
     STALE:cfg.MAX_STALENESS_MONTHS===undefined?36:cfg.MAX_STALENESS_MONTHS,
     TVBUMP:cfg.TV_SERIES_WATCH_BUMP===undefined?10:cfg.TV_SERIES_WATCH_BUMP,
     TVWEIGHT:cfg.TV_WATCH_WEIGHT===undefined?100:cfg.TV_WATCH_WEIGHT,
+    TVELIG:cfg.TV_SEASON_ELIGIBILITY,
   });
 }
 function cfgPayload(c){
@@ -812,6 +824,7 @@ function cfgPayload(c){
     MAX_STALENESS_MONTHS:c.STALE,
     TV_SERIES_WATCH_BUMP:c.TVBUMP,
     TV_WATCH_WEIGHT:c.TVWEIGHT,
+    TV_SEASON_ELIGIBILITY:c.TVELIG,
   };
 }
 function cfgEq(a,b){
@@ -819,7 +832,7 @@ function cfgEq(a,b){
   return a.MOVIES_ON===b.MOVIES_ON&&a.TV_ON===b.TV_ON
     &&a.BAL===b.BAL&&a.CUTOFF===b.CUTOFF&&a.UNPLAYED===b.UNPLAYED
     &&a.GRACE===b.GRACE&&a.JF_FAV===b.JF_FAV&&a.TIE===b.TIE&&a.STALE===b.STALE
-    &&a.TVBUMP===b.TVBUMP&&a.TVWEIGHT===b.TVWEIGHT;
+    &&a.TVBUMP===b.TVBUMP&&a.TVWEIGHT===b.TVWEIGHT&&a.TVELIG===b.TVELIG;
 }
 function setFormFromCfg(c){
   c=canonCfg(c);
@@ -840,6 +853,7 @@ function setFormFromCfg(c){
   set('c-stale',el=>el.value=c.STALE);
   set('c-tv-bump',el=>el.value=c.TVBUMP);
   set('c-tv-weight',el=>el.value=c.TVWEIGHT);
+  set('c-tv-elig',el=>el.value=c.TVELIG);
   _syncTvKnobBadges();
   _expValidateAll();
 }
@@ -1121,7 +1135,7 @@ function scoreOne(m,cfg){
   else sc.status='ok';
   return sc;
 }
-const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed',tv_off:'TV cleanup off',tv_oos:'off monitored paths',tv_latest:'latest season'};
+const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed',tv_off:'TV cleanup off',tv_oos:'off monitored paths',tv_latest:'latest season',tv_not_oldest:'not the oldest season',tv_newest:'newest season'};
 // One TV SEASON's eligibility, mirroring _tv_season_plan's exclusion ladder:
 // seasons are IN the pool, so an unfiltered season is eligible and ranks in
 // the same deletion order as the movies. Whole-series shields first (scope,
@@ -1132,13 +1146,17 @@ function seasonStatus(m,cfg){
   if(!m.tvInScope)return 'tv_oos';
   if(m.protected)return 'protected';
   if(cfg.JF_FAV&&m.favorite)return 'favorite';
+  // Rung order mirrors _tv_season_plan exactly, so a season shielded by two
+  // rules is labeled with the SAME one the run's plan counts it under.
+  if(imdbInUse(cfg)&&m.rating==null)return 'nodata';
+  if(cfg.CUTOFF!=null&&m.rating!=null&&m.rating>cfg.CUTOFF)return 'cutoff';
+  if(m.latestOfContinuing)return 'tv_latest';
+  if(cfg.TVELIG==='oldest'&&!m.isOldestSeason)return 'tv_not_oldest';
+  if(cfg.TVELIG==='except_newest'&&m.isNewestSeason)return 'tv_newest';
   // Grace on the SEASON's own added date (its newest episode file), falling
   // back to the show's — a brand-new season of an old show is graced too.
   const sAdded=(m.seasonAddedDays!=null)?m.seasonAddedDays:m.addedDays;
   if(cfg.GRACE>0&&sAdded!=null&&sAdded<cfg.GRACE)return 'grace';
-  if(imdbInUse(cfg)&&m.rating==null)return 'nodata';
-  if(cfg.CUTOFF!=null&&m.rating!=null&&m.rating>cfg.CUTOFF)return 'cutoff';
-  if(m.latestOfContinuing)return 'tv_latest';
   if(cfg.UNPLAYED&&!(m.seasonEpsWatched>0)&&m.seasonLastPlayedDays==null)return 'unplayed';
   return 'ok';
 }
@@ -1179,11 +1197,11 @@ function seasonScore(m,cfg){
   // visible nudge to every season, growing toward 1.0 as the show is consumed.
   const sWatched=m.tvEpisodesWatched||0;
   const sf=(m.tvEpisodes>1)?Math.min(1,Math.log1p(sWatched)/Math.log1p(m.tvEpisodes))
-          :(m.tvEpisodes>0&&sWatched>0?1:0);
+          :(sWatched>0?1:0);
   const bump=Math.max(0,Number(cfg.TVBUMP)||0)*sf;
   const hist=Math.min(100,usage+rec+mu+bump)*w.h;
   const imdb=(Number.isFinite(m.rating)&&m.rating>0)
-    ?Math.min(m.rating*10*voteConfidence(m.votes>0?m.votes:0),100)*w.q:0;
+    ?Math.min(m.rating*10*voteConfidence(m.votes),100)*w.q:0;
   const ramp=SCORING.SHELF_RAMP_FULL_Q>0?Math.min(1,w.q/SCORING.SHELF_RAMP_FULL_Q):1;
   return hist+imdb+shelfPts*w.h*ramp;
 }
@@ -1198,6 +1216,8 @@ const FILTER_REASONS={
   tv_off:'TV cleanup is turned off in Cleanup scope — no season is eligible',
   tv_oos:'This series folder is not under a monitored directory, so cleanup will never touch it',
   tv_latest:'The latest season of a show not known to be ended — the household may be keeping up with it',
+  tv_not_oldest:'Season eligibility is "only the oldest season" — this one waits its turn',
+  tv_newest:'Season eligibility holds back the show\'s most recently added season',
 };
 function fmtV(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':n.toLocaleString();}
 function fmtE(m){return m<1?'< 1 mo':m<2?'1 mo ago':m<12?Math.round(m)+' mo ago':m<24?'1 yr ago':Math.floor(m/12)+'+ yr ago';}
@@ -1522,8 +1542,8 @@ function selectMovieOnKey(e,id){
 function sb(col){
   if(sc===col)sd*=-1;else{sc=col;sd=1;}
   tablePage=0;
-  const map={order:'th-o',title:'th-t',year:'th-y',rating:'th-r',votes:'th-v',plays:'th-p',users:'th-u',eng:'th-e',added:'th-a',size:'th-z',score:'th-s',status:'th-x'};
-  const nm={order:'#',title:'Title',year:'Year',rating:'IMDB',votes:'Votes',plays:'Plays',users:'Users',eng:'Last watched',added:'Added',size:'Size',score:'Retention',status:'Eligibility'};
+  const map={order:'th-o',title:'th-t',type:'th-m',year:'th-y',rating:'th-r',votes:'th-v',plays:'th-p',users:'th-u',eng:'th-e',added:'th-a',size:'th-z',score:'th-s',status:'th-x'};
+  const nm={order:'#',title:'Title',type:'Type',year:'Year',rating:'IMDB',votes:'Votes',plays:'Plays',users:'Users',eng:'Last watched',added:'Added',size:'Size',score:'Retention',status:'Eligibility'};
   Object.keys(map).forEach(k=>{
     const el=document.getElementById(map[k]);
     el.className=sc===k?'sc':'';
@@ -1667,7 +1687,9 @@ async function loadPool(){
         tvStatus:m.tv_status||null,
         tvEpisodes:m.tv_episodes||0,
         tvEpisodesWatched:m.tv_episodes_watched||0,
-        tvInScope:m.tv_in_scope!==0,
+        // Truthy-only, matching the plan: a row that somehow reaches the
+        // snapshot unstamped must preview as off-path, not as deletable.
+        tvInScope:!!m.tv_in_scope,
       };
       if(base.mediaType!=='tv')return[base];
       // The season is the TV unit: one row per season on disk, each scored on
@@ -1677,6 +1699,15 @@ async function loadPool(){
       const seasons=(m.tv_seasons||[]).filter(s=>s&&typeof s==='object');
       if(!seasons.length)return[];
       const latestN=Math.max(...seasons.map(s=>s.n||0));
+      const oldestN=Math.min(...seasons.map(s=>s.n||0));
+      // "Newest" for the season-eligibility rule = most recently ADDED (by
+      // each season's own date, highest number as the tiebreak) — which may
+      // not be the latest season.
+      let newest=seasons[0];
+      for(const s of seasons){
+        if((s.added_at||0)>(newest.added_at||0)
+           ||((s.added_at||0)===(newest.added_at||0)&&(s.n||0)>(newest.n||0)))newest=s;
+      }
       return seasons.map(s=>({
         ...base,
         id:base.id+'-s'+s.n,
@@ -1695,6 +1726,8 @@ async function loadPool(){
         // The latest season is shielded unless the show is KNOWN ended —
         // Plex states no status, and unknown gets the benefit of the doubt.
         latestOfContinuing:(m.tv_status!=='ended')&&((s.n||0)===latestN),
+        isOldestSeason:(s.n||0)===oldestN,
+        isNewestSeason:(s.n||0)===(newest.n||0),
       }));
     });
     poolImdbOnDisk=!!d.imdb_dataset_on_disk;

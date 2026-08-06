@@ -124,13 +124,15 @@ try:
 except ImportError:  # non-POSIX dev box; single-writer assumption holds there
     fcntl = None
 
-from scoring_constants import SCORING, FINGERPRINT as SCORING_FINGERPRINT
+from scoring_constants import (SCORING, FINGERPRINT as SCORING_FINGERPRINT,
+                               movie_retention_score, _vote_confidence)
 import urllib.parse
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import db  # shared SQLite persistence (metadata cache, library snapshot, queue, meta)
 import run_issues  # the shared warning/failure vocabulary (see record_issue below)
+import shared  # pass mechanics both executors must agree on (deficit, delay clock, log line, rungs)
 
 # =========================
 # CONFIG
@@ -891,6 +893,8 @@ def verify_runtime_api_health():
 
 
 def _sample_tautulli_reported_paths(limit=12):
+    """(path, byte size|0) samples — the size rides along so the compatibility
+    check can fingerprint-verify each resolution, not just line the path up."""
     paths = []
     libraries = tautulli_api("get_libraries") or []
     section_ids = [
@@ -902,26 +906,29 @@ def _sample_tautulli_reported_paths(limit=12):
     def add_paths(item):
         if not isinstance(item, dict):
             return
+        item_size = parse_int(item.get("file_size"), 0)
         for key in possible_keys:
             value = item.get(key)
             if value:
-                paths.append(str(value))
+                paths.append((str(value), item_size))
         media_info = item.get("media_info")
         if isinstance(media_info, list):
             for media in media_info:
                 if not isinstance(media, dict):
                     continue
+                media_size = parse_int(media.get("file_size"), 0) or item_size
                 for key in possible_keys:
                     value = media.get(key)
                     if value:
-                        paths.append(str(value))
+                        paths.append((str(value), media_size))
                 for part in media.get("parts") or []:
                     if not isinstance(part, dict):
                         continue
+                    part_size = parse_int(part.get("file_size"), 0) or media_size
                     for key in possible_keys:
                         value = part.get(key)
                         if value:
-                            paths.append(str(value))
+                            paths.append((str(value), part_size))
 
     for section_id in section_ids:
         data = tautulli_api(
@@ -950,6 +957,8 @@ def _sample_tautulli_reported_paths(limit=12):
 
 
 def _sample_jellyfin_reported_paths(limit=12):
+    """(path, byte size|0) samples — the size rides along so the compatibility
+    check can fingerprint-verify each resolution, not just line the path up."""
     paths = []
     data = (_jellyfin_request("Items", {
         "IncludeItemTypes": "Movie",
@@ -960,11 +969,14 @@ def _sample_jellyfin_reported_paths(limit=12):
     for item in data:
         if not isinstance(item, dict):
             continue
+        sources = [ms for ms in item.get("MediaSources") or [] if isinstance(ms, dict)]
+        item_size = next((parse_int(ms.get("Size"), 0) for ms in sources
+                          if parse_int(ms.get("Size"), 0) > 0), 0)
         if item.get("Path"):
-            paths.append(str(item.get("Path")))
-        for ms in item.get("MediaSources") or []:
-            if isinstance(ms, dict) and ms.get("Path"):
-                paths.append(str(ms.get("Path")))
+            paths.append((str(item.get("Path")), item_size))
+        for ms in sources:
+            if ms.get("Path"):
+                paths.append((str(ms.get("Path")), parse_int(ms.get("Size"), 0) or item_size))
         if len(paths) >= limit:
             break
     return paths[:limit]
@@ -988,17 +1000,45 @@ def verify_media_path_compatibility():
                                f"{LIBRARY_ROOT}. Check that {label} is running, then run again.",
                                detail=str(e), phase="checking")
 
+        # Only movie FILE entries are judged: servers also report FOLDER paths
+        # (section locations, folder-shaped items), and a folder is neither a
+        # deletable file nor something with a byte count — the check is about
+        # the media a run would act on, never about path layouts.
+        raw_paths = [(r, w) for r, w in raw_paths
+                     if PurePosixPath(str(r).replace("\\", "/")).suffix.lower()
+                     in MOVIE_EXTENSIONS]
         if not raw_paths:
             log(f"WARN {label} path compatibility: API returned no movie file paths to validate against {LIBRARY_ROOT}.")
             continue
 
         # ONE pass, not a matched-pass and an unmatched-pass: resolve_under_library
         # touches the filesystem, so two passes can disagree if a mount comes back
-        # between them — and the abort below reads unmatched[0].
-        unmatched = [raw for raw in raw_paths if not resolve_under_library(raw)]
+        # between them — and the abort below reads unmatched[0]. Each sample
+        # carries the server's byte count: a FEW size mismatches warn (server
+        # metadata goes stale after quality upgrades, and the local file is the
+        # size authority anyway), but MOST samples mismatching aborts the run —
+        # same-named files with different bytes across the board is what a stale
+        # backup or the wrong copy mounted at /library looks like.
+        unmatched, verified, size_mismatch = [], 0, 0
+        for raw, want in raw_paths:
+            resolved = resolve_under_library(raw, expected_size=want)
+            if not resolved:
+                unmatched.append(raw)
+            elif want and resolved.is_file():
+                # Files only: a FOLDER hit (a section location) has no byte
+                # count to verify, and a directory's stat size feeding the
+                # mismatch tally would trip the wrong-library abort on
+                # perfectly healthy layouts.
+                try:
+                    if resolved.stat().st_size == want:
+                        verified += 1
+                    else:
+                        size_mismatch += 1
+                except OSError:
+                    pass
         matched_n = len(raw_paths) - len(unmatched)
         if unmatched:
-            examples = "; ".join(raw_paths[:3])
+            examples = "; ".join(raw for raw, _ in raw_paths[:3])
             # One example path stays in the message: the whole fix is comparing the
             # path the server reports against what is mounted, so it is the fact
             # someone needs, not a diagnostic they can look up later.
@@ -1008,7 +1048,29 @@ def verify_media_path_compatibility():
                 detail=f"sampled: {examples} | unmatched: {'; '.join(unmatched[:3])}",
                 names=(unmatched[0],), phase="checking",
             )
-        log(f"{label} path compatibility: {matched_n}/{len(raw_paths)} sampled path(s) matched under {LIBRARY_ROOT}.")
+        if shared.size_mismatch_problem(verified + size_mismatch, size_mismatch):
+            _abort_api_failure(
+                f"{size_mismatch} of {verified + size_mismatch} size-reporting sampled "
+                f"file(s) differ in size from what {label} reports. That is what the "
+                f"WRONG library looks like — a backup or stale copy mounted at "
+                f"{LIBRARY_ROOT}, or a {label} library describing different files — "
+                f"not a few quality upgrades. Nothing was deleted. Check the /library "
+                f"mount (and rescan {label} if the mount is right), then run again.",
+                detail=f"size-checked: {verified + size_mismatch} | mismatched: {size_mismatch} "
+                       f"| matched paths: {matched_n}/{len(raw_paths)}",
+                phase="checking",
+            )
+        line = (f"{label} path compatibility: {matched_n}/{len(raw_paths)} sampled "
+                f"path(s) matched under {LIBRARY_ROOT}")
+        if verified:
+            line += f" | {verified} size-verified"
+        log(line + ".")
+        if size_mismatch:
+            log(f"WARN {label} path compatibility: {size_mismatch} sampled file(s) "
+                f"differ in size from what {label} reports — its library metadata "
+                f"may be stale. A refresh/rescan on {label} clears this. The file "
+                f"on disk is the size authority, so plans and deletion history "
+                f"carry the on-disk bytes.")
 
 
 def log_blank():
@@ -1215,21 +1277,10 @@ def log_deleted(title, path, size_bytes=None, *, score=None, plays=None, last_pl
     watch. deleted.log is the record that survives even a stopped run whose
     lastrun.log gets overwritten — without the rationale here, a user looking
     at the history later has no way to see why each movie was picked."""
-    try:
-        size_part = f" | size_bytes={int(size_bytes)}" if size_bytes is not None and int(size_bytes) >= 0 else ""
-    except (TypeError, ValueError):
-        size_part = ""
-    why = ""
-    try:
-        if score is not None:
-            why += f" | score={round(float(score), 1)}"
-        if plays is not None:
-            why += f" | plays={parse_int(plays, 0)}"
-        if last_played is not None:
-            why += f" | last_played={format_epoch(parse_int(last_played, 0))}"
-    except Exception:
-        pass   # rationale is best-effort; the deletion record itself must land
-    entry = f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {title} | {path}{size_part}{why}\n"
+    entry = shared.deleted_log_line(
+        title, path, size_bytes, score=score,
+        plays=parse_int(plays, 0) if plays is not None else None,
+        last_played_text=format_epoch(parse_int(last_played, 0)) if last_played is not None else None)
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         with open(DELETED_LOG, "a", encoding="utf-8") as f:
@@ -1527,25 +1578,94 @@ def _radarr_movie_matches_deleted_path(radarr_movie, deleted_path):
     return False
 
 
-def resolve_under_library(path_str):
+_LIB_FILE_INDEX = None   # per-run fingerprint index of the monitored dirs; built lazily
+
+
+def _reset_library_file_index():
+    global _LIB_FILE_INDEX
+    _LIB_FILE_INDEX = None
+
+
+def _library_file_index() -> dict:
+    """The per-run fingerprint index of every file under the LIBRARY mount,
+    built lazily by one walk and cached for the run:
+
+      dir_name:  (parent-folder name, filename) -> [Path, ...]
+      name_size: (filename, byte size)          -> [Path, ...]
+
+    The whole mount, not just the monitored dirs: servers legitimately report
+    files under /library that are outside the monitored roots (the scan counts
+    them as outside_monitored_dirs), and an unresolvable row there would read
+    as a broken mount instead. Which files may be DELETED is not this index's
+    question — is_safe_to_delete answers that. Reset per scan
+    (_reset_library_file_index) so files moved since the last run never
+    resolve against a stale walk."""
+    global _LIB_FILE_INDEX
+    if _LIB_FILE_INDEX is None:
+        by_dir_name, by_name_size = {}, {}
+        try:
+            for dirpath, _dirs, files in _os.walk(LIBRARY_ROOT):
+                parent = Path(dirpath).name.lower()
+                for fn in files:
+                    p = Path(dirpath) / fn
+                    by_dir_name.setdefault((parent, fn.lower()), []).append(p)
+                    try:
+                        by_name_size.setdefault((fn.lower(), p.stat().st_size), []).append(p)
+                    except OSError:
+                        continue
+        except Exception:
+            by_dir_name, by_name_size = {}, {}
+        _LIB_FILE_INDEX = {"dir_name": by_dir_name, "name_size": by_name_size}
+    return _LIB_FILE_INDEX
+
+
+def _library_index_lookup(filename, size):
+    """The unique file under the monitored roots with this (filename, byte
+    size), else None. Ambiguity — two copies sharing name AND size — returns
+    None: never guess between identical twins."""
+    hits = _library_file_index()["name_size"].get((str(filename).lower(), size)) or []
+    return hits[0] if len(hits) == 1 else None
+
+
+def resolve_under_library(path_str, expected_size=None):
     """Map a media-server-reported path to the real file under /library, or None.
 
-    Media servers often see the same files at a different container root, so the
-    longest existing trailing run of path segments wins:
+    Resolution is by FINGERPRINT, never by lining path prefixes up: the server
+    sees the same files under its own container roots, so the reported path's
+    last two segments — the parent folder and the filename, a movie's identity
+    on disk — are matched against the index of every file under the monitored
+    dirs. Mount layouts therefore never need to agree on prefixes or nesting:
 
-        /data/Movies/Film (2020)/film.mkv
-          -> /library/data/Movies/Film (2020)/film.mkv   (miss)
-          -> /library/Movies/Film (2020)/film.mkv        (hit)
+        /data/x/Film (2020)/film.mkv
+          -> the one file named film.mkv in a folder named "Film (2020)"
+             anywhere under the monitored dirs
 
-    The match must keep at least parent-folder + filename — a movie's folder is
-    part of its identity, and a bare filename could match an unrelated film with
+    Two copies sharing folder AND file name (a movie in /movies and
+    /movies-4k, say) are disambiguated by expected_size, the server's own
+    byte count; still ambiguous means None — never guess between twins. When
+    the folder+filename finds nothing (the server sees a layout our library
+    folders differently), a UNIQUE (filename, size) hit still resolves; a
+    bare filename alone never does — it could match an unrelated film with
     the same name and delete the wrong movie.
+
+    The byte size never REJECTS a folder+filename match: the LOCAL file is
+    the truth, and server metadata goes stale after a quality upgrade. The
+    pre-check counts the disagreements instead, and fails the run only when
+    enough files differ to look like the wrong library entirely (see
+    verify_media_path_compatibility).
+
+    Paths already under /library shortcut to an existence check (a server
+    pointed at the same mount needs no fingerprinting).
     """
     if not path_str:
         return None
     raw = str(path_str).strip().replace("\\", "/")
     if not raw:
         return None
+    try:
+        expected = int(expected_size) if expected_size else 0
+    except (TypeError, ValueError):
+        expected = 0
 
     # Already a real /library path (e.g. Plex itself points at /library).
     if raw == str(LIBRARY_ROOT) or raw.startswith(str(LIBRARY_ROOT) + "/"):
@@ -1557,11 +1677,22 @@ def resolve_under_library(path_str):
     if len(parts) < 2:
         return None
 
-    # Stop before the bare-filename-only tail: require folder + file to line up.
-    for start in range(len(parts) - 1):
-        candidate = LIBRARY_ROOT.joinpath(*parts[start:])
-        if candidate.exists():
-            return candidate
+    idx = _library_file_index()
+    hits = idx["dir_name"].get((parts[-2].lower(), parts[-1].lower())) or []
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1 and expected > 0:
+        sized = []
+        for p in hits:
+            try:
+                if p.stat().st_size == expected:
+                    sized.append(p)
+            except OSError:
+                continue
+        if len(sized) == 1:
+            return sized[0]
+    if not hits and expected > 0:
+        return _library_index_lookup(parts[-1], expected)
     return None
 
 
@@ -2077,16 +2208,11 @@ def _mark_age_days(marked_at, now_ts) -> int:
 
 def _mark_delete_on(marked_at, delay_days=None) -> str:
     """The calendar date a mark becomes deletable (marked date + the delay the
-    mark was made under). Pass the entry's stamped delay_days for an existing
-    mark; omitted/empty falls back to the current setting (new marks, and marks
-    that predate the stamp)."""
-    try:
-        days = int(delay_days) if delay_days else int(DELETE_DELAY_DAYS)
-        t = time.localtime(float(marked_at))
-        return str(_dt.date(t.tm_year, t.tm_mon, t.tm_mday)
-                   + _dt.timedelta(days=days))
-    except (TypeError, ValueError, OverflowError):
-        return ""
+    mark was made under) — shared.delete_on_str, the same clock the TV pass
+    ages its season marks against. Pass the entry's stamped delay_days for an
+    existing mark; omitted/empty falls back to the current setting (new marks,
+    and marks that predate the stamp)."""
+    return shared.delete_on_str(marked_at, delay_days if delay_days else DELETE_DELAY_DAYS)
 
 
 def _entry_delay_days(entry) -> int:
@@ -3006,18 +3132,26 @@ def extract_file_path(item, quiet=False):
     Resolve the on-disk file path for a Tautulli media row.
     Tries common field names directly on the row, then on nested media_info,
     then falls back to a live get_metadata API call as a last resort.
-    Returns a translated (Unraid) Path or None if no path can be found.
+    Returns a translated (Unraid) Path or None if no path can be found. The
+    row's byte counts ride along into resolve_under_library as the
+    disambiguation fingerprint (a media_info/part size over the row total),
+    but the LOCAL file is the size authority from here on — the scan stats
+    what it scores.
 
     quiet=True suppresses the "metadata_no_file_path" log line — used by the
     pre-scan path resolver, which resolves paths only to merge cross-source
     duplicates and leaves the real skip logging to the scan.
     """
     possible_keys = ["file", "file_path", "media_file", "location", "path"]
+    # The row's own byte count rides along as the resolution fingerprint —
+    # see resolve_under_library. A media_info/part entry's size, when it has
+    # one, describes ITS file more precisely than the row total.
+    item_size = parse_int(item.get("file_size"), 0)
 
     for key in possible_keys:
         value = item.get(key)
         if value:
-            return resolve_under_library(value)
+            return resolve_under_library(value, expected_size=item_size)
 
     media_info = item.get("media_info")
     if isinstance(media_info, list):
@@ -3025,7 +3159,8 @@ def extract_file_path(item, quiet=False):
             for key in possible_keys:
                 value = media.get(key)
                 if value:
-                    return resolve_under_library(value)
+                    m_size = parse_int(media.get("file_size"), 0) or item_size
+                    return resolve_under_library(value, expected_size=m_size)
 
     rating_key = item.get("rating_key")
     if not rating_key:
@@ -3043,22 +3178,24 @@ def extract_file_path(item, quiet=False):
     for key in possible_keys:
         value = metadata.get(key)
         if value:
-            return resolve_under_library(value)
+            return resolve_under_library(value, expected_size=item_size)
 
     metadata_media_info = metadata.get("media_info")
     if isinstance(metadata_media_info, list):
         for media in metadata_media_info:
+            media_size = parse_int(media.get("file_size"), 0) or item_size
             for key in possible_keys:
                 value = media.get(key)
                 if value:
-                    return resolve_under_library(value)
+                    return resolve_under_library(value, expected_size=media_size)
             parts = media.get("parts")
             if isinstance(parts, list):
                 for part in parts:
+                    part_size = parse_int(part.get("file_size"), 0) or media_size
                     for key in possible_keys:
                         value = part.get(key)
                         if value:
-                            return resolve_under_library(value)
+                            return resolve_under_library(value, expected_size=part_size)
 
     if not quiet:
         log(
@@ -4338,17 +4475,10 @@ def imdb_vote_confidence(votes):
     """Logarithmic confidence in an IMDb rating from its vote count.
 
     Vote count is CONFIDENCE for the rating, never standalone popularity.
-    Curve numbers live in scoring_constants.SCORING (floor, unknown-votes
-    value, and the log10 count that earns full confidence).
+    Delegates to scoring_constants._vote_confidence — ONE implementation for
+    the movie and season curves and the page's JS mirror.
     """
-    if votes is None:
-        return SCORING["VOTE_CONF_UNKNOWN"]
-    v = parse_int(votes, 0)
-    floor = SCORING["VOTE_CONF_FLOOR"]
-    if v <= 0:
-        return floor
-    return min(1.0, floor + (1.0 - floor) * (math.log10(v) / SCORING["VOTE_CONF_FULL_LOG10"]))
-
+    return _vote_confidence(votes)
 
 def compute_retention_score(rec, now=None):
     """RetentionScore for a normalized movie record — HIGHER = keep.
@@ -4357,71 +4487,15 @@ def compute_retention_score(rec, now=None):
     balance weights (which sum to 1.0), so they sum to the 0–100 score. Record
     fields read: total_play_count, last_played_at, added_at,
     distinct_users_watched, imdb_rating, imdb_num_votes.
+
+    Delegates to scoring_constants.movie_retention_score with this run's
+    balance weights and staleness window: the movie and season curves are
+    assembled from the SAME term helpers in that one module, so the two
+    scales cannot drift apart.
     """
-    now = now or time.time()
-    b = {}
-
-    plays = max(parse_int(rec.get("total_play_count"), 0), 0)
-    b["usage"] = (SCORING["USAGE_MAX_PTS"]
-                  * min(1.0, math.log1p(plays) / math.log1p(SCORING["USAGE_FULL_PLAYS"]))
-                  * HISTORY_WEIGHT)
-
-    users = max(parse_int(rec.get("distinct_users_watched"), 0), 0)
-
-    # Recency: use the last watch if there is one, otherwise fall back to when
-    # the movie was added; a recently-added-but-unwatched movie still reads as
-    # "fresh" (added a year ago scores like watched a year ago). Only recency
-    # benefits; frequency and users stay 0 for a never-watched movie. The tier
-    # day-thresholds scale to the Max staleness setting, so the same curve
-    # fades to 0 over the chosen window (default = the authored 3 years).
-    #
-    # Distinct watchers slow that decay: each unique user who watched the movie
-    # stretches the effective staleness window, so a widely-watched movie's age
-    # score (recency tiers + shelf tail) fades slower than a one-person or
-    # never-watched one. 0 users leaves the decay unchanged.
-    stale_scale = MAX_STALENESS_MONTHS / SCORING["RECENCY_DEFAULT_MONTHS"]
-    decay_mult = min(SCORING["USER_DECAY_MAX_MULT"], 1.0 + SCORING["USER_DECAY_PER_USER"] * users)
-    eff_scale = stale_scale * decay_mult
-    last_played = parse_int(rec.get("last_played_at"), 0)
-    recency_at = last_played if last_played > 0 else parse_int(rec.get("added_at"), 0)
-    rec_pts = 0.0
-    shelf_pts = 0.0
-    if recency_at > 0:
-        days_since = (now - recency_at) / 86400.0
-        for max_days, pts in SCORING["RECENCY_TIERS"]:
-            if days_since <= max_days * eff_scale:
-                rec_pts = pts
-                break
-        # Soft shelf: continues the recency curve past its last tier (the
-        # staleness cliff). It reads the SAME recency date as the tiers above —
-        # last-played, or the added date when never played, so added-date and
-        # last-played are one timeline, not two separate inputs.
-        cliff_days = SCORING["RECENCY_TIERS"][-1][0] * eff_scale
-        span_days = cliff_days * SCORING["SHELF_SPAN_MULT"]
-        if days_since > cliff_days and span_days > 0:
-            frac = 1.0 - (days_since - cliff_days) / span_days
-            shelf_pts = SCORING["SHELF_MAX_PTS"] * max(0.0, min(1.0, frac))
-    b["recency"] = rec_pts * HISTORY_WEIGHT
-
-    b["multi_user"] = (min(SCORING["MULTI_USER_PTS"] * users, SCORING["MULTI_USER_MAX_PTS"])
-                       * HISTORY_WEIGHT)
-
-    rating = rec.get("imdb_rating")
-    if rating is not None:
-        conf = imdb_vote_confidence(rec.get("imdb_num_votes"))
-        b["imdb"] = min(float(rating) * 10.0 * conf, 100.0) * QUALITY_WEIGHT
-    else:
-        b["imdb"] = 0.0
-
-    # Soft shelf weight is a tent; 0 at 100% watch history AND at 100% IMDb,
-    # peaking mid-blend, so 100% history stays a hard cliff and 100% IMDb stays
-    # pure quality; the shelf only augments the blended middle (shelf_pts is the
-    # recency-curve tail computed above).
-    full_q = SCORING["SHELF_RAMP_FULL_Q"]
-    shelf_ramp = min(1.0, QUALITY_WEIGHT / full_q) if full_q > 0 else 1.0
-    b["shelf"] = shelf_pts * HISTORY_WEIGHT * shelf_ramp
-
-    return sum(b.values()), b
+    return movie_retention_score(
+        rec, history_weight=HISTORY_WEIGHT, quality_weight=QUALITY_WEIGHT,
+        max_staleness_months=MAX_STALENESS_MONTHS, now=now or time.time())
 
 
 # ── Library snapshot (Filtering & Scoring table) ─────────────────────────────
@@ -4628,14 +4702,16 @@ def _hard_filter_reason(*, protected, favorite, imdb_rating, imdb_votes,
         return "protected"
     if PROTECT_JELLYFIN_FAVORITES and favorite:
         return "jellyfin_favorite"
-    if imdb_dataset_needed() and (imdb_rating is None or not imdb_votes):
-        return "no_imdb_data"
-    if (MAX_IMDB_RATING is not None and imdb_rating is not None
-            and float(imdb_rating) > float(MAX_IMDB_RATING)):
-        return "high_rated"
-    if GRACE_PERIOD_DAYS and added_at > 0 and (now - added_at) < GRACE_PERIOD_DAYS * 86400:
+    # The rung decisions the TV season ladder also makes live in shared.py;
+    # movies additionally require a vote count (their ratings come row-by-row,
+    # and a rating without votes is suspect).
+    imdb = shared.imdb_rung(imdb_rating, imdb_votes, in_use=imdb_dataset_needed(),
+                            require_votes=True, cutoff=MAX_IMDB_RATING)
+    if imdb:
+        return imdb
+    if shared.grace_rung(added_at, GRACE_PERIOD_DAYS, now):
         return "recently_added"
-    if SKIP_UNPLAYED_MOVIES and play_count <= 0 and last_played <= 0:
+    if shared.unplayed_rung(play_count > 0 or last_played > 0, SKIP_UNPLAYED_MOVIES):
         return "unplayed"
     return None
 
@@ -4667,6 +4743,9 @@ def build_candidates():
     identity_mismatches: list = []     # movies the two servers identify differently
     _snapshot_by_path: dict = {}       # resolved path -> _snapshot_entry (library snapshot)
     _mismatch_skip_paths: set = set()  # resolved paths a Plex row flagged as a conflict
+    # Fresh (filename, size) fallback index per scan — files moved since the
+    # last run must not resolve against a stale walk.
+    _reset_library_file_index()
     stats = {
         "no_file_path": 0,
         "bad_extension": 0,
@@ -5496,12 +5575,13 @@ def _daily_deficit_bytes(used_gb, max_gb, library_gb) -> int:
     Cap deficit (the cap measures every monitored directory, TV included),
     minus the share the TV pass covers with season deletions. This is what
     sizes the delay-clocked marked set. Redline is an emergency (immediate,
-    no delay clock), so it never sizes the marks and is excluded here."""
-    headroom = max(0.0, used_gb - max_gb)
-    cap = 0.0
-    if MAX_LIBRARY_GB is not None and library_gb is not None:
-        cap = max(0.0, library_gb - MAX_LIBRARY_GB)
-    total = int(max(headroom, cap) * 1_000_000_000)
+    no delay clock), so it never sizes the marks and is excluded here.
+
+    The deficit itself is shared.pool_deficit_gb — the SAME arithmetic the TV
+    pass sizes the pool with — so the two executors can never disagree on how
+    far over the thresholds the disk is; only the share split differs."""
+    total = int(shared.pool_deficit_gb(used_gb, max_gb, library_gb, MAX_LIBRARY_GB)
+                * 1_000_000_000)
     return max(0, total - _tv_share_bytes()) if total > 0 else 0
 
 
@@ -6005,6 +6085,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     gone_snapshot: set = set()   # physically-gone files; pruned from the snapshot too
     covered = 0
     spared_watched = 0
+    sizes_refreshed = 0
     for key, entry in ordered:
         p = Path(key)
         if is_protected(key, entry, join.get(key)):
@@ -6044,6 +6125,17 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
             continue
         except OSError:
             continue
+        # The LOCAL stat is the size authority: a file replaced since the plan
+        # (a quality upgrade) keeps its place in score order, but its fresh
+        # bytes drive the coverage math and the File size optimization below,
+        # and the stored mark is updated in the same breath so the queue,
+        # the display, and the deficit prefix all read true afterwards.
+        planned = parse_int(entry.get("size_bytes"), 0)
+        if planned > 0 and size != planned:
+            sizes_refreshed += 1
+            entry["size_bytes"] = size
+            log(f"Fast path: size refreshed from disk ({planned} → {size} bytes; "
+                f"replaced since it was planned): {entry.get('title') or key}")
         work.append((key, p, size, entry))
         covered += size
     # Drop the dead marks from the queue so they don't linger tick after tick. If
@@ -6060,7 +6152,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
             f"not mounted — they are not gone, the storage is. Coverage may fall short, "
             f"which routes this run to the full scan.")
     if covered < to_free_bytes:
-        if dead:
+        if dead or sizes_refreshed:
             save_pending(store, snapshot_delete_paths=gone_snapshot)
         log(f"Fast path unavailable: after sparing {spared_watched} since-watched/unverifiable "
             f"movie(s) the marked queue covers only {bytes_to_gb(covered):.1f} GB of the "
@@ -6297,6 +6389,14 @@ def _debug_cleanup_delete_preview(to_free_bytes):
             size = p.stat().st_size
         except OSError:
             continue
+        # Mirror the real fast path: a file replaced since the plan stays in
+        # line at its FRESH size (the local stat is the truth); the preview
+        # names the refresh so the numbers explain themselves. Preview only —
+        # the stored mark is not touched here.
+        planned = parse_int(entry.get("size_bytes"), 0)
+        if planned > 0 and size != planned:
+            log(f"Would refresh size from disk ({planned} → {size} bytes; replaced "
+                f"since it was planned): {entry.get('title') or key}")
         pend.append({"retention_score": float(entry.get("score") or 0.0),
                      "file_size": size, "title": str(entry.get("title") or p.name),
                      "_path": p, "_entry": entry})
@@ -7082,8 +7182,14 @@ def main():
     # whole, movie-immediate emergency — season deletion needs Sonarr and the
     # full fail-closed protection fetch, which an emergency can't wait on.
     _daily_gb = max(_headroom_deficit_gb, _library_deficit_gb)
+    # A manual Cleanup skips the subtraction: the button means "free it now",
+    # and the seasons behind the share are merely MARKED — they wait out the
+    # deletion delay, so counting them would leave the breach standing for
+    # days after a run that reported done. The movies cover everything; the
+    # next TV pass sees the smaller deficit and unmarks what is no longer
+    # needed.
     _tv_share_gb = bytes_to_gb(_tv_share_bytes())
-    if _tv_share_gb > 0 and _daily_gb > 0:
+    if _tv_share_gb > 0 and _daily_gb > 0 and not _manual_cleanup:
         log(f"TV pass share: season deletions cover {min(_tv_share_gb, _daily_gb):.1f} GB "
             f"of the {_daily_gb:.1f} GB daily deficit — movies target the remainder.")
         _daily_gb = max(0.0, _daily_gb - _tv_share_gb)

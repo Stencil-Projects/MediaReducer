@@ -88,6 +88,20 @@ CLEAN = {
 t, b = notify.build_run_message(ALL_ON, CLEAN)
 check("cleanup title", t == "MediaReducer — cleanup")
 check("cleanup block reports removed+freed", "Removed 5 movie(s) — freed 38.0 GB." in b)
+
+# The TV pass rides the same message: seasons marked/deleted on their own
+# line, and a fail-closed abort states itself (movies covered the deficit).
+_, tvb = notify.build_run_message(ALL_ON, dict(CLEAN, tv_pass={
+    "marked_new": 2, "held_by_delay": 1, "deleted_seasons": 1,
+    "freed_bytes": 12_300_000_000, "marked_total": 3}))
+check("the TV pass line reports deleted/marked/waiting seasons",
+      "TV pass: deleted 1 season(s) (12.3 GB) · marked 2 new season(s) · "
+      "1 waiting out the delay" in tvb)
+_, tva = notify.build_run_message(ALL_ON, dict(CLEAN, tv_pass={
+    "aborted": "Jellyfin's TV inventory did not answer"}))
+check("an aborted TV pass says so",
+      "TV pass: aborted fail-closed — Jellyfin's TV inventory did not answer" in tva)
+check("no tv_pass key = no TV line", "TV pass" not in b)
 check("ripe marks say next daily run", "Next deletion: at the next daily run" in b)
 check("deleted list has name+size", "Deleted:" in b and "• X (8.0 GB)" in b)
 

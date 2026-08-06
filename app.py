@@ -63,6 +63,7 @@ from flask import (Flask, g, has_request_context, jsonify, render_template, requ
 
 import db  # shared SQLite persistence (metadata cache, library snapshot, queue, meta)
 import notify  # best-effort outbound alerting (apprise wrapper); never raises
+import shared  # pass mechanics both executors must agree on (deficit, delay clock, log line, rungs)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -1539,7 +1540,9 @@ _DELETED_LOG_RE = re.compile(
     r"(?:\s+\|\s+size_bytes=(?P<size_bytes>\d+))?"
     r"(?:\s+\|\s+score=(?P<score>[\d.]+))?"
     r"(?:\s+\|\s+plays=(?P<plays>\d+))?"
-    r"(?:\s+\|\s+last_played=(?P<last_played>[^|]+?))?\s*$"
+    r"(?:\s+\|\s+last_played=(?P<last_played>[^|]+?))?"
+    r"(?:\s+\|\s+media=(?P<media>\w+))?"
+    r"(?:\s+\|\s+season=(?P<season>\d+))?\s*$"
 )
 
 def _validate_time_zone(value: str | None) -> str:
@@ -2138,7 +2141,8 @@ def _check_low_space_notification(cfg: dict, disk: dict | None) -> None:
 
 
 def _dispatch_run_notifications(effective_mode: str | None, returncode: int, stopped: bool,
-                                *, scheduled: bool = False) -> None:
+                                *, scheduled: bool = False,
+                                tv_pass_report: dict | None = None) -> None:
     """After a run's subprocess exits, deliver any configured outbound alert.
 
     Runs on its own daemon thread so notification network I/O can never delay the
@@ -2232,6 +2236,23 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
                                 report.setdefault("existing_marked_items", [
                                     {"title": v.get("title"), "delete_on": v.get("delete_on")}
                                     for p, v in marked.items() if p not in new_paths])
+                            # The TV pass that fired with this run rides the
+                            # same message — seasons marked/deleted, or the
+                            # fail-closed abort that means movies covered the
+                            # whole deficit. Passed in per run, never read
+                            # from a global the NEXT run may already have
+                            # overwritten.
+                            tvp = tv_pass_report
+                            if isinstance(tvp, dict):
+                                report.setdefault("tv_pass", {
+                                    "marked_new": tvp.get("marked_new") or 0,
+                                    "held_by_delay": tvp.get("held_by_delay") or 0,
+                                    "deleted_seasons": len(tvp.get("deleted_seasons") or []),
+                                    "skipped": len(tvp.get("skipped") or []),
+                                    "freed_bytes": tvp.get("freed_bytes") or 0,
+                                    "aborted": tvp.get("aborted"),
+                                    "marked_total": len(_tv_cleanup_state().get("marked") or {}),
+                                })
                         except Exception:
                             pass
                         summary_sent, _detail = notify.dispatch_run_report(cfg, report)
@@ -2305,6 +2326,30 @@ def run_script(mode_override: str | None = None, manual: bool = False,
             if _run_stop_requested.is_set():
                 return
 
+            # The TV pass fires WITH every run — a Simulate or Debug Cleanup
+            # marks, a real Cleanup also deletes due marks. BEFORE the engine
+            # launches: the tv_share stamp it subtracts is then fresh, and the
+            # two deleters never run concurrently. Its failures never block
+            # the movie run (and its own fetch is fail-closed anyway). When
+            # the pass does NOT fire (disarmed, Redline emergency, crash),
+            # the share is stamped 0 so the engine never subtracts bytes no
+            # executor is going to free.
+            _tv_report = None
+            try:
+                _tv_pass_cfg = load_config()
+                _tv_exec = _tv_pass_plan_for_run(_tv_pass_cfg, _effective_mode)
+                if _tv_exec is not None:
+                    _tv_report = _run_tv_cleanup_pass(_tv_pass_cfg,
+                                                      execute=_tv_exec)
+                else:
+                    _stamp_tv_share(0)
+            except Exception as e:
+                print(f"TV cleanup pass failed: {e}", flush=True)
+                _stamp_tv_share(0)
+
+            if _run_stop_requested.is_set():
+                return
+
             proc = subprocess.Popen(
                 ["python3", "-u", str(SCRIPT_PATH)],
                 env=env,
@@ -2336,7 +2381,8 @@ def run_script(mode_override: str | None = None, manual: bool = False,
             # Deliver any configured outbound alert for this run (own thread,
             # best-effort — see _dispatch_run_notifications).
             _dispatch_run_notifications(_effective_mode, returncode, stopped,
-                                        scheduled=scheduled)
+                                        scheduled=scheduled,
+                                        tv_pass_report=_tv_report)
         except Exception as e:
             # A failed launch (Popen OSError etc.) must not vanish in the daemon
             # thread — mark the run terminal so the dashboard shows the failure
@@ -3486,6 +3532,16 @@ def _jellyfin_series_inventory(url: str, key: str) -> list | None:
             return None
     except Exception:
         return None
+    # The parse shares the fetch's None-on-failure contract: an item shaped
+    # unlike Jellyfin's own wire format must read as "no answer", not crash
+    # the refresh thread.
+    try:
+        return _jellyfin_series_rows_from(series, episodes)
+    except Exception:
+        return None
+
+
+def _jellyfin_series_rows_from(series: list, episodes: list) -> list | None:
     per: dict[str, dict[int, dict]] = {}
     for it in episodes:
         if not isinstance(it, dict):
@@ -3534,6 +3590,11 @@ def _jellyfin_series_inventory(url: str, key: str) -> list | None:
             seasons=seasons, added_at=added,
             status=(str(s.get("Status") or "").lower() or None),
             jf_source_id=f"jellyfin:{s['Id']}", imdb_id=imdb))
+    # Series listed but EVERY one filtered for zero on-disk bytes is a sizes
+    # blip (a mid-scan server answering without MediaSources), not an emptied
+    # library — a real answer with no rows would wipe the stored inventory.
+    if series and not rows:
+        return None
     return rows
 
 
@@ -3619,20 +3680,35 @@ def _plex_series_inventory(conn: dict) -> list | None:
             title=show["title"], year=show["year"], path=show["path"],
             seasons=seasons, added_at=show["added_at"], status=None,
             source_id=f"plex:{show['rk']}", imdb_id=show["imdb"]))
+    # Same sizes-blip rule as the Jellyfin side: shows listed but none with a
+    # byte on disk reads as "no answer", never as an emptied library.
+    if rows_by_rk and not rows:
+        return None
     return rows
 
 
 def _merge_tv_sources(jf_rows: list | None, px_rows: list | None) -> list:
     """One inventory from up to two servers watching the same files, joined by
-    normalized title like every other TV fact. Sizes measure the same files,
-    so a disagreement keeps the larger measurement; identity from both sides
-    is kept (source_id = Plex, jf_source_id = Jellyfin) so the deletion pass
-    can ask either server for the season's file list."""
-    by_title: dict[str, dict] = {}
+    normalized title AND year. The year matters: same-title distinct shows are
+    real (Doctor Who 1963/2005), and a title-only join would graft one show's
+    Jellyfin identity onto the other's folder — the deletion pass would then
+    list show A's files under show B's path. Sizes measure the same files, so
+    a disagreement keeps the larger measurement; identity from both sides is
+    kept (source_id = Plex, jf_source_id = Jellyfin) so the deletion pass can
+    ask either server for the season's file list."""
+    def _key(r):
+        return (_norm_series_title(r["title"]), r.get("year") or None)
+
+    by_title: dict[tuple, dict] = {}
     for r in (px_rows or []):
-        by_title[_norm_series_title(r["title"])] = r
+        k = _key(r)
+        # Two same-title same-year shows on ONE server cannot be told apart
+        # by this join — keep both as separate rows rather than dropping one.
+        while k in by_title:
+            k = (k[0], k[1], id(r))
+        by_title[k] = r
     for r in (jf_rows or []):
-        k = _norm_series_title(r["title"])
+        k = _key(r)
         base = by_title.get(k)
         if base is None:
             by_title[k] = r
@@ -3796,7 +3872,12 @@ def _jellyfin_series_watch(url: str, key: str, strict: bool = False) -> dict:
     must never read as that user having none."""
     out: dict[str, dict] = {}
     favorites: set[str] = set()
-    users = _jellyfin_get(url, key, "/Users", timeout=15) or []
+    # An empty-body 200 (misbehaving proxy) decodes to None — that is NOT
+    # "no users": reading it as such would drop every watch and favorites
+    # shield without any exception for the strict path to catch.
+    users = _jellyfin_get(url, key, "/Users", timeout=15)
+    if not isinstance(users, list):
+        raise RuntimeError("Jellyfin's user list did not answer")
     for u in users:
         uid = str((u or {}).get("Id") or "")
         if not uid:
@@ -3806,7 +3887,9 @@ def _jellyfin_series_watch(url: str, key: str, strict: bool = False) -> dict:
             favs = _jellyfin_get(url, key, f"/Users/{uid}/Items", {
                 "IncludeItemTypes": "Series", "Recursive": "true",
                 "Filters": "IsFavorite",
-            }, timeout=20) or {}
+            }, timeout=20)
+            if not isinstance(favs, dict):
+                raise RuntimeError("empty favorites answer")
             for it in favs.get("Items") or []:
                 if isinstance(it, dict) and it.get("Name"):
                     favorites.add(_norm_series_title(it["Name"]))
@@ -3816,7 +3899,9 @@ def _jellyfin_series_watch(url: str, key: str, strict: bool = False) -> dict:
         data = _jellyfin_get(url, key, f"/Users/{uid}/Items", {
             "IncludeItemTypes": "Episode", "Recursive": "true",
             "Filters": "IsPlayed", "Fields": "SeriesName,ParentIndexNumber",
-        }, timeout=30) or {}
+        }, timeout=30)
+        if not isinstance(data, dict):
+            raise RuntimeError("a Jellyfin played-episodes query did not answer")
         for it in data.get("Items") or []:
             if not isinstance(it, dict) or not it.get("SeriesName"):
                 continue
@@ -3857,7 +3942,11 @@ def _plex_protected_series_titles(conn: dict, names) -> set:
         return set()
     wanted = {str(n) for n in names}
     out: set = set()
-    data = _plex_get(url, token, "/library/sections", timeout=10) or {}
+    data = _plex_get(url, token, "/library/sections", timeout=10)
+    if not isinstance(data, dict):
+        # An empty-body 200 is not "no collections" — protection must never
+        # silently read as absent. The non-strict caller catches this.
+        raise RuntimeError("Plex's section list did not answer")
     for sec in (data.get("MediaContainer") or {}).get("Directory") or []:
         if not isinstance(sec, dict) or sec.get("type") != "show":
             continue
@@ -3882,7 +3971,11 @@ def _jellyfin_protected_series_titles(url: str, key: str, names) -> set:
     wanted = {str(n) for n in names}
     out: set = set()
     data = _jellyfin_get(url, key, "/Items", {
-        "IncludeItemTypes": "BoxSet", "Recursive": "true"}, timeout=15) or {}
+        "IncludeItemTypes": "BoxSet", "Recursive": "true"}, timeout=15)
+    if not isinstance(data, dict):
+        # Same rule as the Plex side: an empty body must raise, not read as
+        # "nothing is protected".
+        raise RuntimeError("Jellyfin's box-set list did not answer")
     for box in data.get("Items") or []:
         if not isinstance(box, dict) or str(box.get("Name") or "") not in wanted \
                 or not box.get("Id"):
@@ -3989,17 +4082,27 @@ def _resolve_tv_scope(rows: list, cfg: dict) -> None:
     won't manage looks like a scan bug, not a decision."""
     dirs = [str(d) for d in (cfg.get("MONITOR_DIRS") or []) if str(d or "").strip()]
     for row in rows:
-        folder = PurePosixPath(str(row.get("path") or "")).name
+        # The same trailing-run rule the movie side's resolve_under_library
+        # uses, at directory grain: the LONGEST run of the server path's
+        # segments that exists under a monitored dir wins, so a nested layout
+        # (/shows/Anime/Dead Show under a monitored "shows") resolves too,
+        # and the bare folder name is the natural last rung. Dotted segments
+        # never resolve — a path ending in ".." would name a monitored dir's
+        # PARENT and hand the deletion pass a folder that isn't a series.
+        parts = [seg for seg in str(row.get("path") or "").replace("\\", "/").split("/") if seg]
         resolved = None
-        if folder:
-            for d in dirs:
-                candidate = Path(d) / folder
-                try:
-                    if candidate.is_dir():
-                        resolved = str(candidate)
-                        break
-                except OSError:
-                    continue
+        if parts and not any(seg in (".", "..") for seg in parts):
+            for start in range(len(parts)):
+                for d in dirs:
+                    candidate = Path(d).joinpath(*parts[start:])
+                    try:
+                        if candidate.is_dir():
+                            resolved = str(candidate)
+                            break
+                    except OSError:
+                        continue
+                if resolved:
+                    break
         row["path"] = resolved
         row["tv_in_scope"] = 1 if resolved else 0
 
@@ -4026,6 +4129,12 @@ def _season_score_settings(cfg: dict) -> dict:
         "max_imdb_rating": cutoff if cutoff and cutoff > 0 else None,
         "skip_unplayed": bool(cfg.get("SKIP_UNPLAYED_MOVIES")),
         "protect_favorites": bool(cfg.get("PROTECT_JELLYFIN_FAVORITES")),
+        # Which of a show's seasons may delete: only the oldest on disk
+        # (default), any but the most recently ADDED (newest ≠ latest), or
+        # all. An unknown value reads as the strictest — oldest.
+        "season_eligibility": (str(cfg.get("TV_SEASON_ELIGIBILITY") or "oldest").lower()
+                               if str(cfg.get("TV_SEASON_ELIGIBILITY") or "oldest").lower()
+                               in ("oldest", "except_newest", "all") else "oldest"),
     }
 
 
@@ -4055,8 +4164,9 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
 
     order = []
     excluded = {"off_path": 0, "protected": 0, "favorite": 0,
-                "latest_of_continuing": 0, "recently_added": 0,
-                "high_rated": 0, "no_imdb_data": 0, "unplayed": 0}
+                "latest_of_continuing": 0, "season_rule": 0,
+                "recently_added": 0, "high_rated": 0, "no_imdb_data": 0,
+                "unplayed": 0}
     for r in tv_rows:
         if not isinstance(r, dict) or r.get("media_type") != "tv":
             continue
@@ -4074,17 +4184,18 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
         if ss["protect_favorites"] and r.get("favorite"):
             excluded["favorite"] += len(seasons)
             continue
-        # The shared series-level filters, mirroring the movie skip ladder.
-        # (The grace period applies at SEASON grain below, on each season's
-        # own added date — a brand-new season of an old show is graced too.)
+        # The shared series-level filters — the rung decisions live in
+        # shared.py, imported by the movie ladder too. Series ratings come
+        # from the dataset (which always carries votes), so absence of the
+        # rating alone is the data gap: require_votes=False. (The grace
+        # period applies at SEASON grain below, on each season's own added
+        # date — a brand-new season of an old show is graced too.)
         added_at = r.get("added_at") or 0
         rating = r.get("rating")
-        if imdb_in_use and rating is None:
-            excluded["no_imdb_data"] += len(seasons)
-            continue
-        if ss["max_imdb_rating"] is not None and rating is not None \
-                and float(rating) > ss["max_imdb_rating"]:
-            excluded["high_rated"] += len(seasons)
+        imdb = shared.imdb_rung(rating, r.get("votes"), in_use=imdb_in_use,
+                                require_votes=False, cutoff=ss["max_imdb_rating"])
+        if imdb:
+            excluded[imdb] += len(seasons)
             continue
         # The latest season on disk is shielded unless the show is KNOWN to be
         # ended: a continuing show's current season is what the household may
@@ -4092,6 +4203,17 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
         # has none) gets the same benefit of the doubt.
         continuing = (r.get("tv_status") != "ended")
         latest_n = max(s.get("n") or 0 for s in seasons)
+        # The season-eligibility rule's reference points: the oldest season
+        # on disk (lowest number) and the NEWEST (most recently added, by
+        # each season's own date — which may not be the latest season).
+        # Season 0 is Specials: letting it count as "the oldest" would make
+        # oldest-only mode spend forever on a tiny extras folder while every
+        # real season is excluded. The oldest REAL season is the eligible one;
+        # S0 only counts when it is all the show has.
+        real_ns = [s.get("n") or 0 for s in seasons if (s.get("n") or 0) >= 1]
+        oldest_n = min(real_ns) if real_ns else min(s.get("n") or 0 for s in seasons)
+        newest_n = max(seasons, key=lambda x: ((x.get("added_at") or 0),
+                                               x.get("n") or 0)).get("n") or 0
         series_facts = {"eps": r.get("tv_episodes"),
                         "eps_watched": r.get("tv_episodes_watched"),
                         "users": r.get("users"), "added_at": added_at,
@@ -4100,13 +4222,19 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
             if continuing and (s.get("n") or 0) == latest_n:
                 excluded["latest_of_continuing"] += 1
                 continue
+            if ss["season_eligibility"] == "oldest" and (s.get("n") or 0) != oldest_n:
+                excluded["season_rule"] += 1
+                continue
+            if ss["season_eligibility"] == "except_newest" and (s.get("n") or 0) == newest_n:
+                excluded["season_rule"] += 1
+                continue
             s_added = s.get("added_at") or added_at
-            if ss["grace_days"] and s_added > 0 \
-                    and (now - s_added) < ss["grace_days"] * 86400:
+            if shared.grace_rung(s_added, ss["grace_days"], now):
                 excluded["recently_added"] += 1
                 continue
             eps, watched = (s.get("eps") or 0), (s.get("eps_watched") or 0)
-            if ss["skip_unplayed"] and watched <= 0 and not (s.get("last_played") or 0):
+            if shared.unplayed_rung(watched > 0 or (s.get("last_played") or 0),
+                                    ss["skip_unplayed"]):
                 excluded["unplayed"] += 1
                 continue
             score, _breakdown = season_retention_score(
@@ -4118,6 +4246,7 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
                 watch_weight=ss["watch_weight"], now=now)
             order.append({
                 "title": r.get("title"), "season": s.get("n"),
+                "year": r.get("year"),
                 # Identity + location for the cleanup pass: the media server's
                 # id is the mark key (stable across title edits), the resolved
                 # series folder is where the season's files live.
@@ -4154,13 +4283,13 @@ def _refresh_tv_inventory(cfg: dict) -> int | None:
 
 # ── TV cleanup: the season deletion pass ──────────────────────────────────────
 # The season is the deletion unit; the triggers are the POOL's — the Headroom
-# target and the Library Size Cap, shared with the movie side. Once a day,
-# after the configured daily run time, the pass recomputes the season plan
-# from FRESH server data, merges it with the movie queue into one worst-first
-# order, and (a) marks the seasons inside the deficit-covering prefix — each
-# mark waits out the deletion delay like a marked movie — and (b) in
-# Automatic Cleanup, deletes marked seasons whose delay has elapsed and that
-# the fresh plan STILL takes. Monitor Only runs the same pass without the
+# target and the Library Size Cap, shared with the movie side. The pass fires
+# WITH every engine run (before the engine launches): it recomputes the
+# season plan from FRESH server data, merges it with the movie queue into one
+# worst-first order, and (a) marks the seasons inside the deficit-covering
+# prefix — each mark waits out the deletion delay like a marked movie — and
+# (b) on a real Cleanup, deletes marked seasons whose delay has elapsed and
+# that the fresh plan STILL takes. Monitor Only runs the same pass without the
 # deleting half, so the marks (and their delete-on dates) are visible in the
 # Cache debug before anything is armed.
 #
@@ -4233,20 +4362,23 @@ def _pool_deletion_target_bytes(cfg: dict) -> int:
     and the Library Size Cap overage, the same arithmetic the engine sizes its
     movie marks with (_daily_deficit_bytes there). The cap measures the whole
     pool: the library size is the measured on-disk total of every monitored
-    directory, TV included. Redline is an emergency and never sizes marks."""
+    directory, TV included. Redline is an emergency and never sizes marks.
+
+    The arithmetic itself is shared.pool_deficit_gb — imported by the engine
+    too — so the two executors can never disagree on the deficit; the only
+    translation here is the Headroom target into the used-space limit it
+    means (total minus headroom)."""
     disk = disk_stats() or {}
     try:
         used, total = float(disk.get("used_gb")), float(disk.get("total_gb"))
     except (TypeError, ValueError):
         return 0
     headroom = _config_num(cfg.get("HEADROOM_GB")) or 0
-    headroom_deficit = max(0.0, used - (total - headroom)) if headroom > 0 else 0.0
-    cap = _threshold_gb_or_none(cfg.get("MAX_LIBRARY_GB"))
-    lib = (library_stats() or {}).get("library_gb")
-    cap_deficit = 0.0
-    if cap is not None and isinstance(lib, (int, float)) and lib > 0:
-        cap_deficit = max(0.0, float(lib) - cap)
-    return int(max(headroom_deficit, cap_deficit) * 1_000_000_000)
+    used_limit = (total - headroom) if headroom > 0 else None
+    return int(shared.pool_deficit_gb(
+        used, used_limit,
+        (library_stats() or {}).get("library_gb"),
+        _threshold_gb_or_none(cfg.get("MAX_LIBRARY_GB"))) * 1_000_000_000)
 
 
 def _merged_pool_takes(season_order: list, cfg: dict) -> tuple[dict, dict]:
@@ -4279,14 +4411,18 @@ def _merged_pool_takes(season_order: list, cfg: dict) -> tuple[dict, dict]:
         if covered >= share["target_bytes"]:
             break
         if kind == "season":
+            # A season the pass could never act on (no server id, no resolved
+            # folder) must not claim share bytes: the engine would subtract
+            # them from the movie target and NOBODY would ever free them.
+            if not (item.get("sid") and item.get("path")):
+                continue
             item["take"] = True
             share["tv_share_bytes"] += item["size_bytes"] or 0
             covered += item["size_bytes"] or 0
         else:
             share["movie_share_bytes"] += item
             covered += item
-    takes = {_tv_mark_key(e): e for e in season_order
-             if e["take"] and e.get("sid") and e.get("path")}
+    takes = {_tv_mark_key(e): e for e in season_order if e["take"]}
     return takes, share
 
 
@@ -4302,27 +4438,50 @@ def _stamp_tv_share(share_bytes) -> None:
         pass
 
 
-def _maybe_run_tv_cleanup(cfg: dict) -> None:
-    """The scheduled tick's TV gate: one pass per day, after the daily run
-    time, while the scheduler is in a running mode. Synchronous — seconds of
-    HTTP inside the tick — and BEFORE the movie branches launch anything, so
-    the two deleters never run concurrently."""
+def _tv_pass_status(cfg: dict) -> dict | None:
+    """The Dashboard's one-line TV state: armed?, the last pass's outcome,
+    and the standing mark count. None when the TV switch is off — the line
+    then has nothing to say."""
+    if not bool(cfg.get("TV_CLEANUP_ENABLED", True)):
+        return None
+    st = _tv_cleanup_state()
+    lp = st.get("last_pass") if isinstance(st.get("last_pass"), dict) else None
+    out = {"armed": _tv_cleanup_armed(cfg),
+           "marked": len(st.get("marked") or {})}
+    if lp:
+        out.update({
+            "date": lp.get("date"), "mode": lp.get("mode"),
+            "marked_new": lp.get("marked_new") or 0,
+            "held_by_delay": lp.get("held_by_delay") or 0,
+            "deleted_seasons": len(lp.get("deleted_seasons") or []),
+            "skipped": len(lp.get("skipped") or []),
+            "freed_gb": round((lp.get("freed_bytes") or 0) / 1e9, 1),
+            "aborted": lp.get("aborted"),
+        })
+    return out
+
+
+def _tv_pass_plan_for_run(cfg: dict, effective_mode: str | None):
+    """Whether the TV pass fires for an engine run in this mode, and whether
+    it may DELETE. None = no pass (TV cleanup disarmed, or a Redline
+    emergency is breached RIGHT NOW — the engine must start deleting movies
+    immediately, not wait minutes behind the pass's server sweep, and Redline
+    never deletes TV anyway); False = mark only (Simulate, Debug Cleanup,
+    Monitor Only's maintenance run); True = a real Cleanup, which also
+    deletes due marks. The pass rides every non-emergency engine run — same
+    gesture as the movies, no schedule of its own."""
     if not _tv_cleanup_armed(cfg):
-        return
-    if cfg.get("RUN_MODE") not in ("paused", "headroom"):
-        return
-    if time.strftime("%H:%M") < _daily_run_time(cfg):
-        return
-    if _tv_cleanup_state().get("last_pass_date") == time.strftime("%Y-%m-%d"):
-        return
-    _run_tv_cleanup_pass(cfg, execute=_is_cleanup_mode(cfg.get("RUN_MODE")))
+        return None
+    if _redline_breached_now(cfg):
+        return None
+    return _is_cleanup_mode(effective_mode)
 
 
 def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
-    """One daily TV pass: refresh facts fail-closed, reconcile the marks with
-    the fresh take prefix, and (execute=True only) delete the marked seasons
-    whose delay has elapsed, worst-kept first. Returns the report it also
-    persists as the state's last_pass."""
+    """One TV pass — fired with every engine run: refresh facts fail-closed,
+    reconcile the marks with the fresh take prefix, and (execute=True only)
+    delete the marked seasons whose delay has elapsed, worst-kept first.
+    Returns the report it also persists as the state's last_pass."""
     today = time.strftime("%Y-%m-%d")
     report = {"at": time.time(), "date": today,
               "mode": "cleanup" if execute else "monitor",
@@ -4382,28 +4541,41 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
         if k not in marked:
             marked[k] = {"marked_at": now, "delay_days": delay,
                          "title": e["title"], "season": e["season"],
-                         "path": e["path"], "size_bytes": e["size_bytes"],
-                         "score": e["score"]}
+                         "year": e.get("year"), "path": e["path"],
+                         "size_bytes": e["size_bytes"], "score": e["score"]}
             report["marked_new"] += 1
 
     if execute:
         # Plan order (worst-kept first), never dict order.
         for e in plan["order"]:
+            # Stop means stop: the engine's Stop button fires while THIS loop
+            # may be mid-deletion, and the subprocess kill can't reach it.
+            if _run_stop_requested.is_set():
+                print("TV cleanup: stop requested — remaining seasons left "
+                      "for the next pass", flush=True)
+                break
             if not e["take"]:
                 continue
             k = _tv_mark_key(e)
             m = marked.get(k)
             if not m:
                 continue
-            # Same day-count policy as a marked movie: marked today, deletable
-            # at the earliest by tomorrow's pass.
-            due_on = (datetime.fromtimestamp(m.get("marked_at") or now)
-                      + timedelta(days=int(m.get("delay_days") or delay))).strftime("%Y-%m-%d")
-            if today < due_on:
+            # Same clock as a marked movie (shared.delete_on_str): marked
+            # today, deletable at the earliest by tomorrow's pass. An
+            # unusable stamp ("") holds the season — fail closed, never due.
+            due_on = shared.delete_on_str(m.get("marked_at") or now,
+                                          m.get("delay_days") or delay)
+            if not due_on or today < due_on:
                 report["held_by_delay"] += 1
                 continue
             if _delete_tv_season(cfg, e, report):
                 del marked[k]
+        # The share was stamped from PRE-deletion disk numbers; the engine
+        # measures AFTER these deletions and would subtract the freed bytes a
+        # second time. Re-stamp with only the share still PENDING (marked,
+        # not yet deleted), so the two executors cover the deficit once.
+        if report["freed_bytes"]:
+            _stamp_tv_share(max(0, pool["tv_share_bytes"] - report["freed_bytes"]))
 
     _finish()
     if report["deleted_files"]:
@@ -4418,11 +4590,12 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
 
 
 def _tv_log_deleted(entry: dict, path, size_bytes: int) -> None:
-    """One deleted.log line per removed episode file, in the engine's exact
-    format so lifetime totals and the dashboard count TV alongside movies."""
-    line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {entry.get('title')} "
-            f"S{entry.get('season')} | {path} | size_bytes={int(size_bytes)}"
-            f" | score={entry.get('score')}\n")
+    """One deleted.log line per removed episode file — shared.deleted_log_line,
+    the same builder the engine appends with, so lifetime totals and the
+    dashboard count TV alongside movies from one format."""
+    line = shared.deleted_log_line(entry.get("title"), path, size_bytes,
+                                   score=entry.get("score"),
+                                   media="tv", season=entry.get("season") or 0)
     try:
         deleted_path().parent.mkdir(parents=True, exist_ok=True)
         with open(deleted_path(), "a", encoding="utf-8") as f:
@@ -4432,13 +4605,23 @@ def _tv_log_deleted(entry: dict, path, size_bytes: int) -> None:
 
 
 def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None]:
-    """The season's episode files as paths RELATIVE to the series folder,
-    freshly listed by the media server that indexed the row (never from the
-    stored inventory). Returns (relpaths, error): any gap — the server not
-    answering, no series path, a file outside the series folder — comes back
-    as an error string and the caller skips the season, fail closed."""
+    """The season's episode files as (path RELATIVE to the series folder,
+    byte size the server reports or 0), freshly listed by the media server
+    that indexed the row (never from the stored inventory). The size lets the
+    delete note when the server's metadata is behind the disk; the LOCAL stat
+    is the authority for what actually gets freed. Returns (files, error):
+    any gap — the server not answering, no series path, a file outside the
+    series folder — comes back as an error string and the caller skips the
+    season, fail closed."""
     conn = _effective_connection_values(cfg)
     base, files = "", []
+
+    def _size(v):
+        try:
+            return max(0, int(v or 0))
+        except (TypeError, ValueError):
+            return 0
+
     try:
         if sid.startswith("jellyfin:"):
             url, key = conn.get("jellyfin_url"), conn.get("jellyfin_key")
@@ -4449,7 +4632,7 @@ def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None
                                   {"Ids": jid, "Fields": "Path"}, timeout=15) or {}).get("Items") or []
             base = str((info[0] if info else {}).get("Path") or "")
             eps = (_jellyfin_get(url, key, f"/Shows/{jid}/Episodes",
-                                 {"Fields": "Path"}, timeout=30) or {}).get("Items") or []
+                                 {"Fields": "Path,MediaSources"}, timeout=30) or {}).get("Items") or []
             for e in eps:
                 if not isinstance(e, dict) or not e.get("Path"):
                     continue
@@ -4458,7 +4641,9 @@ def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None
                         continue
                 except (TypeError, ValueError):
                     continue
-                files.append(str(e["Path"]))
+                want = next((_size(ms.get("Size")) for ms in e.get("MediaSources") or []
+                             if isinstance(ms, dict) and _size(ms.get("Size"))), 0)
+                files.append((str(e["Path"]), want))
         elif sid.startswith("plex:"):
             url, token = conn.get("plex_url"), conn.get("plex_token")
             if not (url and token):
@@ -4480,9 +4665,9 @@ def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None
                 for m in _as_list(ep.get("Media")):
                     for p in _as_list((m or {}).get("Part")):
                         if isinstance(p, dict) and p.get("file"):
-                            files.append(str(p["file"]))
+                            files.append((str(p["file"]), _size(p.get("size"))))
             if not base and files:
-                parent = PurePosixPath(files[0]).parent
+                parent = PurePosixPath(files[0][0]).parent
                 base = str(parent.parent if parent.parent.name else parent)
         else:
             return [], "no usable media-server id"
@@ -4493,9 +4678,9 @@ def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None
     if not files:
         return [], "the server lists no files for this season"
     rels = []
-    for f in files:
+    for f, want in files:
         try:
-            rels.append(PurePosixPath(f).relative_to(PurePosixPath(base)))
+            rels.append((PurePosixPath(f).relative_to(PurePosixPath(base)), want))
         except ValueError:
             return [], f"unsafe file path from the media server: {f!r}"
     return rels, None
@@ -4527,7 +4712,14 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
         if not series_dir.is_dir():
             return skip("series folder is gone")
         series_real = series_dir.resolve()
-        if not any(series_real.is_relative_to(Path(d).resolve()) for d in roots):
+        root_reals = [Path(d).resolve() for d in roots]
+        # STRICTLY inside a monitored dir: a "series folder" that IS a
+        # monitored root (a hostile server path, or a flat library whose
+        # derived folder is the library itself) would widen every per-file
+        # guard below to the whole root.
+        if series_real in root_reals:
+            return skip("series folder resolves to a monitored directory itself")
+        if not any(series_real.is_relative_to(r) for r in root_reals):
             return skip("series folder is not under a monitored directory")
     except OSError as e:
         return skip(f"could not verify the series folder ({e})")
@@ -4555,10 +4747,28 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
                                         headers=s_headers, timeout=20)
             if not isinstance(series_list, list):
                 raise RuntimeError("series list did not answer")
-            match = next((s for s in series_list if isinstance(s, dict)
+            candidates = [s for s in series_list if isinstance(s, dict)
                           and s.get("id") is not None
                           and _norm_series_title(s.get("title"))
-                          == _norm_series_title(entry.get("title"))), None)
+                          == _norm_series_title(entry.get("title"))]
+            # Same-title shows are real (Doctor Who 1963/2005): the year
+            # disambiguates. A candidate whose known year DIFFERS from ours
+            # is a different show; ambiguity that survives the year check is
+            # skipped fail-closed rather than unmonitoring a coin-flip.
+            entry_year = entry.get("year")
+            if entry_year and len(candidates) > 1:
+                same_year = [s for s in candidates if s.get("year") == entry_year]
+                if same_year:
+                    candidates = same_year
+            if len(candidates) > 1:
+                raise RuntimeError(
+                    f"{len(candidates)} Sonarr series share this title — "
+                    f"cannot tell which to unmonitor")
+            match = candidates[0] if candidates else None
+            if match is not None and entry_year and match.get("year") \
+                    and match["year"] != entry_year:
+                # One title match, wrong year: OUR show is not in Sonarr.
+                match = None
             if match is None:
                 # Not managed by Sonarr — no re-download risk, nothing to do.
                 print(f"TV cleanup: {entry.get('title')} is not in Sonarr — "
@@ -4585,7 +4795,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
         return skip(err)
 
     deleted, freed, dirs = 0, 0, set()
-    for rp in rels:
+    for rp, want in rels:
         if not rp.parts or rp.is_absolute() or any(p in ("..", ".") for p in rp.parts):
             return skip(f"unsafe file path from the media server: {str(rp)!r}")
         target = series_dir.joinpath(*rp.parts)
@@ -4597,6 +4807,15 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
             if not target.resolve().is_relative_to(series_real):
                 return skip(f"file escapes the series folder: {target}")
             size = target.stat().st_size
+            # The LOCAL stat is the size authority (the file's identity is its
+            # path under the series folder): a file the server describes at
+            # different bytes was replaced since the server's last scan — note
+            # it and delete at the size actually on disk, which is what the
+            # freed accounting and the history line carry.
+            if want and size != want:
+                print(f"TV cleanup: {target.name} is {size} bytes on disk, "
+                      f"{want} in the server's metadata — deleting at the "
+                      f"on-disk size (server metadata is behind)", flush=True)
             target.unlink()
         except OSError as e:
             return skip(f"could not delete {target} ({e})")
@@ -4800,38 +5019,127 @@ def _sample_result(pre: dict, name: str) -> list[str]:
     return got or []
 
 
-def _resolve_reported_media_path(path_str: str | None) -> Path | None:
-    """Resolve a media-server path by matching its longest existing /library suffix."""
+_MEDIA_FP_INDEX = {"at": 0.0, "dir_name": {}, "name_size": {}}
+
+
+def _media_fingerprint_index() -> dict:
+    """Fingerprint index of the library mount for the compatibility check and
+    the path-debug endpoints, mirroring the engine's per-run index:
+    (parent-folder name, filename) -> [paths] and (filename, byte size) ->
+    [paths]. Cached briefly (30 s) so one Check for Errors walks the library
+    once, while a re-check after a mount fix never reads a stale walk."""
+    now = time.time()
+    if now - _MEDIA_FP_INDEX["at"] > 30:
+        by_dir_name, by_name_size = {}, {}
+        try:
+            for dirpath, _dirs, files in os.walk(FILESYSTEM_CHECK_PATH):
+                parent = Path(dirpath).name.lower()
+                for fn in files:
+                    p = Path(dirpath) / fn
+                    by_dir_name.setdefault((parent, fn.lower()), []).append(p)
+                    try:
+                        by_name_size.setdefault((fn.lower(), p.stat().st_size), []).append(p)
+                    except OSError:
+                        continue
+        except Exception:
+            by_dir_name, by_name_size = {}, {}
+        _MEDIA_FP_INDEX.update({"at": now, "dir_name": by_dir_name,
+                                "name_size": by_name_size})
+    return _MEDIA_FP_INDEX
+
+
+def _resolve_media_path_explained(path_str: str | None, expected_size=0):
+    """(resolved Path|None, how/why) — the fingerprint ladder mirroring the
+    engine's resolve_under_library, with the reason spelled out so the debug
+    endpoints can SHOW why a path did or didn't match: mount layouts never
+    need to agree on prefixes, the server's byte count only disambiguates
+    same-named copies (it never rejects a folder+filename match; the local
+    file is the size authority), a unique (filename, size) hit rescues a path
+    whose folder finds nothing. Folder paths are NOT resolved — the check is
+    about movie FILE entries (name + size), never about path layouts. A path
+    already under the library shortcut-checks existence."""
     if not path_str:
-        return None
+        return None, "empty path"
     raw = str(path_str).strip().replace("\\", "/")
     if not raw:
-        return None
+        return None, "empty path"
     library_root = Path(FILESYSTEM_CHECK_PATH)
     library_s = str(library_root)
 
     if raw == library_s or raw.startswith(library_s + "/"):
         rel = raw[len(library_s):].lstrip("/")
         candidate = library_root / rel if rel else library_root
-        return candidate if candidate.exists() else None
-
-    parts = [part for part in raw.split("/") if part]
-    for start in range(len(parts)):
-        candidate = library_root.joinpath(*parts[start:])
         if candidate.exists():
-            return candidate
-    return None
+            return candidate, f"already under {library_s}"
+        return None, f"under {library_s} but nothing exists at this path"
+
+    try:
+        expected = int(expected_size) if expected_size else 0
+    except (TypeError, ValueError):
+        expected = 0
+    parts = [part for part in raw.split("/") if part]
+    if len(parts) < 2:
+        return None, "a bare name with no folder is never matched (it could be a different film)"
+    idx = _media_fingerprint_index()
+    pair = (parts[-2].lower(), parts[-1].lower())
+    hits = idx["dir_name"].get(pair) or []
+    if len(hits) == 1:
+        return hits[0], "matched by folder + file name"
+    if len(hits) > 1:
+        if expected <= 0:
+            return None, (f"{len(hits)} same-named files and the server reported "
+                          f"no size to pick between them")
+        sized = []
+        for p in hits:
+            try:
+                if p.stat().st_size == expected:
+                    sized.append(p)
+            except OSError:
+                continue
+        if len(sized) == 1:
+            return sized[0], (f"matched by folder + file name, size-disambiguated "
+                              f"among {len(hits)} same-named copies")
+        if not sized:
+            return None, (f"{len(hits)} same-named files, none at the reported "
+                          f"{expected} bytes")
+        return None, f"{len(sized)} same-named files at the same size — never guessed between"
+    if expected > 0:
+        by_size = idx["name_size"].get((parts[-1].lower(), expected)) or []
+        if len(by_size) == 1:
+            return by_size[0], "matched by file name + size (no folder-name match)"
+    return None, (f"no file named {parts[-1]!r} (in a folder named "
+                  f"{parts[-2]!r}) found under {library_s}")
 
 
-def _extract_media_paths_from_item(item: dict | None) -> list[str]:
-    paths: list[str] = []
+def _resolve_reported_media_path(path_str: str | None, expected_size=0) -> Path | None:
+    """The fingerprint resolution alone — see _resolve_media_path_explained."""
+    return _resolve_media_path_explained(path_str, expected_size)[0]
+
+
+def _extract_media_paths_from_item(item: dict | None) -> list[tuple[str, int]]:
+    """(path, server-reported byte size|0) pairs from a server row shape.
+    The size rides along as the resolution fingerprint and the stale-metadata
+    tripwire; a media/part entry's own size describes ITS file more precisely
+    than the row total, so the nearest enclosing size wins."""
+    paths: list[tuple[str, int]] = []
     if not isinstance(item, dict):
         return paths
 
+    def _size_of(d: dict, fallback: int = 0) -> int:
+        for k in ("file_size", "Size", "size"):
+            try:
+                v = int(d.get(k) or 0)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                return v
+        return fallback
+
+    item_size = _size_of(item)
     for key in ("file", "file_path", "media_file", "location", "path", "Path"):
         value = item.get(key)
         if value:
-            paths.append(str(value))
+            paths.append((str(value), item_size))
 
     containers = []
     for key in ("media_info", "Media", "MediaSources"):
@@ -4842,26 +5150,28 @@ def _extract_media_paths_from_item(item: dict | None) -> list[str]:
             containers.append(value)
 
     for media in containers:
+        media_size = _size_of(media, item_size)
         for key in ("file", "file_path", "media_file", "location", "path", "Path"):
             value = media.get(key)
             if value:
-                paths.append(str(value))
+                paths.append((str(value), media_size))
         for parts_key in ("parts", "Part"):
             for part in _as_list(media.get(parts_key)):
                 if not isinstance(part, dict):
                     continue
+                part_size = _size_of(part, media_size)
                 for key in ("file", "file_path", "media_file", "location", "path", "Path"):
                     value = part.get(key)
                     if value:
-                        paths.append(str(value))
+                        paths.append((str(value), part_size))
 
     out = []
     seen = set()
-    for path in paths:
+    for path, size in paths:
         path = str(path).strip()
         if path and path not in seen:
             seen.add(path)
-            out.append(path)
+            out.append((path, size))
     return out
 
 
@@ -4876,7 +5186,7 @@ def _tautulli_api_request(conn: dict, cmd: str, timeout: int = 8, **params):
     return response.get("data")
 
 
-def _sample_tautulli_media_paths(conn: dict, limit: int = 12) -> list[str]:
+def _sample_tautulli_media_paths(conn: dict, limit: int = 12) -> list[tuple[str, int]]:
     paths: list[str] = []
     libraries = _tautulli_api_request(conn, "get_libraries", timeout=8) or []
     section_ids = [
@@ -4911,7 +5221,7 @@ def _sample_tautulli_media_paths(conn: dict, limit: int = 12) -> list[str]:
     return paths[:limit]
 
 
-def _sample_jellyfin_media_paths(conn: dict, limit: int = 12) -> list[str]:
+def _sample_jellyfin_media_paths(conn: dict, limit: int = 12) -> list[tuple[str, int]]:
     data = _jellyfin_get(
         conn["jellyfin_url"],
         conn["jellyfin_key"],
@@ -4932,23 +5242,63 @@ def _sample_jellyfin_media_paths(conn: dict, limit: int = 12) -> list[str]:
     return paths[:limit]
 
 
-def _media_path_compatibility_state(server_name: str, paths: list[str]) -> dict:
-    resolved = []
-    unresolved = []
-    for raw in paths:
-        match = _resolve_reported_media_path(raw)
-        if match:
-            resolved.append({"reported": raw, "resolved": str(match)})
-        else:
+def _media_file_extensions(cfg: dict | None = None) -> set:
+    """The configured movie-file extension set, lowercased — what decides
+    whether a server-reported path is a media FILE entry at all."""
+    cfg = cfg or load_config()
+    return {str(e).strip().lower() for e in (cfg.get("MOVIE_EXTENSIONS") or [])
+            if str(e).strip()}
+
+
+def _is_media_file_path(raw, exts: set) -> bool:
+    return PurePosixPath(str(raw).replace("\\", "/")).suffix.lower() in exts
+
+
+def _media_path_compatibility_state(server_name: str, paths: list) -> dict:
+    """Resolve each sampled movie FILE entry (name + size) by fingerprint and
+    verify the bytes on disk against what the server reports. Folder-shaped
+    paths the servers also hand out (section locations, folder items) are not
+    part of the check at all — the check is about the media a run would act
+    on, never about path layouts. A few mismatches are normal (quality
+    upgrades the server hasn't rescanned; the local file is the size
+    authority) — but MOST samples mismatching is the wrong-library tripwire
+    (shared.size_mismatch_problem, the same rule the engine pre-check fails a
+    run on), and it fails this check."""
+    exts = _media_file_extensions()
+    pairs = [s if isinstance(s, tuple) else (s, 0) for s in paths]
+    folder_entries = sum(1 for r, _w in pairs if not _is_media_file_path(r, exts))
+    pairs = [(r, w) for r, w in pairs if _is_media_file_path(r, exts)]
+    resolved, unresolved, mismatches = [], [], []
+    size_checked = 0
+    for raw, want in pairs:
+        match = _resolve_reported_media_path(raw, expected_size=want)
+        if not match:
             unresolved.append(raw)
+            continue
+        resolved.append({"reported": raw, "resolved": str(match)})
+        if want and match.is_file():
+            try:
+                disk = match.stat().st_size
+            except OSError:
+                continue
+            size_checked += 1
+            if disk != want:
+                mismatches.append({"reported": raw, "resolved": str(match),
+                                   "reported_bytes": want, "disk_bytes": disk})
+    mismatch_problem = shared.size_mismatch_problem(size_checked, len(mismatches))
     return {
         "server": server_name,
-        "checked": len(paths),
+        "checked": len(pairs),
+        "folder_entries": folder_entries,
         "matched": len(resolved),
         "unmatched": len(unresolved),
-        "ok": len(unresolved) == 0 if paths else True,
+        "size_checked": size_checked,
+        "size_mismatched": len(mismatches),
+        "mismatch_problem": mismatch_problem,
+        "ok": (len(unresolved) == 0 and not mismatch_problem) if pairs else True,
         "resolved_examples": resolved[:3],
         "unmatched_examples": unresolved[:5],
+        "mismatch_examples": mismatches[:5],
     }
 
 
@@ -5335,15 +5685,30 @@ _DEBUG_SAMPLE_ROWS = 25
 _DEBUG_SAMPLE_META = 3
 
 
-def _debug_resolved_line(raw, monitor_dirs):
-    """One 'raw -> resolved' line with monitored-dir status for path debugging."""
-    resolved = _resolve_reported_media_path(raw)
+def _debug_resolved_line(raw, monitor_dirs, want=0):
+    """One 'raw -> resolved' line for path debugging, stating HOW the
+    fingerprint matched (or exactly why it didn't), plus monitored-dir status
+    and whether the disk's bytes agree with the server's metadata. A
+    folder-shaped entry says so — those are not part of the accuracy check."""
+    if not _is_media_file_path(raw, _media_file_extensions()):
+        return (f"      {raw}\n        -> a folder path (no media file "
+                f"extension) — not a movie file entry, ignored by the "
+                f"accuracy check")
+    resolved, why = _resolve_media_path_explained(raw, expected_size=want)
     if resolved is None:
-        return f"      {raw}\n        -> NO MATCH under {FILESYSTEM_CHECK_PATH}"
+        return f"      {raw}\n        -> NO MATCH: {why}"
     rs = str(resolved)
     monitored = any(rs == d or rs.startswith(d.rstrip("/") + "/") for d in monitor_dirs)
-    return (f"      {raw}\n        -> {rs} | exists=yes | "
+    line = (f"      {raw}\n        -> {rs}\n        {why} | "
             f"monitored={'yes' if monitored else 'NO'}")
+    if want and resolved.is_file():
+        try:
+            disk = resolved.stat().st_size
+            line += (" | size=verified" if disk == int(want)
+                     else f" | size=DIFFERS (disk {disk}, server {want} — server metadata behind?)")
+        except OSError:
+            pass
+    return line
 
 
 @app.route("/api/debug/tautulli/movies", methods=["POST"])
@@ -5442,8 +5807,8 @@ def api_debug_tautulli_movies():
             lines.append("    file paths: NONE FOUND — the engine would skip this movie (no_file_path)")
         else:
             lines.append("    file paths:")
-            for raw in raw_paths[:4]:
-                lines.append(_debug_resolved_line(raw, monitor_dirs))
+            for raw, want in raw_paths[:4]:
+                lines.append(_debug_resolved_line(raw, monitor_dirs, want))
     if not sample_rows:
         lines.append("  (no rows available to sample)")
 
@@ -5585,6 +5950,84 @@ def api_debug_radarr():
     return jsonify({"ok": True, "text": "\n".join(lines)})
 
 
+@app.route("/api/debug/sonarr", methods=["POST"])
+def api_debug_sonarr():
+    """Mirror the TV pass's Sonarr calls: system/status (the probe),
+    /api/v3/series (the unmonitor lookup's source), and how each sampled
+    series folder resolves under the monitored dirs — the same by-name rule
+    the season deletion pass uses. Sonarr is optional and cleanup-only: the
+    TV inventory comes from the media servers, so this debug is about the
+    unmonitor-before-delete step, not about what gets scored."""
+    cfg = load_config()
+    conn = _effective_connection_values(cfg)
+    if not (conn.get("sonarr_url") and conn.get("sonarr_key")):
+        return jsonify({"ok": False, "error": "Add the Sonarr URL and API key above and Save, then debug."}), 400
+    s_url, s_key = conn["sonarr_url"].rstrip("/"), conn["sonarr_key"]
+
+    lines = ["Sonarr API debug (mirrors the TV cleanup pass's calls)", ""]
+    try:
+        status = _json_request(f"{s_url}/api/v3/system/status",
+                               headers={"X-Api-Key": s_key}, timeout=10) or {}
+        lines.append(f"system/status: {status.get('appName') or 'Sonarr'} | version={status.get('version') or 'n/a'}")
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"system/status failed: {e}"}), 400
+
+    lines.append("")
+    lines.append("GET /api/v3/series (the pass matches by title + year here to unmonitor a season):")
+    try:
+        series = _json_request(f"{s_url}/api/v3/series",
+                               headers={"X-Api-Key": s_key}, timeout=25) or []
+    except Exception as e:
+        lines.append(f"  ERROR: {e}")
+        series = []
+    series = [s for s in series if isinstance(s, dict)]
+    lines.append(f"  series in Sonarr: {len(series)}")
+
+    # The same by-name folder rule the season deletion uses: the series
+    # folder must be found under a monitored dir, whatever Sonarr's own
+    # mount prefix looks like.
+    monitor_dirs = [str(d) for d in (cfg.get("MONITOR_DIRS") or []) if str(d or "").strip()]
+    for s in series[:8]:
+        seasons = [x for x in (s.get("seasons") or []) if isinstance(x, dict)]
+        monitored_n = sum(1 for x in seasons if x.get("monitored"))
+        lines.append(f"    - {s.get('title')!r} ({s.get('year')}) | id={s.get('id')} | "
+                     f"monitored={s.get('monitored')} | seasons={len(seasons)} "
+                     f"({monitored_n} monitored) | path={s.get('path')}")
+        parts = [seg for seg in str(s.get("path") or "").replace("\\", "/").split("/") if seg]
+        resolved = None
+        if parts and not any(seg in (".", "..") for seg in parts):
+            for start in range(len(parts)):
+                for d in monitor_dirs:
+                    candidate = Path(d).joinpath(*parts[start:])
+                    try:
+                        if candidate.is_dir():
+                            resolved = str(candidate)
+                            break
+                    except OSError:
+                        continue
+                if resolved:
+                    break
+        lines.append(f"        -> {resolved + ' (in scope for cleanup)' if resolved else 'NO FOLDER of this name under the monitored dirs — cleanup would skip it'}")
+
+    dup_titles = {}
+    for s in series:
+        dup_titles.setdefault(_norm_series_title(s.get("title")), []).append(s.get("year"))
+    dups = {t: ys for t, ys in dup_titles.items() if len(ys) > 1}
+    lines.append("")
+    if dups:
+        lines.append("Same-title series (the pass disambiguates these by YEAR before unmonitoring;")
+        lines.append("ambiguity that survives the year check is skipped fail-closed):")
+        for t, ys in list(dups.items())[:5]:
+            lines.append(f"  - {t!r}: years {sorted(y for y in ys if y)}")
+    else:
+        lines.append("No same-title series — the unmonitor lookup is unambiguous.")
+
+    lines.append("")
+    lines.append(f"SONARR_CLEANUP_ENABLED = {bool(cfg.get('SONARR_CLEANUP_ENABLED', True))} "
+                 f"(off: files still delete; seasons stay monitored in Sonarr)")
+    return jsonify({"ok": True, "text": "\n".join(lines)})
+
+
 @app.route("/api/debug/media-paths", methods=["POST"])
 def api_debug_media_paths():
     """Show how server-reported media paths resolve under /library and whether
@@ -5618,8 +6061,8 @@ def api_debug_media_paths():
             samples = _sample_tautulli_media_paths(conn, limit=8)
             if not samples:
                 lines.append("  (no paths sampled — Tautulli rows carry no paths; metadata sampling found none)")
-            for raw in samples:
-                lines.append(_debug_resolved_line(raw, monitor_dirs))
+            for raw, want in samples:
+                lines.append(_debug_resolved_line(raw, monitor_dirs, want))
         except Exception as e:
             lines.append(f"  ERROR: {e}")
 
@@ -5630,8 +6073,8 @@ def api_debug_media_paths():
             samples = _sample_jellyfin_media_paths(conn, limit=8)
             if not samples:
                 lines.append("  (no paths sampled)")
-            for raw in samples:
-                lines.append(_debug_resolved_line(raw, monitor_dirs))
+            for raw, want in samples:
+                lines.append(_debug_resolved_line(raw, monitor_dirs, want))
         except Exception as e:
             lines.append(f"  ERROR: {e}")
 
@@ -5750,7 +6193,9 @@ def api_debug_cache():
             lines.append(f"TV season plan (the deletion order the daily TV pass uses): "
                          f"{len(porder)} seasons | {total_gb:,.1f} GB in the order | "
                          f"held back: {pex['protected']} protected, {pex['favorite']} favorited, "
-                         f"{pex['latest_of_continuing']} latest-of-continuing, {pex['off_path']} off-path")
+                         f"{pex['latest_of_continuing']} latest-of-continuing, "
+                         f"{pex['season_rule']} by the season-eligibility rule, "
+                         f"{pex['off_path']} off-path")
             lp = tv_state.get("last_pass") if isinstance(tv_state.get("last_pass"), dict) else None
             if lp:
                 lines.append(f"  TV cleanup last pass: {lp.get('date')} ({lp.get('mode')}) | "
@@ -6644,6 +7089,11 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                 f"library. Check the mount, then recheck.")
 
     if probe and not library_missing:
+        # A real probe re-walks the library: the fingerprint index's short
+        # cache exists to share ONE walk between the two servers' checks
+        # below, never to let Check for Errors (or a save re-probe after a
+        # mount fix) judge a walk from before the fix.
+        _MEDIA_FP_INDEX["at"] = 0.0
         if use_plex and tautulli_connected:
             try:
                 compat = _media_path_compatibility_state("Plex/Tautulli", _sample_result(pre, "tautulli_paths"))
@@ -6652,7 +7102,24 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                     add_warning("Plex/Tautulli connected, but no movie paths were available to check.")
                 elif not compat["ok"]:
                     media_path_blocker = True
-                    add_error(f"Plex paths do not line up with files under {FILESYSTEM_CHECK_PATH}. Check the media mounts, then recheck.")
+                    if compat.get("mismatch_problem"):
+                        add_error(
+                            f"{compat['size_mismatched']} of {compat['size_checked']} sampled files "
+                            f"under {FILESYSTEM_CHECK_PATH} differ in size from what Plex reports — "
+                            f"that looks like the wrong library (a backup or stale copy mounted, or "
+                            f"a Plex library describing different files), not a few quality "
+                            f"upgrades. Check the /library mount, or rescan Plex, then recheck.")
+                    else:
+                        _ex = (compat.get("unmatched_examples") or [""])[0]
+                        add_error(
+                            f"{compat['unmatched']} of {compat['checked']} sampled Plex paths "
+                            f"match nothing under {FILESYSTEM_CHECK_PATH}"
+                            + (f" — for example {_ex}" if _ex else "") + ". Files match by "
+                            f"folder + file name (mounts never need to line up), so the "
+                            f"folder and file names Plex reports must exist under the "
+                            f"library. Check the /library mount, then recheck; the "
+                            f"Tautulli debug button under Connections shows each sampled "
+                            f"path and why it did or didn't match.")
             except Exception:
                 add_warning("Could not check Plex media paths.")
 
@@ -6664,7 +7131,25 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                     add_warning("Jellyfin connected, but no movie paths were available to check.")
                 elif not compat["ok"]:
                     media_path_blocker = True
-                    add_error(f"Jellyfin paths do not line up with files under {FILESYSTEM_CHECK_PATH}. Check the media mounts, then recheck.")
+                    if compat.get("mismatch_problem"):
+                        add_error(
+                            f"{compat['size_mismatched']} of {compat['size_checked']} sampled files "
+                            f"under {FILESYSTEM_CHECK_PATH} differ in size from what Jellyfin "
+                            f"reports — that looks like the wrong library (a backup or stale copy "
+                            f"mounted, or a Jellyfin library describing different files), not a few "
+                            f"quality upgrades. Check the /library mount, or rescan Jellyfin, then "
+                            f"recheck.")
+                    else:
+                        _ex = (compat.get("unmatched_examples") or [""])[0]
+                        add_error(
+                            f"{compat['unmatched']} of {compat['checked']} sampled Jellyfin paths "
+                            f"match nothing under {FILESYSTEM_CHECK_PATH}"
+                            + (f" — for example {_ex}" if _ex else "") + ". Files match by "
+                            f"folder + file name (mounts never need to line up), so the "
+                            f"folder and file names Jellyfin reports must exist under the "
+                            f"library. Check the /library mount, then recheck; the "
+                            f"Jellyfin debug button under Connections shows each sampled "
+                            f"path and why it did or didn't match.")
             except Exception:
                 add_warning("Could not check Jellyfin media paths.")
 
@@ -6754,9 +7239,14 @@ def _config_signature(cfg: dict | None, keys, *, strip: bool = False) -> str:
 
 def _connection_health_signature(cfg: dict | None = None) -> str:
     """Hash only the values that can change connection health. Includes the
-    invalid-config issues so a hand edit invalidates the cached health."""
+    invalid-config issues so a hand edit invalidates the cached health, and
+    MONITOR_DIRS so a monitored-paths save re-probes — editing the paths
+    usually accompanies a mount/library change, and the media-path check must
+    re-run against the CURRENT disk to show a problem cleared (or appeared)
+    rather than serving the cached verdict."""
     return _config_signature(cfg, _API_CREDENTIAL_KEYS + (
         "PROTECTED_COLLECTIONS", "JELLYFIN_PROTECTED_COLLECTIONS", "OUTPUT_DIR",
+        "MONITOR_DIRS",
     )) + json.dumps(_CONFIG_FILE_ISSUES, sort_keys=True)
 
 
@@ -7348,7 +7838,7 @@ def deleted_entries(limit: int | None = None) -> list[dict]:
             if why:
                 line_parts.append(why)
             line_parts.append(path)
-            entries.append({
+            entry = {
                 "time": display_time,
                 "title": title,
                 "path": path,
@@ -7356,7 +7846,14 @@ def deleted_entries(limit: int | None = None) -> list[dict]:
                 "size": size_label,
                 "why": why,
                 "line": " | ".join(line_parts),
-            })
+            }
+            # TV lines state their type; the history view's Type column then
+            # says "TV Show · S2" instead of defaulting to Movie.
+            if m.group("media"):
+                entry["media"] = m.group("media")
+                if m.group("season") is not None:
+                    entry["season"] = int(m.group("season"))
+            entries.append(entry)
         else:
             converted = _format_log_text_for_display(raw_line + "\n").strip()
             entries.append({"time": "", "title": "", "path": "", "size_bytes": 0, "size": "", "line": converted})
@@ -7702,18 +8199,15 @@ def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True
                 _marked_bytes += size_bytes
                 marked = True
         elif marked_at is not None:
-            # Calendar-day aging, matching the engine: marked date + the delay
-            # the mark was MADE under (stamped delay_days, or the current
-            # setting when unstamped) is when it becomes deletable at that
-            # day's daily run (or any manual Cleanup from then on).
+            # Calendar-day aging on the shared clock (shared.delete_on_date,
+            # the same one the engine and the TV pass use): marked date + the
+            # delay the mark was MADE under (stamped delay_days, or the
+            # current setting when the stamp is missing or junk) is when it
+            # becomes deletable at that day's daily run (or any manual
+            # Cleanup from then on).
             marked = True
-            entry_delay = delay
-            try:
-                if e.get("delay_days"):
-                    entry_delay = max(1, int(e["delay_days"]))
-            except (TypeError, ValueError):
-                pass
-            delete_on = datetime.fromtimestamp(marked_at).date() + timedelta(days=entry_delay)
+            delete_on = (shared.delete_on_date(marked_at, e.get("delay_days") or delay)
+                         or shared.delete_on_date(marked_at, delay))
             remaining = max(0, (delete_on - today).days)
         if not with_lines:
             out.append({
@@ -7791,12 +8285,13 @@ def _tv_marked_entries(cfg: dict | None = None) -> list[dict]:
             marked_at = None
         delete_on = remaining = None
         if marked_at is not None:
-            try:
-                delete_on = (datetime.fromtimestamp(marked_at).date()
-                             + timedelta(days=max(1, int(m.get("delay_days") or 1))))
-                remaining = max(0, (delete_on - today).days)
-            except (OverflowError, OSError, ValueError):
+            # The shared clock again; an unusable epoch clears the mark's
+            # display date rather than 500ing the window.
+            delete_on = shared.delete_on_date(marked_at, m.get("delay_days") or 1)
+            if delete_on is None:
                 marked_at = None
+            else:
+                remaining = max(0, (delete_on - today).days)
         size_bytes = int(m.get("size_bytes") or 0)
         out.append({
             "time": "" if marked_at is None else _format_log_timestamp_for_display(
@@ -8074,6 +8569,7 @@ def _score_page_config(cfg: dict) -> dict:
         "TV_CLEANUP_ENABLED": bool(cfg.get("TV_CLEANUP_ENABLED", True)),
         "TV_SERIES_WATCH_BUMP": cfg.get("TV_SERIES_WATCH_BUMP", 10),
         "TV_WATCH_WEIGHT": cfg.get("TV_WATCH_WEIGHT", 100),
+        "TV_SEASON_ELIGIBILITY": cfg.get("TV_SEASON_ELIGIBILITY", "oldest"),
         "GRACE_PERIOD_DAYS": cfg.get("GRACE_PERIOD_DAYS", 0),
         "PROTECT_JELLYFIN_FAVORITES": bool(cfg.get("PROTECT_JELLYFIN_FAVORITES")),
         "NEAR_TIE_PTS": cfg.get("NEAR_TIE_PTS", 2),
@@ -8195,6 +8691,7 @@ def api_status():
         "marked_event_on":         _forecast["event_on"],
         "marked_event_count":      _forecast["event_count"],
         "marked_event_bytes":      _forecast["event_bytes"],
+        "tv_pass":                 _tv_pass_status(cfg),
         "delete_delay_days":       _delay_days,
         # Redline-only mode (Headroom disabled): the marked queue is a standing
         # deletion-order preview, not a schedule; drives UI wording.
@@ -8540,6 +9037,12 @@ def api_save_score_config():
         if "TV_WATCH_WEIGHT" in payload:
             weight_val = _float_field("TV_WATCH_WEIGHT", 100, 200)
             updates["TV_WATCH_WEIGHT"] = int(round(weight_val))
+
+        if "TV_SEASON_ELIGIBILITY" in payload:
+            elig = str(payload.get("TV_SEASON_ELIGIBILITY") or "").strip().lower()
+            if elig not in ("oldest", "except_newest", "all"):
+                raise ValueError("Season eligibility must be one of the listed options.")
+            updates["TV_SEASON_ELIGIBILITY"] = elig
 
         if "MAX_STALENESS_MONTHS" in payload:
             try:
@@ -10230,14 +10733,9 @@ def _scheduled_tick_body():
     _check_marked_change_notification()
     _check_low_space_notification(cfg, disk_stats())
 
-    # The daily TV pass rides this tick, before the movie branches launch
-    # anything, so the two deleters never run concurrently. It is synchronous
-    # (seconds of HTTP) and self-gated: armed TV cleanup only, once per day,
-    # after the daily run time; Monitor Only marks, Automatic Cleanup deletes.
-    try:
-        _maybe_run_tv_cleanup(cfg)
-    except Exception as e:
-        print(f"TV cleanup pass failed: {e}", flush=True)
+    # The TV pass no longer rides the tick: it fires inside EVERY engine run
+    # (run_script's worker), so the daily maintenance run, manual Simulates
+    # and Cleanups all carry it — same gesture as the movies.
 
     if _is_cleanup_mode(cfg.get("RUN_MODE")):
         # Only launch a deletion pass when it's actually safe. If connections aren't

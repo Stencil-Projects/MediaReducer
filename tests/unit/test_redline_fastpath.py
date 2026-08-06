@@ -118,6 +118,37 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     check("the dead mark is dropped from the queue; deleted ones trimmed",
           list(data["entries"]) == [str(paths[3])])
 
+# ── Fast path: a file replaced since the plan deletes at its FRESH size ──────
+# Movie A was replaced on disk (a quality upgrade to 3 MB) after the plan
+# measured it at 2 MB. The local stat is the size authority: A keeps its place
+# in score order, the coverage math uses the fresh 3 MB (so A + B alone cover
+# the 5 MB target and C is spared), and the freed accounting is honest.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    paths = setup(td)
+    paths[0].write_bytes(b"\0" * (3 * MB))               # replaced since the plan
+    handled = engine._redline_fast_path(5 * MB)          # fresh 3+2 cover it
+    check("a replaced file deletes at its fresh size; coverage uses disk truth",
+          handled is True and not paths[0].exists() and not paths[1].exists()
+          and paths[2].exists() and paths[3].exists())
+    data = _pending()
+    check("only the covered prefix went; the rest stay queued",
+          set(data["entries"]) == {str(paths[2]), str(paths[3])})
+    dlog = engine.DELETED_LOG.read_text()
+    check("the history line carries the on-disk bytes, not the plan's",
+          f"size_bytes={3 * MB}" in dlog)
+
+# A size refresh alone (no deletions possible) still persists the corrected
+# queue: the fallback path saves the store so the display and the deficit
+# prefix read true even though the full scan takes over.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    paths = setup(td)
+    paths[0].write_bytes(b"\0" * (3 * MB))
+    handled = engine._redline_fast_path(50 * MB)         # can't cover → fall back
+    data = _pending()
+    check("a refreshed size is persisted even on the fallback path",
+          handled is False
+          and data["entries"][str(paths[0])]["size_bytes"] == 3 * MB)
+
 # ── Fast path: a dead mark is dropped from the cache even when coverage falls
 #    short and the run falls back to the full scan ─────────────────────────────
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

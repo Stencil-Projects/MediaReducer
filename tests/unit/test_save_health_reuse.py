@@ -76,9 +76,6 @@ n, _ = save({**CFG, "SCORE_BALANCE": 60})
 check("a scoring change does not touch the network", n == 0)
 n, _ = save({**CFG, "HEADROOM_GB": 40})
 check("a threshold change does not touch the network", n == 0)
-n, _ = save({**CFG, "MONITOR_DIRS": ["/library/movies"]})
-check("a monitored-path change does not touch the network either",
-      n == 0)   # paths change what a RUN measures, not whether a server answers
 
 
 # ── Anything that could change the verdict re-probes ────────────────────────
@@ -89,6 +86,10 @@ for label, edit in (
                             "TAUTULLI_API_KEY": "k"}),
     ("deselecting one",   {"USE_JELLYFIN": False}),
     ("a protected collection", {"JELLYFIN_PROTECTED_COLLECTIONS": ["Keep"]}),
+    # Editing paths usually accompanies a mount/library change, and the probe
+    # carries the media-path check — it must re-run against the current disk
+    # so a wrong-library verdict clears (or appears) on the save, not a tick.
+    ("the monitored paths", {"MONITOR_DIRS": ["/library/movies"]}),
 ):
     save(CFG)                       # re-prime the cache for the base config
     n, _ = save({**CFG, **edit})

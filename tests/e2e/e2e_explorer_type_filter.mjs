@@ -22,13 +22,18 @@ const row = (title, media_type, plays) => ({
   last_played: 0, added_at: 1_500_000_000, size_gb: 8, size_bytes: 8_000_000_000,
   protected: false, favorite: false, excluded: false, media_type,
 });
-let movies = [row('Alpha Movie', 'movie', 0), row('Beta Movie', 'movie', 3),
-              { ...row('Gamma Show', 'tv', 1), tv_status: 'continuing',
-                tv_episodes: 20, tv_episodes_watched: 5,
-                tv_seasons: [{ n: 1, eps: 10, eps_watched: 5, plays: 5, users: 1,
-                               size_bytes: 8_000_000_000, last_played: 0 },
-                             { n: 2, eps: 10, eps_watched: 0, plays: 0, users: 0,
-                               size_bytes: 8_000_000_000, last_played: 0 }] }];
+// S1 is the most recently ADDED season (the "newest") even though S2 is the
+// latest — the season-eligibility rule tells them apart. Its date sits well
+// past the saved grace period so only the season rules decide.
+const nowSec = Math.floor(Date.now() / 1000);
+const gammaShow = () => ({ ...row('Gamma Show', 'tv', 1), tv_status: 'continuing',
+  tv_in_scope: 1,   // the refresh always stamps scope before a row is stored
+  tv_episodes: 20, tv_episodes_watched: 5,
+  tv_seasons: [{ n: 1, eps: 10, eps_watched: 5, plays: 5, users: 1,
+                 size_bytes: 8_000_000_000, last_played: 0, added_at: nowSec - 90 * 86400 },
+               { n: 2, eps: 10, eps_watched: 0, plays: 0, users: 0,
+                 size_bytes: 8_000_000_000, last_played: 0, added_at: nowSec - 700 * 86400 }] });
+let movies = [row('Alpha Movie', 'movie', 0), row('Beta Movie', 'movie', 3), gammaShow()];
 await p.route('**/api/library-snapshot**', async route => {
   try {
     await route.fulfill({ status: 200, contentType: 'application/json',
@@ -78,6 +83,21 @@ check('an unshielded season is eligible, not inventory', /1 eligible/.test(s.sta
 check('the continuing show\'s LATEST season is the filtered one',
       /filtered — latest season/.test(s.body) && !/inventory/.test(s.body),
       s.body.slice(0, 200));
+// The season-eligibility dropdown, live: the default is oldest-only (S1 IS
+// the oldest, so it stays eligible); "any except the newest" holds back the
+// most recently ADDED season — S1, even though it is not the latest.
+check('the dropdown defaults to oldest-only', await p.evaluate(() =>
+      document.getElementById('c-tv-elig')?.value) === 'oldest');
+await p.evaluate(() => { document.getElementById('c-tv-elig').value = 'except_newest'; onExpFilterInput(); });
+await p.waitForTimeout(300);
+s = await state();
+check('except-newest filters the most recently ADDED season — not the latest',
+      /filtered — newest season/.test(s.body) && /\b0 eligible/.test(s.stat), s.stat);
+await p.evaluate(() => { document.getElementById('c-tv-elig').value = 'oldest'; onExpFilterInput(); });
+await p.waitForTimeout(300);
+s = await state();
+check('back on oldest-only the oldest season is eligible again',
+      /\b1 eligible/.test(s.stat), s.stat);
 // The score column carries the season's unified retention score, and the
 // series-watch-bump knob moves it live (Gamma is half watched, so the bump
 // contributes knob x 0.5 on the history side).
@@ -151,13 +171,7 @@ check('a row with no media_type key counts as a movie', s.body.includes('Legacy 
 // exactly. (Save persists via /api/score-config; the engine side — an empty
 // plan both scan and reconcile — is pinned by unit tests.)
 // Back on the full mixed fixture — the sections above swapped in smaller ones.
-movies = [row('Alpha Movie', 'movie', 0), row('Beta Movie', 'movie', 3),
-          { ...row('Gamma Show', 'tv', 1), tv_status: 'continuing',
-            tv_episodes: 20, tv_episodes_watched: 5,
-            tv_seasons: [{ n: 1, eps: 10, eps_watched: 5, plays: 5, users: 1,
-                           size_bytes: 8_000_000_000, last_played: 0 },
-                         { n: 2, eps: 10, eps_watched: 0, plays: 0, users: 0,
-                           size_bytes: 8_000_000_000, last_played: 0 }] }];
+movies = [row('Alpha Movie', 'movie', 0), row('Beta Movie', 'movie', 3), gammaShow()];
 await p.reload({ waitUntil: 'domcontentloaded' });
 await p.waitForFunction(() =>
   document.getElementById('mtbody')?.textContent.includes('Gamma Show'), { timeout: 20000 });

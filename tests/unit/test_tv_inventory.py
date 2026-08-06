@@ -115,6 +115,22 @@ check("the IMDb guid is read out of the guid list", alpha["imdb_id"] == "tt0001"
 check("a show with no Location derives its folder from an episode file",
       by_title["Beta Show"]["path"] == "/data/tv/Beta Show", by_title["Beta Show"])
 
+# ── A sizes blip is "no answer", never an emptied library ───────────────────
+# Jellyfin mid-scan can list every series but answer episodes without
+# MediaSources sizes; wiping the stored inventory over that would also reset
+# every mark's delay clock.
+_saved_eps = [dict(e) for e in JF_EPISODES]
+for e in JF_EPISODES:
+    e["MediaSources"] = []
+check("all-zero sizes with series listed reads as None (a blip)",
+      A._jellyfin_series_inventory("http://jf.test", "k") is None)
+JF_EPISODES[:] = _saved_eps
+_saved_series = [dict(s) for s in JF_SERIES]
+JF_SERIES[0]["ProviderIds"] = "not-a-dict"   # hostile shape: .items() would raise
+check("a malformed item shape reads as None (no answer), never a crash",
+      A._jellyfin_series_inventory("http://jf.test", "k") is None)
+JF_SERIES[:] = _saved_series
+
 # ── The merge: two servers, one library, one row ────────────────────────────
 merged = A._merge_tv_sources(jf, px)
 m = {r["title"]: r for r in merged}

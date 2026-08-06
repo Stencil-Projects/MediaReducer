@@ -25,13 +25,18 @@ lib = base / "library"
 cfg_dir = base / "config"
 ratings_dir = base / "ratings"
 
+# Each file's on-disk size matches what the mock servers report for it
+# (1024 + i bytes — see tests/mocks/mock_tautulli.py / mock_jellyfin.py).
+# The servers describing the SAME bytes the disk holds is part of the
+# fixture's realism: mostly-mismatched sizes are the wrong-library tripwire,
+# which fails the health check and the run pre-check by design.
 for i in range(1, 401):
     folder = "movies" if i <= 300 else "other"
     d = lib / folder / f"Test Movie {i}"
     d.mkdir(parents=True, exist_ok=True)
     f = d / f"Test Movie {i}.mkv"
     if not f.exists():
-        f.write_bytes(b"\0" * 1024)
+        f.write_bytes(b"\0" * (1024 + i))
 
 cfg_dir.mkdir(parents=True, exist_ok=True)
 ratings_dir.mkdir(parents=True, exist_ok=True)

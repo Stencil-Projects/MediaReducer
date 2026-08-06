@@ -45,6 +45,7 @@ log path named in the failure line is actually there to read.
 | `test_mode_roundtrip` | Scheduler mode through the real save handler. The flag derivation, forced-off cascade and auto-enable are decided in one request, so a regression in their ORDER only shows up here |
 | `test_service_port` | The listening port: 7474 by default, `MEDIAREDUCER_PORT` when set, refused rather than ignored when it is not a usable port. The CLI default and the Docker healthcheck follow the same variable |
 | `test_library_mount_state` | A missing or empty `/library` says so, instead of blaming Plex path alignment for a mount that is not there. Both states still block |
+| `test_media_path_check` | The configuration check's media-path layer: the app-side fingerprint resolver mirroring the engine's, sampled sizes verified against the disk, a stale size or two passing, a mismatch MAJORITY failing the check as the wrong library with the byte evidence attached, folder-shaped samples excluded from the check, and the explained variant's reasons (what the debug buttons print) |
 | `test_appdata_mounts` | What the `/tautulli` and `/radarr` mounts contribute. Ports are never read from appdata; a mounted config with no key in it is not "verified" |
 
 **Deletion safety**
@@ -52,6 +53,8 @@ log path named in the failure line is actually there to read.
 | Test | Guards |
 |---|---|
 | `test_delete_guards` | The checks between a decision and an `unlink`, against real files: symlinks, outside the boundary, unmonitored, `..` escapes, empty allow-list, both debug modes. Asserts the files are still there afterwards. One case deletes for real, so a `delete_candidate` that never deleted anything could not pass |
+| `test_delete_boundary` | `is_safe_to_delete()` — the last gate before `unlink` — under an adversarial path matrix rather than incidental coverage |
+| `test_absent_config_disarms` | A config.json missing its threshold keys disarms the engine instead of falling back to example values that would delete |
 | `test_engine_mode_gate` | `main()` refuses to run unless `RUN_MODE` is executable, so a paused scheduler stays safe even if something launches the engine anyway |
 | `test_debug_mode` | Debug mode and Automatic Cleanup are mutually exclusive, and `debug_cleanup` can never delete |
 | `test_protection_failclosed` | A protected collection matching nothing aborts a deleting run rather than running unprotected |
@@ -72,6 +75,21 @@ log path named in the failure line is actually there to read.
 | `test_media_server_integration` | The Plex / Jellyfin / Radarr integrations over their real HTTP functions against a localhost mock: the URL, auth and parse layer the stubbed tests skip |
 | `test_engine_helpers` | Engine internals no scenario reaches: Tautulli dedup, config coercion, and the IMDb pipeline including decompression-bomb caps |
 | `test_library_snapshot` | The snapshot survives cache clears and interrupted runs; completed scans replace it |
+| `test_fresh_watch_batching` | The delete-time Jellyfin re-verify batches its ids (one giant URL was an HTTP 414), and a partially-answered user is discarded whole rather than undercounting plays |
+| `test_path_resolution` | Fingerprint-only resolution: folder+filename matching from any mount prefix (a stale size never rejects it — the disk is the size authority), sizes disambiguating same-named copies, the (filename, size) rescue with identical twins never guessed between, the whole-mount index, the per-run reset, folder-shaped server paths (section locations) excluded from the check entirely, and the wrong-library tripwire (a mismatch MAJORITY aborts the pre-check; a lone stale size only warns) |
+
+**TV and the one pool**
+
+| Test | Guards |
+|---|---|
+| `test_tv_inventory` | The TV inventory comes from the MEDIA SERVERS — each fetcher's row shape from its wire format, the title-merge carrying both server identities, and strictness: the deletion path raises when a configured server fails; Sonarr alone can never supply it |
+| `test_tv_store` | The store contracts: each scan owns its type, a server blip leaves stored rows alone while an empty answer clears them, folder-name scope resolution, and the code-wipe → refresh sequence |
+| `test_tv_watch_aggregation` | Per-series and per-season watch facts take the MAX across servers, never the sum — one household on two servers is one audience |
+| `test_season_score` | The season recipe on the movie scale: plays as movie-watch equivalents through the movie play curve (weight 100–200%), season users counting what a movie's do, the season-added-date freshness fallback, the all-season boost's log curve, the 100-point clamp |
+| `test_tv_season_plan` | Who steps aside (scope, protected, favorites under the shared toggle, per-season grace, IMDb rules, the latest-season shield incl. unknown status) and the season-eligibility modes — oldest-only default, except-newest by ADDED date, all |
+| `test_pool_split` | One deficit, two executors: the merged movie+season order, the covering-prefix split, and the engine's tv_share handshake — a stale stamp reads 0 so the movie side covers everything |
+| `test_shared_pass` | `shared.py`'s contracts (deficit arithmetic, the calendar-day delay clock, the deleted.log line round-tripping the history regex, the rung decisions) AND the wiring: bending one shared helper bends both executors' answers, proving neither keeps a private copy that could drift |
+| `test_tv_cleanup` | The season deletion pass's safety contract: marks wait out the delay, Monitor Only never deletes, fail-closed aborts, Sonarr unmonitor-before-delete when configured (and none needed when absent), server-path escape guards, unmark-instead-of-delete when the plan moves, the per-run gate, and the pool's ONE marked & eligible window |
 
 **The marked queue**
 
@@ -79,7 +97,7 @@ log path named in the failure line is actually there to read.
 |---|---|
 | `test_reverify_marked` | A movie a recent watch lifted out of the delete set is un-marked and the next eligible backfills it. The one-way safety belt means a failed fetch can only spare a movie, never doom it |
 | `test_reverify_tick` | The 15-minute maintenance re-sizes the marked set to the current deficit, and unschedules everything at zero |
-| `test_redline_fastpath` | The incremental queue-delete path used by both a Redline emergency and a manual Cleanup, including which one tells Radarr to forget |
+| `test_redline_fastpath` | The incremental queue-delete path used by both a Redline emergency and a manual Cleanup, including which one tells Radarr to forget — and a file replaced since the plan deleting at its FRESH on-disk size, the corrected size persisted to the queue |
 | `test_fastpath_protection_match` | The no-rescan paths recognize a protected movie even when the path differs by symlink, mount prefix or case |
 | `test_debug_live_tick` | Debug Cleanup is "Cleanup minus deletion": it applies and persists the same queue upkeep, then only previews |
 | `test_reconcile_from_snapshot` | Rebuilding the queue from the stored snapshot under new settings, with no library walk and no server call |
@@ -104,9 +122,14 @@ log path named in the failure line is actually there to read.
 | `test_live_button_state` | Cleanup ghosts when limits are satisfied while Simulate stays available; unknowns fail open |
 | `test_radarr_health_gate` | Radarr health gates only real Cleanups, never a Simulate |
 | `test_scan_lock_reason` | Why Monitor Only is still locked is answerable and specific, and an incomplete setup outranks the rest |
+| `test_autopause_note` | The "Automatic Cleanup paused itself" banner: shown once with its reason, dismissible for good, never resurrected by a reload |
+| `test_startup_keep_cleanup` | The "Set to Monitor Only at startup" opt-out: off means a restart resumes Automatic Cleanup instead of demoting |
+| `test_run_slot_handoff` | The `_summary_active` slot shared by the quiet Summary, its sync twin, and the save reconcile: whoever clears it honours what queued behind it |
+| `test_library_browse` | The library browser answers in the `/library` namespace even when the root is a symlink or bind mount |
+| `test_abort_name_disclosure` | Abort sentences that name a film on the dashboard never carry that name into a webhook unless Movie names is opted in |
 | `test_reset_then_setup` | After a reset, setting up again reaches Monitor Only, same as a fresh install |
-| `test_connection_probe_parallel` | The parallel connection check reports exactly what the sequential one did |
-| `test_save_health_reuse` | A save re-probes only when the answer could have moved, and always after a failure |
+| `test_connection_probe_parallel` | The parallel connection check reports exactly what the sequential one did — and every probe re-walks the library for the media-path check instead of judging a cached walk |
+| `test_save_health_reuse` | A save re-probes only when the answer could have moved, always after a failure, and always on a monitored-paths change (the media-path check must re-run against the current disk) |
 | `test_save_nav_guard` | Navigation is blocked while a save is in flight or the form is dirty |
 | `test_page_delivery` | Pages are gzipped and served entirely from this container. Fails if a template ever reintroduces a CDN link |
 | `test_progress_phases` | Each progress step fills 0→100 once; path resolution reports under the indeterminate step |
@@ -163,6 +186,12 @@ dead port so an accidental network fetch fails loudly.
 | `e2e_debugghost` | Ticking Debug mode ghosts Automatic Cleanup immediately, and unticking restores the exact prior state |
 | `e2e_debuglive_btn` | On a Debug-mode dashboard the Cleanup button is Debug Cleanup, using the Simulate gate, with its own running visuals |
 | `e2e_countdown_label` | The countdown names the event it counts to, in every mode |
+| `e2e_explorer_type_filter` | The Filtering page's library table with TV in the pool: the type filter scores and ranks what it shows, season rows carry the Type column and run the season eligibility ladder (latest-season shield, the eligibility dropdown, the per-type scope toggles), and the TV sliders re-score live |
+| `e2e_breach_note` | The Dashboard's breach note and the arithmetic behind every panel quoting space figures — including armed-but-unable when a media server stops answering |
+| `e2e_mode_stale` | The Configuration page never POSTs a Scheduler Mode the server has already left behind (an autopause between load and save) |
+| `e2e_page_notes` | Page-level notes: still-in-effect ones pinned with no X, already-done ones dismissible underneath — and dismissed means gone |
+| `e2e_startup_mode_option` | The checkbox living inside the click-to-select Automatic Cleanup card: ticking it must not also arm the deleting mode |
+| `e2e_last_run_colon` | The Last run clock's colon ticks while a run is active and holds still when idle |
 
 ## Environment
 

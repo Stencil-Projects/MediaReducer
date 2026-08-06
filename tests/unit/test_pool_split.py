@@ -81,6 +81,18 @@ flags = [e["take"] for e in big]
 check("takes are a prefix of the season order",
       flags == sorted(flags, reverse=True), flags)
 
+# A season the pass could never act on (no server id / no resolved folder)
+# claims NO share bytes: the engine would subtract them from the movie target
+# and nobody would ever free them.
+A.library_stats = lambda: {"library_gb": 110.0}
+db.read_pending_doc = lambda p: {}
+sidless = season(1.0, 1)
+sidless["sid"] = None
+takes_x, share_x = A._merged_pool_takes([sidless, season(30.0, 2)], CFG)
+check("a sid-less season is skipped, never counted toward the TV share",
+      list(takes_x) == ["sonarr:2|S2"] and share_x["tv_share_bytes"] == 5 * GB
+      and sidless["take"] is False, share_x)
+
 # Within its limits: no deficit, nothing taken, both shares zero.
 A.library_stats = lambda: {"library_gb": 90.0}
 takes0, share0 = A._merged_pool_takes([season(1.0, 1)], CFG)

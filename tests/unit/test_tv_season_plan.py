@@ -42,7 +42,10 @@ CFG = {"SCORE_BALANCE": 0, "GRACE_PERIOD_DAYS": 0, "MAX_IMDB_RATING": None,
        "MAX_STALENESS_MONTHS": 36, "TV_SERIES_WATCH_BUMP": 10,
        "TV_WATCH_WEIGHT": 100, "SKIP_UNPLAYED_MOVIES": False,
        # Favorites shield TV under the SAME eligibility toggle movies use.
-       "PROTECT_JELLYFIN_FAVORITES": True}
+       "PROTECT_JELLYFIN_FAVORITES": True,
+       # The general sections run with every season eligible; the
+       # season-eligibility modes (default: oldest) have their own section.
+       "TV_SEASON_ELIGIBILITY": "all"}
 
 def series(title, seasons, *, status="ended", in_scope=1, protected=False,
            favorite=False, users=0, last=0, added=NOW - 800 * DAY,
@@ -141,6 +144,37 @@ unplayed = A._tv_season_plan(
 check("skip-unplayed holds back the untouched season but not the watched one",
       [(e["title"], e["season"]) for e in unplayed["order"]] == [("Half", 1)]
       and unplayed["excluded"]["unplayed"] == 1, unplayed["excluded"])
+
+# ── The season-eligibility rule ─────────────────────────────────────────────
+# An ended show, seasons 1-3; S2 is the most recently ADDED — the "newest"
+# season even though it is not the latest.
+def elig_rows():
+    return [series("Elig Show", [dict(season(1), added_at=NOW - 700 * DAY),
+                                 dict(season(2), added_at=NOW - 2 * DAY),
+                                 dict(season(3), added_at=NOW - 600 * DAY)])]
+no_mode = {k: v for k, v in CFG.items() if k != "TV_SEASON_ELIGIBILITY"}
+oldest = A._tv_season_plan(elig_rows(), no_mode, now=NOW)
+check("the DEFAULT is oldest-only: one season per show, the lowest on disk",
+      [(e["title"], e["season"]) for e in oldest["order"]] == [("Elig Show", 1)]
+      and oldest["excluded"]["season_rule"] == 2, oldest["excluded"])
+newest = A._tv_season_plan(elig_rows(), dict(CFG, TV_SEASON_ELIGIBILITY="except_newest"),
+                           now=NOW)
+check("except-newest holds back the most recently ADDED season — not the latest",
+      sorted(e["season"] for e in newest["order"]) == [1, 3]
+      and newest["excluded"]["season_rule"] == 1, newest["excluded"])
+all_mode = A._tv_season_plan(elig_rows(), CFG, now=NOW)
+check("all-seasons mode frees every season of an ended show",
+      sorted(e["season"] for e in all_mode["order"]) == [1, 2, 3], all_mode["excluded"])
+check("an unknown value reads as the strictest — oldest",
+      [e["season"] for e in A._tv_season_plan(
+          elig_rows(), dict(CFG, TV_SEASON_ELIGIBILITY="bogus"), now=NOW)["order"]] == [1])
+# Specials never count as "the oldest": a show with a Season 0 folder would
+# otherwise spend forever on a tiny extras dir while every real season hides.
+specials = A._tv_season_plan(
+    [series("Extras Show", [season(0, size=1 * GB), season(1), season(2)])],
+    dict(CFG, TV_SEASON_ELIGIBILITY="oldest"), now=NOW)
+check("Season 0 does not poison oldest-only — S1 is the eligible season",
+      [e["season"] for e in specials["order"]] == [1], specials["excluded"])
 
 # ── The order among the rest ────────────────────────────────────────────────
 pos = {k: i for i, k in enumerate(key)}

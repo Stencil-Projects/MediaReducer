@@ -55,7 +55,8 @@ for i in range(1, 401):
         "ProviderIds": prov,
         "RunTimeTicks": 60_000_000 * 90,
         "MediaSources": [{
-            "Size": 700_000_000 + i * 10_000_000,
+            # The REAL fixture file's bytes (make_fixtures.py writes 1024 + i).
+            "Size": 1024 + i,
             "Bitrate": 8_000_000,
             "MediaStreams": [{"Type": "Video", "Height": 1080 if i % 2 else 720}],
         }],

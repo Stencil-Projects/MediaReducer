@@ -139,6 +139,19 @@ check("a series kept elsewhere is inventory but OUT of scope",
 check("no monitored dirs means nothing is in scope",
       (A._refresh_tv_inventory(CFG) or 0) == 2
       and all(r["tv_in_scope"] == 0 for r in tv_rows()))
+# Nested layouts resolve too — the same trailing-run rule the movie side
+# uses, so /shows/Anime/Big Show under a monitored dir is found, not just a
+# folder sitting directly under it.
+(_TVDIR / "Anime" / "Nested Show").mkdir(parents=True)
+_nested = [A._new_tv_row(title="Nested Show", year=2020,
+                         path="/data/shows/Anime/Nested Show",
+                         seasons=[_season(1, 4, 2_000_000_000)],
+                         added_at=1_600_000_000, status="ended",
+                         jf_source_id="jellyfin:n1")]
+A._resolve_tv_scope(_nested, {**CFG, "MONITOR_DIRS": [str(_TVDIR)]})
+check("a series nested below the monitored dir resolves by its trailing run",
+      _nested[0]["tv_in_scope"] == 1
+      and _nested[0]["path"] == str(_TVDIR / "Anime" / "Nested Show"), _nested[0]["path"])
 
 # ── The deploy sequence: a code-change wipe takes TV rows too ───────────────
 # ensure_code_current clears every snapshot row on an engine-checksum change,

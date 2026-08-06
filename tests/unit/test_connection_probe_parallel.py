@@ -59,6 +59,7 @@ DELAY = 0.0
 DOWN: set = set()
 _inflight = {"now": 0, "peak": 0}
 _lock = threading.Lock()
+SAMPLE = {"path": str(_MOVIE)}   # what the mocked servers report as a media path
 
 def fake_request(url, headers=None, timeout=None, **kw):
     with _lock:
@@ -79,9 +80,9 @@ def fake_request(url, headers=None, timeout=None, **kw):
                                            "is_active": 1}]}}
         if "get_library_media_info" in url:
             return {"response": {"result": "success",
-                                 "data": {"data": [{"file": str(_MOVIE)}]}}}
+                                 "data": {"data": [{"file": SAMPLE["path"]}]}}}
         if "/Items" in url:
-            return {"Items": [{"Path": str(_MOVIE)}]}
+            return {"Items": [{"Path": SAMPLE["path"]}]}
         return {"response": {"result": "success", "data": {}}, "ok": True}
     finally:
         with _lock:
@@ -141,6 +142,23 @@ check("repeated checks agree (no completion-order dependence)",
 DOWN.clear()
 check("probe=False stays offline — no requests, no connection claims",
       health(probe=False)["probed"] is False)
+
+# ── A probe never judges a stale walk ───────────────────────────────────────
+# The fingerprint index caches its library walk briefly so one probe's two
+# server checks share a single walk — but each PROBE must start a fresh one.
+# Poison the cache with a recent-looking EMPTY walk, report a foreign-prefix
+# path only the index can resolve, and the probe must still match it: proof
+# it re-walked instead of judging the library from before a mount fix.
+_LATE = Path(_OUT, "movies", "Late (2024)", "Late (2024).mkv")
+_LATE.parent.mkdir(parents=True, exist_ok=True)
+_LATE.write_bytes(b"x" * 77)
+SAMPLE["path"] = "/foreign/mount/Late (2024)/Late (2024).mkv"
+A._MEDIA_FP_INDEX.update({"at": time.time(), "dir_name": {}, "name_size": {}})
+_h = health()
+_compat = {c.get("server"): c for c in _h.get("media_path_compatibility") or []}
+check("a fresh probe re-walks the library (a poisoned recent walk is discarded)",
+      len(_compat) == 2 and all(c.get("unmatched") == 0 and c.get("matched", 0) > 0
+                                for c in _compat.values()))
 
 
 # ── They actually overlap, and a dead server doesn't hold up the rest ────────

@@ -12,6 +12,9 @@ MediaReducer is two Python processes plus a set of Jinja templates:
                       │
                       ├─ renders templates/  (dashboard, config, explorer)
                       ├─ reads/writes  /config/config.json
+                      ├─ TV pass (runs in-process, BEFORE each engine run):
+                      │    Jellyfin/Plex season inventory + watch facts;
+                      │    marks/deletes whole seasons on /library
                       ├─ APScheduler tick every 15 min ──┐
                       └─ subprocess.Popen ───────────────┴──▶  engine.py
                                                                  │ scans Plex/Tautulli,
@@ -20,6 +23,10 @@ MediaReducer is two Python processes plus a set of Jinja templates:
                                                                  ▼
                                                           movie files on /library
 ```
+
+Movies and TV are **one pool** with two executors: the engine deletes movies,
+the app-side TV pass deletes whole seasons, and they split a single space
+deficit (see **TV: the season pass** under Key models).
 
 **Run lock.** While a run is active, every Configuration section and the
 Filtering & Scoring card is ghosted. It is a sweep (`prSetRunLock` in
@@ -87,7 +94,15 @@ declared category nothing raises.
   skipped) or simply states itself (the IMDb download failed). The engine, the
   app, the notifier and the dashboard all render from this one table.
 - **`scoring_constants.py`** — every scoring curve number, in one place, read by
-  both the engine and the Filtering & Scoring page so they cannot drift.
+  both the engine and the Filtering & Scoring page so they cannot drift. The
+  movie and season retention curves also live here, assembled from one set of
+  term helpers, so the two scales stay one scale.
+- **`shared.py`** — the pass mechanics BOTH executors import: the pool deficit
+  arithmetic, the delay clock (mark date → deletable date), the deleted.log
+  line builder, and the eligibility rung decisions the movie and TV ladders
+  share (IMDb rules, the grace period, the unplayed skip). Each ladder keeps
+  its own rung order and its own per-type rungs; what must mean the same thing
+  on both sides exists once here.
 - **`cli.py`** — `mediareducer` / `mr` inside the container. A thin HTTP client
   for the same API the UI uses, so there is no second code path to keep in sync.
 - **`templates/`** — `base.html` (shared layout, CSS design system, JS helpers)
@@ -208,9 +223,11 @@ no daily-window gate — the user has just seen the plan).
 ## A run, end to end
 
 1. UI POSTs `/api/run` (or the scheduler tick calls `run_script()`).
-2. The app checks connection health + plan-currency, then `subprocess.Popen(["python3", "engine.py"])` with the mode in the environment. A daemon thread `wait()`s on it.
-3. The engine writes `progress.json` as it goes; the dashboard polls `/api/run/progress` and tails `lastrun.log` via `/api/logs/last`.
-4. On exit, the app marks progress terminal (done/stopped/error); the engine archives the run's log under `logs/` (every Simulate/Cleanup/Debug Cleanup — quiet Summary refreshes are skipped).
+2. The app checks connection health + plan-currency, then a daemon worker thread takes over.
+3. The worker first runs the **TV pass** in-process (when TV cleanup is armed): fail-closed fetch, season marks reconciled, due marks deleted on a real Cleanup, and the season share of the pool deficit stamped for the engine. Its failure never blocks the movie run.
+4. Then `subprocess.Popen(["python3", "engine.py"])` with the mode in the environment; the worker `wait()`s on it.
+5. The engine writes `progress.json` as it goes; the dashboard polls `/api/run/progress` and tails `lastrun.log` via `/api/logs/last`.
+6. On exit, the app marks progress terminal (done/stopped/error); the engine archives the run's log under `logs/` (every Simulate/Cleanup/Debug Cleanup — quiet Summary refreshes are skipped). The run notification carries the movie report plus the TV pass's line.
 
 Only one run at a time — `_run_lock` + `_run_active` reject overlaps. **Stop**
 (and a container SIGTERM, forwarded by `_graceful_shutdown`) sends SIGTERM to the
@@ -484,6 +501,56 @@ fails; they are read-only GETs, and waiting for the probe first would put them i
 a second round trip. Results are consumed by the same sequential checks as before,
 so the wording and ordering of every error and warning is unchanged.
 
+**TV: the season pass and the one pool** — all app-side (`app.py`), the season
+is the deletion unit, and Sonarr is optional and cleanup-only.
+
+- *Inventory* (`_tv_inventory_rows`): Jellyfin and/or Plex supply every show's
+  seasons — episode counts, on-disk sizes, per-season added dates (newest
+  episode file), status, IMDb id — title-merged into one row carrying BOTH
+  server identities. Stored as `media_type='tv'` rows in the library snapshot
+  with the seasons as a JSON blob; each row's series folder is resolved under
+  the monitored dirs BY NAME (`_resolve_tv_scope` — the server's own path is in
+  its container namespace). Refreshed at run end, on config save (background
+  thread), and fresh + strict (every configured source must answer) on the
+  deletion path.
+- *Scoring* (`season_retention_score` in `scoring_constants.py`, JS mirror
+  `seasonScore`): the movie curve family at season grain. Plays convert to
+  movie-watch equivalents (plays ÷ episodes × `TV_WATCH_WEIGHT`), the season's
+  own users drive multi-user and decay, recency falls back last watch → season
+  added → series added, `TV_SERIES_WATCH_BUMP` lifts every season by a log
+  curve of the show's watched episodes, IMDb reads the series rating. History
+  clamps at 100 so seasons never leave the movie scale.
+- *Eligibility* (`_tv_season_plan`): whole-series shields (scope, protected
+  collections, favorites under the shared toggle), the shared filters at
+  season grain (grace on the season's own date, IMDb rules, skip-unplayed —
+  the rung decisions come from `shared.py`, the same functions the engine's
+  movie ladder calls), the latest season of any show not known ended, and the
+  `TV_SEASON_ELIGIBILITY` mode (oldest-only default / except the most recently
+  ADDED / all).
+- *The one pool* (`_merged_pool_takes` ↔ engine `_tv_share_bytes`): one deficit
+  — `shared.pool_deficit_gb`, max(headroom overage, Library Size Cap overage;
+  the cap measures every monitored dir, TV included), the same function the
+  engine sizes its movie marks with. Seasons and the engine's movie queue sort
+  into ONE worst-first order; seasons inside the covering prefix are the TV pass's
+  to take, and their byte share is stamped in db meta `tv_share`. The engine
+  subtracts a FRESH stamp (≤26h) from its movie target; a stale or missing
+  stamp reads 0, so a stopped or aborted TV pass fails toward the movie side
+  covering everything. Redline stays a movie-only emergency.
+- *The pass* (`_run_tv_cleanup_pass`, fired by `run_script`'s worker before
+  every engine launch): fail-closed strict fetch → the same safety-percentage
+  refusal a Cleanup makes → reconcile marks with the fresh take prefix (a
+  mark the plan stops taking is dropped, never deleted) → on a real Cleanup,
+  delete due marks: optional Sonarr season-unmonitor FIRST (refusal skips the
+  season), episode files freshly listed by the media server and joined to the
+  resolved folder under the same escape/symlink guards as movies, one
+  `deleted.log` line per file, empty season dirs tidied, Sonarr rescan.
+  Marks live in db meta `tv_cleanup`, keyed by server id + season, each aging
+  its own `DELETE_DELAY_DAYS` clock.
+- *Surfaces*: season rows rank in the Filtering table's one deletion order,
+  the marked & eligible window intersplices both types with a Type column,
+  the Dashboard's Last-run block carries the pass's outcome line, and the run
+  notification a TV block.
+
 ## Caching: what you will trip over
 
 Reads are cached at three levels, and a change that writes the store without
@@ -516,7 +583,7 @@ a healthy store is far worse than one failed run.
 | File | Written by | Purpose |
 | --- | --- | --- |
 | `config.json` | app | Saved settings (single source of truth for both processes). |
-| `mediareducer.db` | engine + app | SQLite store (`db.py`), four tables: `metadata_cache` (per-movie API facts, so a rescan skips the slow per-movie lookups), `movies` (the **library snapshot** every completed scan rewrites, and the Filtering & Scoring table), `queue` (the marked & eligible deletion queue plus its plan-currency stamp) and `meta` (kv: **schedule state**, where the app burns and reopens the daily window, **storage stats**, and the code/schema guards). |
+| `mediareducer.db` | engine + app | SQLite store (`db.py`), four tables: `metadata_cache` (per-movie API facts, so a rescan skips the slow per-movie lookups), `movies` (the **library snapshot** every completed scan rewrites, and the Filtering & Scoring table — TV series ride here as `media_type='tv'` rows with their seasons as a JSON blob, each scan replacing only its own type), `queue` (the marked & eligible MOVIE deletion queue plus its plan-currency stamp) and `meta` (kv: **schedule state**, where the app burns and reopens the daily window, **storage stats**, the code/schema guards, plus the TV pass's marks + last report under `tv_cleanup` and its pool share under `tv_share`). |
 | `lastrun.log` | engine | Most recent run log (overwritten each run; the engine archives it into `logs/` at run exit). |
 | `logs/` | engine + app | Archived run logs — every Simulate, Cleanup, and Debug Cleanup (quiet Summary refreshes are skipped); Reset MediaReducer archives the final `lastrun.log` here too. |
 | `deleted.log` | engine (app can truncate) | Deletion history (survives startup); the dashboard's Erase button empties it. |

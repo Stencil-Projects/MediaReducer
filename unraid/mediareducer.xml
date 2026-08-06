@@ -10,9 +10,9 @@
   <Support>https://github.com/Stencil923/MediaReducer/issues</Support>
   <Project>https://github.com/Stencil923/MediaReducer</Project>
   <Overview>
-    Deletes the movies you are least likely to miss when storage runs low. Reads
-    Plex/Tautulli, Jellyfin or both, scores every movie on watch history and IMDb
-    rating, and removes the lowest first.
+    Deletes the movies and TV seasons you are least likely to miss when storage
+    runs low. Reads Plex/Tautulli, Jellyfin or both, scores every movie and
+    season on watch history and IMDb rating, and removes the lowest first.
     [br][br]
     [b]Early alpha, and it deletes files with no recycle bin.[/b] It starts
     paused. Use Simulate until the output is exactly what you would have deleted
@@ -21,7 +21,8 @@
     No login, so keep it on your LAN and use a VPN from outside.
     [br][br]
     Needs Tautulli (for Plex) or Jellyfin, plus internet for the IMDb ratings.
-    Radarr is optional, to stop a deleted movie being re-downloaded.
+    Radarr and Sonarr are optional, to stop a deleted movie or TV season being
+    re-downloaded.
   </Overview>
   <Category>MediaApp:Video Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:7474]/</WebUI>
@@ -56,6 +57,10 @@
   <Config Name="Radarr appdata (optional)" Target="/radarr" Default="/mnt/user/appdata/radarr" Mode="ro"
           Description="Read-only, and only so Auto Detect can read the Radarr API key. Skip it and enter the key yourself."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/radarr</Config>
+
+  <Config Name="Sonarr appdata (optional)" Target="/sonarr" Default="/mnt/user/appdata/sonarr" Mode="ro"
+          Description="Read-only, and only so Auto Detect can read the Sonarr API key. Skip it and enter the key yourself."
+          Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/sonarr</Config>
 
   <Config Name="PUID" Target="PUID" Default="99" Mode=""
           Description="Run as this user instead of root. 99 is nobody on Unraid. It needs write access to your movies and /config, since deletions use its permissions. Blank runs as root."

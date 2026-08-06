@@ -92,17 +92,124 @@ FINGERPRINT = _hashlib.sha256(
 
 
 def _vote_confidence(votes) -> float:
-    """The movie curve's vote-count confidence, shared verbatim: log10 ramp
-    from the floor to 1.0 at 10^VOTE_CONF_FULL_LOG10 votes; a missing count
-    gets the medium-low UNKNOWN value."""
+    """Vote-count confidence in an IMDb rating — ONE implementation for the
+    movie and season curves (and mirrored by the page JS): a MISSING count is
+    the medium-low UNKNOWN (absence of data is not evidence of a tiny film),
+    a counted zero is the floor, and a real count ramps log10 to 1.0 at
+    10^VOTE_CONF_FULL_LOG10 votes."""
+    if votes is None:
+        return SCORING["VOTE_CONF_UNKNOWN"]
     try:
         v = int(votes)
     except (TypeError, ValueError):
-        v = 0
-    if v <= 0:
         return SCORING["VOTE_CONF_UNKNOWN"]
+    if v <= 0:
+        return SCORING["VOTE_CONF_FLOOR"]
     frac = min(1.0, _math.log10(max(v, 1)) / SCORING["VOTE_CONF_FULL_LOG10"])
     return SCORING["VOTE_CONF_FLOOR"] + (1.0 - SCORING["VOTE_CONF_FLOOR"]) * frac
+
+
+# ── The shared curve terms ───────────────────────────────────────────────────
+# Every retention score — movie or season, Python or the page's JS mirror —
+# is assembled from these four terms. The two scorers below differ ONLY in
+# what they feed in (a movie's own plays vs a season's play-equivalents; a
+# movie's watchers vs a season's) and in how the season clamps its enriched
+# history side; the curves themselves exist once.
+
+def _num(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def usage_pts(plays) -> float:
+    """The play-frequency log curve: worth USAGE_MAX_PTS, saturating at
+    USAGE_FULL_PLAYS plays. Fractional plays (a season's movie-watch
+    equivalents) ride the same curve."""
+    p = max(_num(plays), 0.0)
+    return (SCORING["USAGE_MAX_PTS"]
+            * min(1.0, _math.log1p(p) / _math.log1p(SCORING["USAGE_FULL_PLAYS"])))
+
+
+def multi_user_pts(users) -> float:
+    """Distinct watchers: points per user, capped."""
+    u = max(int(_num(users)), 0)
+    return min(SCORING["MULTI_USER_PTS"] * u, SCORING["MULTI_USER_MAX_PTS"])
+
+
+def recency_shelf_pts(recency_at, users, max_staleness_months, now):
+    """(recency tier points, soft-shelf points) for a last-watch/added epoch.
+
+    The tier day-thresholds scale to the Max staleness setting, and distinct
+    watchers stretch the decay (recency AND shelf fade slower on a
+    widely-watched title). The shelf continues the curve past the staleness
+    cliff; its weighting (the blend tent) is each scorer's business."""
+    users = max(int(_num(users)), 0)
+    stale_scale = _num(max_staleness_months) / SCORING["RECENCY_DEFAULT_MONTHS"]
+    decay_mult = min(SCORING["USER_DECAY_MAX_MULT"],
+                     1.0 + SCORING["USER_DECAY_PER_USER"] * users)
+    eff_scale = stale_scale * decay_mult
+    rec_pts = 0.0
+    shelf_pts = 0.0
+    recency_at = int(_num(recency_at))
+    if recency_at > 0:
+        days_since = (now - recency_at) / 86400.0
+        for max_days, pts in SCORING["RECENCY_TIERS"]:
+            if days_since <= max_days * eff_scale:
+                rec_pts = pts
+                break
+        cliff_days = SCORING["RECENCY_TIERS"][-1][0] * eff_scale
+        span_days = cliff_days * SCORING["SHELF_SPAN_MULT"]
+        if days_since > cliff_days and span_days > 0:
+            frac = 1.0 - (days_since - cliff_days) / span_days
+            shelf_pts = SCORING["SHELF_MAX_PTS"] * max(0.0, min(1.0, frac))
+    return rec_pts, shelf_pts
+
+
+def imdb_pts(rating, votes) -> float:
+    """The quality side: rating × 10 × vote confidence, capped at 100.
+    A missing rating is 0 — eligibility rules decide what THAT means."""
+    if rating is None:
+        return 0.0
+    return min(_num(rating) * 10.0 * _vote_confidence(votes), 100.0)
+
+
+def shelf_ramp(quality_weight) -> float:
+    """The blend tent: 0 shelf at 100% watch history, full strength from the
+    SHELF_RAMP_FULL_Q blend upward."""
+    full_q = SCORING["SHELF_RAMP_FULL_Q"]
+    return min(1.0, quality_weight / full_q) if full_q > 0 else 1.0
+
+
+def movie_retention_score(rec: dict, *, history_weight: float,
+                          quality_weight: float, max_staleness_months: float,
+                          now: float):
+    """RetentionScore for a normalized movie record — HIGHER = keep. The
+    engine's compute_retention_score delegates here, so the movie and season
+    curves live in one module and cannot drift.
+
+    Returns (score, breakdown); breakdown values are already weighted by the
+    balance weights (which sum to 1.0), so they sum to the 0–100 score.
+    Record fields read: total_play_count, last_played_at, added_at,
+    distinct_users_watched, imdb_rating, imdb_num_votes."""
+    b = {}
+    plays = max(int(_num(rec.get("total_play_count"))), 0)
+    b["usage"] = usage_pts(plays) * history_weight
+
+    users = max(int(_num(rec.get("distinct_users_watched"))), 0)
+    # Recency reads the last watch, falling back to the added date: a
+    # recently-added-but-unwatched movie still reads "fresh". Only recency
+    # benefits; frequency and users stay 0 for a never-watched movie.
+    last_played = int(_num(rec.get("last_played_at")))
+    recency_at = last_played if last_played > 0 else int(_num(rec.get("added_at")))
+    rec_pts, shelf_pts = recency_shelf_pts(recency_at, users,
+                                           max_staleness_months, now)
+    b["recency"] = rec_pts * history_weight
+    b["multi_user"] = multi_user_pts(users) * history_weight
+    b["imdb"] = imdb_pts(rec.get("imdb_rating"), rec.get("imdb_num_votes")) * quality_weight
+    b["shelf"] = shelf_pts * history_weight * shelf_ramp(quality_weight)
+    return sum(b.values()), b
 
 
 def season_retention_score(season: dict, series: dict, *,
@@ -151,12 +258,6 @@ def season_retention_score(season: dict, series: dict, *,
     than movies. Returns (score, breakdown); breakdown values are already
     weighted.
     """
-    def _num(v, default=0):
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return default
-
     b = {}
     eps = max(_num(season.get("eps")), 0.0)
     watched = max(_num(season.get("eps_watched")), 0.0)
@@ -164,35 +265,17 @@ def season_retention_score(season: dict, series: dict, *,
     if plays < 0:
         plays = watched   # pre-plays rows: each watched episode was ≥1 play
     eff_plays = (plays / eps) * max(0.0, float(watch_weight)) if eps > 0 else 0.0
-    usage = (SCORING["USAGE_MAX_PTS"]
-             * min(1.0, _math.log1p(eff_plays) / _math.log1p(SCORING["USAGE_FULL_PLAYS"])))
+    usage = usage_pts(eff_plays)
 
     season_users = season.get("users")
     users = max(int(_num(season_users if season_users is not None
                          else series.get("users"))), 0)
-    stale_scale = max_staleness_months / SCORING["RECENCY_DEFAULT_MONTHS"]
-    decay_mult = min(SCORING["USER_DECAY_MAX_MULT"],
-                     1.0 + SCORING["USER_DECAY_PER_USER"] * users)
-    eff_scale = stale_scale * decay_mult
     last_played = int(_num(season.get("last_played")))
     recency_at = (last_played if last_played > 0
                   else int(_num(season.get("added_at")))
                   or int(_num(series.get("added_at"))))
-    rec_pts = 0.0
-    shelf_pts = 0.0
-    if recency_at > 0:
-        days_since = (now - recency_at) / 86400.0
-        for max_days, pts in SCORING["RECENCY_TIERS"]:
-            if days_since <= max_days * eff_scale:
-                rec_pts = pts
-                break
-        cliff_days = SCORING["RECENCY_TIERS"][-1][0] * eff_scale
-        span_days = cliff_days * SCORING["SHELF_SPAN_MULT"]
-        if days_since > cliff_days and span_days > 0:
-            frac = 1.0 - (days_since - cliff_days) / span_days
-            shelf_pts = SCORING["SHELF_MAX_PTS"] * max(0.0, min(1.0, frac))
-
-    multi_user = min(SCORING["MULTI_USER_PTS"] * users, SCORING["MULTI_USER_MAX_PTS"])
+    rec_pts, shelf_pts = recency_shelf_pts(recency_at, users,
+                                           max_staleness_months, now)
 
     series_eps = max(_num(series.get("eps")), 0.0)
     series_watched = max(_num(series.get("eps_watched")), 0.0)
@@ -202,18 +285,8 @@ def season_retention_score(season: dict, series: dict, *,
                    if series_eps > 1 else (1.0 if series_watched > 0 else 0.0))
     bump = max(0.0, float(series_watch_bump)) * series_frac
 
-    history_raw = min(100.0, usage + rec_pts + multi_user + bump)
+    history_raw = min(100.0, usage + rec_pts + multi_user_pts(users) + bump)
     b["history"] = history_raw * history_weight
-
-    rating = series.get("rating")
-    if rating is not None:
-        conf = _vote_confidence(series.get("votes"))
-        b["imdb"] = min(float(rating) * 10.0 * conf, 100.0) * quality_weight
-    else:
-        b["imdb"] = 0.0
-
-    full_q = SCORING["SHELF_RAMP_FULL_Q"]
-    shelf_ramp = min(1.0, quality_weight / full_q) if full_q > 0 else 1.0
-    b["shelf"] = shelf_pts * history_weight * shelf_ramp
-
+    b["imdb"] = imdb_pts(series.get("rating"), series.get("votes")) * quality_weight
+    b["shelf"] = shelf_pts * history_weight * shelf_ramp(quality_weight)
     return sum(b.values()), b

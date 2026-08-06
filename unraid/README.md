@@ -1,9 +1,10 @@
 # Unraid template
 
 `mediareducer.xml` is a Docker template for Unraid. Up front it asks for the
-WebUI port and the four mounts: the two required (`/library`, `/config`) and the
-two optional read-only appdata ones that only feed Auto Detect. PUID/PGID and
-the reverse-proxy host list sit behind **Show more settings**.
+WebUI port and the five mounts: the two required (`/library`, `/config`) and
+the three optional read-only appdata ones (Tautulli, Radarr, Sonarr) that only
+feed Auto Detect. PUID/PGID and the reverse-proxy host list sit behind **Show
+more settings**.
 
 `<Repository>` tracks `ghcr.io/stencil923/mediareducer:alpha`, which
 `.github/workflows/publish.yml` pushes on a version tag:

@@ -18,7 +18,9 @@ for i in range(1, 401):
         "play_count": random.choice([0, 0, 1, 2, 5, 12]),
         "last_played": random.choice([0, 1600000000 + i * 10000]),
         "added_at": 1500000000 + i * 50000,
-        "file_size": 700_000_000 + i * 10_000_000,
+        # The REAL fixture file's bytes (make_fixtures.py writes 1024 + i):
+        # the server describing the disk truthfully, like a healthy install.
+        "file_size": 1024 + i,
         "file": f"/{folder}/Test Movie {i}/Test Movie {i}.mkv",
     })
 

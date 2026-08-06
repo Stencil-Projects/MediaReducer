@@ -49,11 +49,15 @@ def check(name, cond):
 _MODULES = {p.name for p in _ROOT.glob("*.py")}
 # run_issues.py is listed but deliberately NOT watched: it is the wording for
 # warnings and failures, so editing a label changes what a run SAYS, never what
-# it stored or how a movie scored. A new module here is a prompt to make that
+# it stored or how a movie scored. shared.py is likewise not hashed: its
+# deficit/delay/rung/log-line mechanics are re-derived from marked_at and the
+# config on every pass, so a change there changes future decisions, never the
+# meaning of already-stored rows. A new module here is a prompt to make that
 # same call, which is the whole point of pinning the set.
 check("the project's module set is the expected one",
       _MODULES == {"app.py", "cli.py", "db.py", "engine.py", "entrypoint.py",
-                   "notify.py", "run_issues.py", "scoring_constants.py"})
+                   "notify.py", "run_issues.py", "scoring_constants.py",
+                   "shared.py"})
 
 # The container must ship every one of them. run_issues.py existed for a day
 # without being in the Dockerfile's COPY line: every test passed (they run from

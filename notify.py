@@ -798,6 +798,28 @@ def build_run_message(cfg, report):
         else:
             body_parts.append("Nothing was removed.")
 
+    # TV block: the season pass that fired with this run. Absent key = TV
+    # cleanup is off or disarmed, and the block says nothing.
+    tv = report.get("tv_pass")
+    if isinstance(tv, dict):
+        if tv.get("aborted"):
+            body_parts.append(f"TV pass: aborted fail-closed — {tv['aborted']}")
+        else:
+            bits = []
+            if tv.get("deleted_seasons"):
+                bits.append(f"deleted {int(tv['deleted_seasons'])} season(s) "
+                            f"({_fmt_size(tv.get('freed_bytes'))})")
+            if tv.get("marked_new"):
+                bits.append(f"marked {int(tv['marked_new'])} new season(s)")
+            if tv.get("held_by_delay"):
+                bits.append(f"{int(tv['held_by_delay'])} waiting out the delay")
+            if tv.get("skipped"):
+                bits.append(f"{int(tv['skipped'])} SKIPPED — see the log")
+            if not bits:
+                total = int(tv.get("marked_total") or 0)
+                bits.append(f"{total} season(s) marked" if total else "nothing to do")
+            body_parts.append("TV pass: " + " · ".join(bits))
+
     # Storage block: where the library stands after the run, plus the armed
     # limits — the notification's version of the dashboard's storage card.
     st = report.get("storage") or {}
