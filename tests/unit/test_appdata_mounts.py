@@ -110,6 +110,20 @@ d = verify(TAUTULLI_APPDATA_DIR=_appdata(
 check("a Tautulli config with no Plex token claims Tautulli only",
       d["tautulli"]["keys"] == ["Tautulli"])
 
+# ── Sonarr: the same Servarr config.xml contract as Radarr ──────────────────
+d = verify(SONARR_APPDATA_DIR=_appdata(
+    "son", {"config.xml": "<Config><ApiKey>SONKEY</ApiKey></Config>"}))
+check("a mounted Sonarr config reports its key",
+      d["sonarr"]["mounted"] is True and d["sonarr"]["keys"] == ["Sonarr"])
+check("a key-less Sonarr config reports NO key",
+      verify(SONARR_APPDATA_DIR=_appdata(
+          "son_empty", {"config.xml": "<Config></Config>"}))["sonarr"]["keys"] == [])
+check("an absent Sonarr mount is not an error, just unmounted",
+      verify(SONARR_APPDATA_DIR=_appdata("son_gone"))["sonarr"]["mounted"] is False)
+# Leave the mounted one in place so the parity check below exercises the
+# detected branch for Sonarr rather than absent-on-both-sides.
+A.SONARR_APPDATA_DIR = _appdata("son", {"config.xml": "<Config><ApiKey>SONKEY</ApiKey></Config>"})
+
 # A card may never claim a key Auto Detect wouldn't fill — same source, so the
 # button and the badge cannot disagree about what is available.
 detected = A._autodetected_connection_values()
@@ -117,7 +131,8 @@ d = verify()
 check("the card's claim matches what Auto Detect would actually fill",
       (("Tautulli" in d["tautulli"]["keys"]) == bool(detected.get("tautulli_key"))
        and ("Plex" in d["tautulli"]["keys"]) == bool(detected.get("plex_token"))
-       and (d["radarr"]["keys"] != []) == bool(detected.get("radarr_key"))))
+       and (d["radarr"]["keys"] != []) == bool(detected.get("radarr_key"))
+       and (d["sonarr"]["keys"] != []) == bool(detected.get("sonarr_key"))))
 
 # ── No Jellyfin mount exists at all ─────────────────────────────────────────
 check("there is no Jellyfin appdata mount to report on", "jellyfin" not in d)

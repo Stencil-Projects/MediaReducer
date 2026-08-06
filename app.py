@@ -51,13 +51,13 @@ import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone as _utc_tz
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from scoring_constants import SCORING, FINGERPRINT as SCORING_FINGERPRINT
+from scoring_constants import SCORING, FINGERPRINT as SCORING_FINGERPRINT, season_retention_score
 from flask import (Flask, g, has_request_context, jsonify, render_template, request,
                    send_from_directory)
 
@@ -108,6 +108,7 @@ def _root_from_env(var: str, default: str) -> str:
 FILESYSTEM_CHECK_PATH = _root_from_env("MEDIAREDUCER_LIBRARY", "/library")
 TAUTULLI_APPDATA_DIR  = _root_from_env("MEDIAREDUCER_TAUTULLI_APPDATA", "/tautulli")
 RADARR_APPDATA_DIR    = _root_from_env("MEDIAREDUCER_RADARR_APPDATA", "/radarr")
+SONARR_APPDATA_DIR    = _root_from_env("MEDIAREDUCER_SONARR_APPDATA", "/sonarr")
 
 # Single background clock. Each tick runs an automatic cleanup when Automatic Cleanup is
 # enabled, else a quiet Summary/debug_info refresh so dashboard disk/library
@@ -117,7 +118,8 @@ RADARR_APPDATA_DIR    = _root_from_env("MEDIAREDUCER_RADARR_APPDATA", "/radarr")
 SCHEDULE_INTERVAL_MINUTES = 15
 CONNECTION_CONFIG_FIELDS = (
     "TAUTULLI_URL", "TAUTULLI_API_KEY", "PLEX_URL", "PLEX_TOKEN",
-    "RADARR_URL", "RADARR_API_KEY", "JELLYFIN_URL", "JELLYFIN_API_KEY",
+    "RADARR_URL", "RADARR_API_KEY", "SONARR_URL", "SONARR_API_KEY",
+    "JELLYFIN_URL", "JELLYFIN_API_KEY",
 )
 CONNECTION_ONBOARDING_SEEN_KEY = "_CONNECTIONS_ONBOARDING_SEEN"
 CONNECTION_EVER_CONFIGURED_KEY = "_CONNECTIONS_EVER_CONFIGURED"
@@ -612,6 +614,8 @@ _CONFIG_NUM_RULES = (
     # clamp reads it as None); the GUI writes null, not 0.
     ("MAX_IMDB_RATING", "blank", lambda n: 0 <= n <= 10, "must be a number from 0 to 10, or null"),
     ("NEAR_TIE_PTS", "blank", lambda n: 0.5 <= n <= 25, "must be a number from 0.5 to 25 points, or null"),
+    ("TV_SERIES_WATCH_BUMP", None, lambda n: 0 <= n <= 25, "must be a number of points from 0 to 25"),
+    ("TV_WATCH_WEIGHT", None, lambda n: 100 <= n <= 200, "must be a percentage from 100 to 200"),
     ("MAX_STALENESS_MONTHS", None, lambda n: 1 <= n <= 120, "must be a number of months from 1 to 120"),
 )
 
@@ -656,7 +660,9 @@ def _config_file_issues(saved: dict) -> list[dict]:
             bad("REDLINE_GB", "must be lower than HEADROOM_GB (or untick Headroom)")
     for key in ("SKIP_UNPLAYED_MOVIES", "PROTECT_JELLYFIN_FAVORITES", "USE_PLEX",
                 "USE_JELLYFIN", "KEEP_INTERRUPTED_LOGS", "DEBUG_MODE",
-                "REDLINE_ONLY_MODE", "PAUSE_CLEANUP_ON_STARTUP"):
+                "REDLINE_ONLY_MODE", "PAUSE_CLEANUP_ON_STARTUP",
+                "MOVIE_CLEANUP_ENABLED", "TV_CLEANUP_ENABLED",
+                "SONARR_CLEANUP_ENABLED"):
         if key in saved and not isinstance(saved[key], bool):
             bad(key, "must be true or false")
     # "off" = the scheduler is fully paused (no ticks do anything); "paused" =
@@ -684,14 +690,14 @@ def _config_file_issues(saved: dict) -> list[dict]:
         if not isinstance(v, list) or not v or any(
                 not isinstance(x, str) or not x.strip().startswith(".") for x in v):
             bad("MOVIE_EXTENSIONS", 'must be a list of extensions like ".mkv"')
-    for key in ("TAUTULLI_URL", "PLEX_URL", "RADARR_URL", "JELLYFIN_URL"):
+    for key in ("TAUTULLI_URL", "PLEX_URL", "RADARR_URL", "SONARR_URL", "JELLYFIN_URL"):
         if key in saved:
             v = saved[key]
             if not isinstance(v, str):
                 bad(key, "must be a URL string (may be blank)")
             elif v.strip() and not urlparse(_normalize_service_url(v)).netloc:
                 bad(key, "must be a valid URL, or blank")
-    for key in ("TAUTULLI_API_KEY", "PLEX_TOKEN", "RADARR_API_KEY", "JELLYFIN_API_KEY"):
+    for key in ("TAUTULLI_API_KEY", "PLEX_TOKEN", "RADARR_API_KEY", "SONARR_API_KEY", "JELLYFIN_API_KEY"):
         if key in saved and not isinstance(saved[key], str):
             bad(key, "must be a string (may be blank)")
     for key in ("PROTECTED_COLLECTIONS", "JELLYFIN_PROTECTED_COLLECTIONS"):
@@ -797,6 +803,14 @@ def _build_config() -> tuple[dict, list]:
     cfg["PROTECT_JELLYFIN_FAVORITES"] = _coerce_bool(cfg.get("PROTECT_JELLYFIN_FAVORITES"))
     cfg["USE_PLEX"] = _coerce_bool(cfg.get("USE_PLEX"))
     cfg["USE_JELLYFIN"] = _coerce_bool(cfg.get("USE_JELLYFIN"))
+    # Absent means ON for both per-type switches: deleting movies is the shipped
+    # behavior, and a config written before the keys existed must not read as
+    # someone having turned a media type off.
+    cfg["MOVIE_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("MOVIE_CLEANUP_ENABLED", True), default=True)
+    cfg["TV_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("TV_CLEANUP_ENABLED", True), default=True)
+    # Absent means ON: unmonitoring a deleted season is the shipped behavior
+    # (a deleted-but-monitored season is just re-downloaded).
+    cfg["SONARR_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("SONARR_CLEANUP_ENABLED", True), default=True)
     # Absent means ON: the safety demote is the shipped behaviour, and a config
     # missing the key must not read as someone having turned it off.
     cfg["PAUSE_CLEANUP_ON_STARTUP"] = _coerce_bool(
@@ -812,6 +826,7 @@ def _build_config() -> tuple[dict, list]:
     cfg["CHECK_PATH"] = FILESYSTEM_CHECK_PATH
     cfg["TAUTULLI_APPDATA"] = TAUTULLI_APPDATA_DIR
     cfg["RADARR_APPDATA"] = RADARR_APPDATA_DIR
+    cfg["SONARR_APPDATA"] = SONARR_APPDATA_DIR
     # Derived keys that no longer exist. They were written into config.json by
     # every save while they DID exist, so dropping them here is what stops a
     # fossil showing up in `mr config show` as though it were a real setting.
@@ -2343,6 +2358,20 @@ def run_script(mode_override: str | None = None, manual: bool = False,
             # here, after the run state is cleared: the sync deliberately does
             # nothing while a run holds the store mid-write.
             _sync_scheduler_mode_with_db()
+            # A completed scan is also the moment to refresh the TV inventory:
+            # "run Simulate" is how the library gets rebuilt in this app, so TV
+            # follows the same gesture. It also repairs the code-change case —
+            # ensure_code_current wipes EVERY snapshot row including TV, and the
+            # Simulate that rebuilds the movies would otherwise leave the TV
+            # view empty until some unrelated config save. Own thread: the
+            # media-server inventory plus the per-user watch sweeps are seconds
+            # of HTTP, and nothing here may hold up the run-end path.
+            _tv_cfg = load_config()
+            if _tv_inventory_configured(_tv_cfg):
+                threading.Thread(
+                    target=lambda: _refresh_tv_inventory(_tv_cfg),
+                    daemon=True, name="tv-inventory-refresh",
+                ).start()
             if _is_cleanup_mode(_effective_mode):
                 run_summary()
             else:
@@ -2650,7 +2679,7 @@ def run_reconcile(*, refetch: bool, trigger: str) -> None:
 # reconcile re-fetches the live protected/favorite sets first.
 _RECONCILE_PURE_KEYS = (
     "SCORE_BALANCE", "GRACE_PERIOD_DAYS", "MAX_IMDB_RATING", "NEAR_TIE_PTS",
-    "MAX_STALENESS_MONTHS", "SKIP_UNPLAYED_MOVIES",
+    "MAX_STALENESS_MONTHS", "SKIP_UNPLAYED_MOVIES", "MOVIE_CLEANUP_ENABLED",
     "HEADROOM_GB", "REDLINE_GB", "REDLINE_ONLY_MODE", "MAX_LIBRARY_GB",
 )
 _RECONCILE_REFETCH_KEYS = (
@@ -3169,6 +3198,8 @@ def _configured_connection_values(cfg: dict | None = None) -> dict:
         "plex_token": str(cfg.get("PLEX_TOKEN") or "").strip(),
         "radarr_url": str(cfg.get("RADARR_URL") or "").strip(),
         "radarr_key": str(cfg.get("RADARR_API_KEY") or "").strip(),
+        "sonarr_url": str(cfg.get("SONARR_URL") or "").strip(),
+        "sonarr_key": str(cfg.get("SONARR_API_KEY") or "").strip(),
         "jellyfin_url": str(cfg.get("JELLYFIN_URL") or "").strip(),
         "jellyfin_key": str(cfg.get("JELLYFIN_API_KEY") or "").strip(),
     }
@@ -3207,6 +3238,8 @@ def _autodetected_connection_values(cfg: dict | None = None) -> dict:
         "plex_token": "",
         "radarr_url": "",
         "radarr_key": "",
+        "sonarr_url": "",
+        "sonarr_key": "",
         "jellyfin_url": "",
         "jellyfin_key": "",
     }
@@ -3251,6 +3284,19 @@ def _autodetected_connection_values(cfg: dict | None = None) -> dict:
         except Exception:
             pass
 
+    # Same config.xml layout as Radarr — both are Servarr apps.
+    sonarr_xml = _find_appdata_file(SONARR_APPDATA_DIR, "config.xml")
+    if sonarr_xml:
+        try:
+            key = ET.parse(sonarr_xml).getroot().findtext("ApiKey")
+            if key:
+                detected["sonarr_key"] = key
+                if detected.get("host"):
+                    detected["sonarr_url"] = (
+                        f"http://{detected['host']}:{_SERVICE_DEFAULT_PORTS['SONARR_URL']}")
+        except Exception:
+            pass
+
     return detected
 
 
@@ -3262,6 +3308,8 @@ CONNECTION_FORM_FIELD_MAP = {
     "PLEX_TOKEN": "plex_token",
     "RADARR_URL": "radarr_url",
     "RADARR_API_KEY": "radarr_key",
+    "SONARR_URL": "sonarr_url",
+    "SONARR_API_KEY": "sonarr_key",
     "JELLYFIN_URL": "jellyfin_url",
     "JELLYFIN_API_KEY": "jellyfin_key",
 }
@@ -3272,6 +3320,7 @@ _URL_KEY_FIELD_PAIRS = {
     "TAUTULLI_URL": "TAUTULLI_API_KEY",
     "PLEX_URL": "PLEX_TOKEN",
     "RADARR_URL": "RADARR_API_KEY",
+    "SONARR_URL": "SONARR_API_KEY",
     "JELLYFIN_URL": "JELLYFIN_API_KEY",
 }
 
@@ -3281,6 +3330,7 @@ _GENERIC_URL_PLACEHOLDERS = {
     "TAUTULLI_URL": "http://SERVER-IP:8181",
     "PLEX_URL": "http://SERVER-IP:32400",
     "RADARR_URL": "http://SERVER-IP:7878",
+    "SONARR_URL": "http://SERVER-IP:8989",
     "JELLYFIN_URL": "http://SERVER-IP:8096",
 }
 
@@ -3299,6 +3349,7 @@ _SERVICE_DEFAULT_PORTS = {
     "TAUTULLI_URL": 8181,
     "PLEX_URL": 32400,
     "RADARR_URL": 7878,
+    "SONARR_URL": 8989,
     "JELLYFIN_URL": 8096,
 }
 
@@ -3352,7 +3403,8 @@ def _connection_url_defaults(cfg: dict | None = None) -> dict:
     req_host = _request_lan_host()
     out = {}
     for field, det_key in (("TAUTULLI_URL", "tautulli_url"), ("PLEX_URL", "plex_url"),
-                           ("RADARR_URL", "radarr_url"), ("JELLYFIN_URL", "jellyfin_url")):
+                           ("RADARR_URL", "radarr_url"), ("SONARR_URL", "sonarr_url"),
+                           ("JELLYFIN_URL", "jellyfin_url")):
         det_host = _usable_detected_host(det.get(det_key) or "")
         # Always the documented port; never one read out of appdata.
         port = _SERVICE_DEFAULT_PORTS[field]
@@ -3377,6 +3429,1195 @@ def _connection_field_values(cfg: dict | None = None) -> dict:
     return {field: str(conn.get(key) or "") for field, key in CONNECTION_FORM_FIELD_MAP.items()}
 
 
+def _new_tv_row(*, title, year, path, seasons, added_at, status, source_id=None,
+                jf_source_id=None, imdb_id=None) -> dict:
+    """One TV snapshot row from whatever media server supplied the facts. The
+    path is in the SERVER's filesystem namespace; _resolve_tv_scope replaces
+    it with the /library-resolved path (or None) before the row is stored."""
+    seasons = sorted((s for s in seasons if s.get("eps")), key=lambda x: x["n"])
+    size = sum(int(s.get("size_bytes") or 0) for s in seasons)
+    return {
+        "media_type": "tv",
+        "path": str(path or "") or None,
+        "tv_episodes": sum(int(s.get("eps") or 0) for s in seasons),
+        "tv_episodes_watched": 0,
+        "tv_seasons": seasons,
+        "title": str(title or ""),
+        "year": year,
+        "size_gb": round(size / 1e9, 2),
+        "size_bytes": size,
+        "added_at": added_at or 0,
+        "tv_status": status,
+        "source_id": source_id,
+        "jf_source_id": jf_source_id,
+        # The media server knows the series' IMDb id; rating/votes are filled
+        # from the on-disk ratings dataset by _annotate_tv_imdb so seasons
+        # score on the same IMDb axis movies do.
+        "imdb_id": imdb_id,
+        "plays": 0, "users": 0, "rating": None, "votes": 0, "last_played": 0,
+    }
+
+
+def _new_season_bucket(n: int) -> dict:
+    return {"n": n, "eps": 0, "size_bytes": 0,
+            "eps_watched": 0, "last_played": 0, "plays": 0, "users": 0}
+
+
+def _jellyfin_series_inventory(url: str, key: str) -> list | None:
+    """Jellyfin's TV libraries as snapshot rows (media_type 'tv'), or None
+    when the queries fail. Read-only inventory: title, year, per-season
+    episode counts and sizes on disk, added date, continuing/ended status and
+    the IMDb id — the facts the Filtering page shows and season scoring
+    builds on. Two admin queries: every series, then every episode with its
+    media sources (sizes) and season number."""
+    try:
+        series = (_jellyfin_get(url, key, "/Items", {
+            "IncludeItemTypes": "Series", "Recursive": "true",
+            "Fields": "Path,ProviderIds,DateCreated,Status,ProductionYear",
+        }, timeout=30) or {}).get("Items")
+        episodes = (_jellyfin_get(url, key, "/Items", {
+            "IncludeItemTypes": "Episode", "Recursive": "true",
+            "Fields": "MediaSources,ParentIndexNumber,SeriesId",
+        }, timeout=60) or {}).get("Items")
+        if not isinstance(series, list) or not isinstance(episodes, list):
+            return None
+    except Exception:
+        return None
+    per: dict[str, dict[int, dict]] = {}
+    for it in episodes:
+        if not isinstance(it, dict):
+            continue
+        sid = str(it.get("SeriesId") or "")
+        try:
+            n = int(it.get("ParentIndexNumber"))
+        except (TypeError, ValueError):
+            continue
+        size = 0
+        for ms in it.get("MediaSources") or []:
+            if isinstance(ms, dict):
+                try:
+                    size += int(ms.get("Size") or 0)
+                except (TypeError, ValueError):
+                    pass
+        b = per.setdefault(sid, {}).setdefault(n, _new_season_bucket(n))
+        b["eps"] += 1
+        b["size_bytes"] += size
+    rows = []
+    for s in series:
+        if not isinstance(s, dict) or not s.get("Id") or not s.get("Name"):
+            continue
+        seasons = list((per.get(str(s["Id"])) or {}).values())
+        if not any(x["size_bytes"] > 0 for x in seasons):
+            continue   # nothing of this series on disk
+        added = 0
+        raw_added = str(s.get("DateCreated") or "")
+        if raw_added:
+            try:
+                added = int(datetime.fromisoformat(raw_added.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                added = 0
+        providers = s.get("ProviderIds") or {}
+        imdb = next((str(v) for k, v in providers.items()
+                     if str(k).lower() == "imdb" and v), None)
+        rows.append(_new_tv_row(
+            title=s["Name"], year=s.get("ProductionYear"), path=s.get("Path"),
+            seasons=seasons, added_at=added,
+            status=(str(s.get("Status") or "").lower() or None),
+            jf_source_id=f"jellyfin:{s['Id']}", imdb_id=imdb))
+    return rows
+
+
+def _plex_series_inventory(conn: dict) -> list | None:
+    """Plex's TV libraries as snapshot rows, or None when the queries fail.
+    Per show section: every show (title, year, added date, folder location,
+    IMDb guid), then every EPISODE with its media parts, so seasons carry
+    real on-disk sizes. Plex does not state continuing/ended, so tv_status
+    stays None — the season plan shields the latest season of any series not
+    known to be ended."""
+    url, token = conn.get("plex_url"), conn.get("plex_token")
+    if not (url and token):
+        return None
+    try:
+        secs = _plex_get(url, token, "/library/sections", timeout=10) or {}
+        rows_by_rk: dict[str, dict] = {}
+        for sec in (secs.get("MediaContainer") or {}).get("Directory") or []:
+            if not isinstance(sec, dict) or sec.get("type") != "show":
+                continue
+            shows = _plex_get(url, token,
+                              f"/library/sections/{sec.get('key')}/all?type=2&includeGuids=1",
+                              timeout=30) or {}
+            for sh in (shows.get("MediaContainer") or {}).get("Metadata") or []:
+                if not isinstance(sh, dict) or not sh.get("ratingKey") or not sh.get("title"):
+                    continue
+                imdb = next((str(g.get("id"))[7:] for g in _as_list(sh.get("Guid"))
+                             if isinstance(g, dict)
+                             and str(g.get("id") or "").startswith("imdb://")), None)
+                loc = next((str(l.get("path")) for l in _as_list(sh.get("Location"))
+                            if isinstance(l, dict) and l.get("path")), None)
+                try:
+                    added = int(sh.get("addedAt") or 0)
+                except (TypeError, ValueError):
+                    added = 0
+                rows_by_rk[str(sh["ratingKey"])] = {
+                    "title": sh["title"], "year": sh.get("year"),
+                    "path": loc, "added_at": added, "imdb": imdb,
+                    "rk": str(sh["ratingKey"]), "seasons": {},
+                }
+            episodes = _plex_get(url, token,
+                                 f"/library/sections/{sec.get('key')}/all?type=4",
+                                 timeout=60) or {}
+            for ep in (episodes.get("MediaContainer") or {}).get("Metadata") or []:
+                if not isinstance(ep, dict):
+                    continue
+                show = rows_by_rk.get(str(ep.get("grandparentRatingKey") or ""))
+                if show is None:
+                    continue
+                try:
+                    n = int(ep.get("parentIndex"))
+                except (TypeError, ValueError):
+                    continue
+                size = 0
+                first_file = None
+                for m in _as_list(ep.get("Media")):
+                    for p in _as_list((m or {}).get("Part")):
+                        if isinstance(p, dict):
+                            try:
+                                size += int(p.get("size") or 0)
+                            except (TypeError, ValueError):
+                                pass
+                            first_file = first_file or str(p.get("file") or "") or None
+                b = show["seasons"].setdefault(n, _new_season_bucket(n))
+                b["eps"] += 1
+                b["size_bytes"] += size
+                # A show with no Location still needs a folder: derive the
+                # series dir from an episode file (file → season dir → series).
+                if not show["path"] and first_file:
+                    parent = PurePosixPath(first_file).parent
+                    show["path"] = str(parent.parent if parent.parent.name else parent)
+    except Exception:
+        return None
+    rows = []
+    for show in rows_by_rk.values():
+        seasons = list(show["seasons"].values())
+        if not any(x["size_bytes"] > 0 for x in seasons):
+            continue
+        rows.append(_new_tv_row(
+            title=show["title"], year=show["year"], path=show["path"],
+            seasons=seasons, added_at=show["added_at"], status=None,
+            source_id=f"plex:{show['rk']}", imdb_id=show["imdb"]))
+    return rows
+
+
+def _merge_tv_sources(jf_rows: list | None, px_rows: list | None) -> list:
+    """One inventory from up to two servers watching the same files, joined by
+    normalized title like every other TV fact. Sizes measure the same files,
+    so a disagreement keeps the larger measurement; identity from both sides
+    is kept (source_id = Plex, jf_source_id = Jellyfin) so the deletion pass
+    can ask either server for the season's file list."""
+    by_title: dict[str, dict] = {}
+    for r in (px_rows or []):
+        by_title[_norm_series_title(r["title"])] = r
+    for r in (jf_rows or []):
+        k = _norm_series_title(r["title"])
+        base = by_title.get(k)
+        if base is None:
+            by_title[k] = r
+            continue
+        base["jf_source_id"] = r.get("jf_source_id")
+        base["tv_status"] = base.get("tv_status") or r.get("tv_status")
+        base["imdb_id"] = base.get("imdb_id") or r.get("imdb_id")
+        base["added_at"] = base.get("added_at") or r.get("added_at")
+        base["path"] = base.get("path") or r.get("path")
+        theirs = {s["n"]: s for s in r.get("tv_seasons") or []}
+        for s in base.get("tv_seasons") or []:
+            other = theirs.pop(s["n"], None)
+            if other:
+                s["size_bytes"] = max(s["size_bytes"], other["size_bytes"])
+                s["eps"] = max(s["eps"], other["eps"])
+        base["tv_seasons"] = sorted((base.get("tv_seasons") or []) + list(theirs.values()),
+                                    key=lambda x: x["n"])
+        base["size_bytes"] = sum(s["size_bytes"] for s in base["tv_seasons"])
+        base["size_gb"] = round(base["size_bytes"] / 1e9, 2)
+        base["tv_episodes"] = sum(s["eps"] for s in base["tv_seasons"])
+    rows = list(by_title.values())
+    rows.sort(key=lambda r: (-(r.get("size_bytes") or 0), r.get("title") or ""))
+    return rows
+
+
+def _tv_inventory_configured(cfg: dict) -> bool:
+    """A media server that can supply the TV inventory is selected and has
+    connection values. Sonarr plays no part: it is optional and cleanup-only
+    (the unmonitor step)."""
+    conn = _effective_connection_values(cfg)
+    return bool(
+        (bool(cfg.get("USE_JELLYFIN")) and conn.get("jellyfin_url") and conn.get("jellyfin_key"))
+        or (bool(cfg.get("USE_PLEX")) and conn.get("plex_url") and conn.get("plex_token")))
+
+
+def _tv_inventory_rows(cfg: dict, strict: bool = False) -> list | None:
+    """The TV inventory from the selected media servers — Jellyfin and/or
+    Plex, title-merged. strict=False: a server that fails contributes
+    nothing; None only when NO server contributed. strict=True (the deletion
+    path): every configured server must answer or the call raises — deletion
+    decisions are never made from a partial inventory."""
+    conn = _effective_connection_values(cfg)
+    jf_rows = px_rows = None
+    if bool(cfg.get("USE_JELLYFIN")) and conn.get("jellyfin_url") and conn.get("jellyfin_key"):
+        jf_rows = _jellyfin_series_inventory(conn["jellyfin_url"], conn["jellyfin_key"])
+        if jf_rows is None and strict:
+            raise RuntimeError("Jellyfin's TV inventory did not answer")
+    if bool(cfg.get("USE_PLEX")) and conn.get("plex_url") and conn.get("plex_token"):
+        px_rows = _plex_series_inventory(conn)
+        if px_rows is None and strict:
+            raise RuntimeError("Plex's TV inventory did not answer")
+    if jf_rows is None and px_rows is None:
+        return None
+    return _merge_tv_sources(jf_rows, px_rows)
+
+
+def _annotate_tv_imdb(rows: list) -> None:
+    """Fill each TV row's rating/votes from the on-disk IMDb ratings dataset,
+    joined by the imdb_id the media server supplies. One streaming pass over
+    the TSV for the whole inventory; a missing dataset or unknown id leaves
+    rating None, which the scorer treats exactly as it does an unrated
+    movie."""
+    wanted = {}
+    for r in rows:
+        tid = str(r.get("imdb_id") or "").strip()
+        if tid:
+            wanted.setdefault(tid, []).append(r)
+    if not wanted:
+        return
+    try:
+        with open(imdb_ratings_path(), encoding="utf-8") as f:
+            for line in f:
+                tid, _, rest = line.partition("\t")
+                targets = wanted.get(tid)
+                if not targets:
+                    continue
+                parts = rest.rstrip("\n").split("\t")
+                try:
+                    rating, votes = float(parts[0]), int(parts[1])
+                except (IndexError, TypeError, ValueError):
+                    continue
+                for r in targets:
+                    r["rating"], r["votes"] = rating, votes
+    except OSError:
+        return   # no dataset on disk — series stay unrated, never an error
+
+
+def _norm_series_title(title) -> str:
+    """A join key for one series named by three systems. Sonarr, Tautulli and
+    Jellyfin all carry the show's display title but disagree on punctuation and
+    case, so the key is lowercased alphanumerics with runs of everything else
+    collapsed to single spaces."""
+    return re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).strip()
+
+
+def _new_series_agg() -> dict:
+    # seasons: season number -> {"eps": set of episode ids, "last": epoch,
+    #                            "plays": total play count, "users": set}
+    return {"plays": 0, "users": set(), "last_played": 0, "eps": set(), "seasons": {}}
+
+
+def _season_bucket(agg: dict, season_number) -> dict | None:
+    try:
+        n = int(season_number)
+    except (TypeError, ValueError):
+        return None
+    return agg["seasons"].setdefault(n, {"eps": set(), "last": 0,
+                                         "plays": 0, "users": set()})
+
+
+def _tautulli_series_watch(conn: dict) -> dict:
+    """Per-series watch facts from Tautulli's episode history, keyed by
+    normalized title: plays, distinct users, distinct episodes, last watched.
+    Swept page by page the way the movie viewer count is, with the same
+    recordsFiltered termination and page backstop."""
+    out: dict[str, dict] = {}
+    start = 0
+    for _page in range(1000):
+        data = _tautulli_api_request(conn, "get_history", timeout=15,
+                                     media_type="episode", length=1000, start=start)
+        rows = (data or {}).get("data") or []
+        if not rows:
+            break
+        for r in rows:
+            if not isinstance(r, dict) or not r.get("grandparent_title"):
+                continue
+            agg = out.setdefault(_norm_series_title(r["grandparent_title"]), _new_series_agg())
+            agg["plays"] += 1
+            user = r.get("user_id") if r.get("user_id") is not None else r.get("user")
+            if user is not None and str(user).strip():
+                agg["users"].add(str(user))
+            ep = r.get("rating_key")
+            if ep is not None:
+                agg["eps"].add(str(ep))
+            try:
+                when = int(r.get("date") or 0)
+            except (TypeError, ValueError):
+                when = 0
+            agg["last_played"] = max(agg["last_played"], when)
+            bucket = _season_bucket(agg, r.get("parent_media_index"))
+            if bucket is not None:
+                if ep is not None:
+                    bucket["eps"].add(str(ep))
+                bucket["last"] = max(bucket["last"], when)
+                bucket["plays"] += 1
+                if user is not None and str(user).strip():
+                    bucket["users"].add(str(user))
+        start += len(rows)
+        total = (data or {}).get("recordsFiltered")
+        if isinstance(total, int) and start >= total:
+            break
+    return out
+
+
+def _jellyfin_series_watch(url: str, key: str, strict: bool = False) -> dict:
+    """Per-series watch facts from Jellyfin: every user's played episodes,
+    aggregated by series title. One Items query per user, like the movie
+    per-user sweep. strict=True (the deletion path) raises on a failed
+    favorites query instead of shrugging — one user's unreadable favorites
+    must never read as that user having none."""
+    out: dict[str, dict] = {}
+    favorites: set[str] = set()
+    users = _jellyfin_get(url, key, "/Users", timeout=15) or []
+    for u in users:
+        uid = str((u or {}).get("Id") or "")
+        if not uid:
+            continue
+        # A series ANY user favorited is protected, same as movie favorites.
+        try:
+            favs = _jellyfin_get(url, key, f"/Users/{uid}/Items", {
+                "IncludeItemTypes": "Series", "Recursive": "true",
+                "Filters": "IsFavorite",
+            }, timeout=20) or {}
+            for it in favs.get("Items") or []:
+                if isinstance(it, dict) and it.get("Name"):
+                    favorites.add(_norm_series_title(it["Name"]))
+        except Exception:
+            if strict:
+                raise RuntimeError("a Jellyfin favorites query did not answer")
+        data = _jellyfin_get(url, key, f"/Users/{uid}/Items", {
+            "IncludeItemTypes": "Episode", "Recursive": "true",
+            "Filters": "IsPlayed", "Fields": "SeriesName,ParentIndexNumber",
+        }, timeout=30) or {}
+        for it in data.get("Items") or []:
+            if not isinstance(it, dict) or not it.get("SeriesName"):
+                continue
+            agg = out.setdefault(_norm_series_title(it["SeriesName"]), _new_series_agg())
+            ud = it.get("UserData") or {}
+            try:
+                it_plays = max(1, int(ud.get("PlayCount") or 0))
+            except (TypeError, ValueError):
+                it_plays = 1
+            agg["plays"] += it_plays
+            agg["users"].add(uid)
+            if it.get("Id") is not None:
+                agg["eps"].add(str(it["Id"]))
+            lp = 0
+            raw_lp = str(ud.get("LastPlayedDate") or "")
+            if raw_lp:
+                try:
+                    lp = int(datetime.fromisoformat(raw_lp.replace("Z", "+00:00")).timestamp())
+                    agg["last_played"] = max(agg["last_played"], lp)
+                except ValueError:
+                    lp = 0
+            bucket = _season_bucket(agg, it.get("ParentIndexNumber"))
+            if bucket is not None:
+                if it.get("Id") is not None:
+                    bucket["eps"].add(str(it["Id"]))
+                bucket["last"] = max(bucket["last"], lp)
+                bucket["plays"] += it_plays
+                bucket["users"].add(uid)
+    return out, favorites
+
+
+def _plex_protected_series_titles(conn: dict, names) -> set:
+    """Normalized titles of every series inside the named Plex collections,
+    from the SHOW sections. The movie side protects by file path; series
+    protection joins by title like everything else TV."""
+    url, token = conn.get("plex_url"), conn.get("plex_token")
+    if not (url and token and names):
+        return set()
+    wanted = {str(n) for n in names}
+    out: set = set()
+    data = _plex_get(url, token, "/library/sections", timeout=10) or {}
+    for sec in (data.get("MediaContainer") or {}).get("Directory") or []:
+        if not isinstance(sec, dict) or sec.get("type") != "show":
+            continue
+        cols = _plex_get(url, token,
+                         f"/library/sections/{sec.get('key')}/collections", timeout=10) or {}
+        for col in (cols.get("MediaContainer") or {}).get("Metadata") or []:
+            if not isinstance(col, dict) or str(col.get("title") or "") not in wanted:
+                continue
+            kids = _plex_get(url, token,
+                             f"/library/collections/{col.get('ratingKey')}/children",
+                             timeout=15) or {}
+            for kid in (kids.get("MediaContainer") or {}).get("Metadata") or []:
+                if isinstance(kid, dict) and kid.get("title"):
+                    out.add(_norm_series_title(kid["title"]))
+    return out
+
+
+def _jellyfin_protected_series_titles(url: str, key: str, names) -> set:
+    """Normalized titles of every SERIES inside the named Jellyfin box sets."""
+    if not names:
+        return set()
+    wanted = {str(n) for n in names}
+    out: set = set()
+    data = _jellyfin_get(url, key, "/Items", {
+        "IncludeItemTypes": "BoxSet", "Recursive": "true"}, timeout=15) or {}
+    for box in data.get("Items") or []:
+        if not isinstance(box, dict) or str(box.get("Name") or "") not in wanted \
+                or not box.get("Id"):
+            continue
+        kids = _jellyfin_get(url, key, "/Items", {"ParentId": box["Id"]}, timeout=15) or {}
+        for kid in kids.get("Items") or []:
+            if isinstance(kid, dict) and kid.get("Type") == "Series" and kid.get("Name"):
+                out.add(_norm_series_title(kid["Name"]))
+    return out
+
+
+def _annotate_tv_watch(rows: list, cfg: dict, strict: bool = False) -> None:
+    """Fill each TV row's plays/users/last_played and episodes-watched from
+    whichever servers are selected and answering. Counts take the MAX across
+    servers, never the sum: both servers watch the same audience, and someone
+    who uses both would otherwise be counted twice — the same rule the movie
+    viewer count follows.
+
+    strict=False (the inventory refresh): a server that fails to answer
+    contributes nothing, and rows it would have annotated keep zeros rather
+    than blocking the refresh. strict=True (the deletion path): EVERY
+    configured source must answer or the call raises — watch history shields
+    mid-watch seasons and favorites/collections shield whole shows, so a gap
+    in any of them must abort a deletion pass, never soften it."""
+    conn = _effective_connection_values(cfg)
+    taut: dict = {}
+    jf: dict = {}
+    if bool(cfg.get("USE_PLEX")) and conn.get("tautulli_url") and conn.get("tautulli_key"):
+        try:
+            taut = _tautulli_series_watch(conn)
+        except Exception:
+            if strict:
+                raise RuntimeError("Tautulli watch history did not answer")
+            taut = {}
+    jf_favs: set = set()
+    if bool(cfg.get("USE_JELLYFIN")) and conn.get("jellyfin_url") and conn.get("jellyfin_key"):
+        try:
+            jf, jf_favs = _jellyfin_series_watch(conn["jellyfin_url"], conn["jellyfin_key"],
+                                                 strict=strict)
+        except Exception:
+            if strict:
+                raise RuntimeError("Jellyfin watch history / favorites did not answer")
+            jf, jf_favs = {}, set()
+    # Protected collections apply to shows exactly as to movies: the configured
+    # collection names, with each side's series members joined by title. In the
+    # non-strict refresh a fetch failure protects nothing HERE (this flag is
+    # display and scoring input) — the deletion path runs strict, where it
+    # aborts the pass instead.
+    protected: set = set()
+    if bool(cfg.get("USE_PLEX")):
+        try:
+            protected |= _plex_protected_series_titles(conn, cfg.get("PROTECTED_COLLECTIONS"))
+        except Exception:
+            if strict:
+                raise RuntimeError("Plex protected collections did not answer")
+    if bool(cfg.get("USE_JELLYFIN")) and conn.get("jellyfin_url") and conn.get("jellyfin_key"):
+        try:
+            protected |= _jellyfin_protected_series_titles(
+                conn["jellyfin_url"], conn["jellyfin_key"],
+                cfg.get("JELLYFIN_PROTECTED_COLLECTIONS"))
+        except Exception:
+            if strict:
+                raise RuntimeError("Jellyfin protected collections did not answer")
+    if not taut and not jf and not jf_favs and not protected:
+        return
+    empty = _new_series_agg()
+    for row in rows:
+        k = _norm_series_title(row.get("title"))
+        a, b = taut.get(k, empty), jf.get(k, empty)
+        row["plays"] = max(a["plays"], b["plays"])
+        row["users"] = max(len(a["users"]), len(b["users"]))
+        row["last_played"] = max(a["last_played"], b["last_played"])
+        row["tv_episodes_watched"] = max(len(a["eps"]), len(b["eps"]))
+        if _norm_series_title(row.get("title")) in jf_favs:
+            row["favorite"] = True
+        if _norm_series_title(row.get("title")) in protected:
+            row["protected"] = True
+
+        for season in row.get("tv_seasons") or []:
+            sa = a["seasons"].get(season["n"]) if a["seasons"] else None
+            sb = b["seasons"].get(season["n"]) if b["seasons"] else None
+            season["eps_watched"] = max(len(sa["eps"]) if sa else 0,
+                                        len(sb["eps"]) if sb else 0)
+            season["last_played"] = max(sa["last"] if sa else 0,
+                                        sb["last"] if sb else 0)
+            # Season plays and watchers feed the movie-equivalent usage curve
+            # and the per-season multi-user term; max across servers, never
+            # the sum, same as every other watch count.
+            season["plays"] = max(sa["plays"] if sa else 0,
+                                  sb["plays"] if sb else 0)
+            season["users"] = max(len(sa["users"]) if sa else 0,
+                                  len(sb["users"]) if sb else 0)
+
+
+def _resolve_tv_scope(rows: list, cfg: dict) -> None:
+    """Decide which series cleanup MAY touch: monitored paths are the deletion
+    allow-list for TV exactly as for movies. The media server supplies the
+    inventory — including shows kept somewhere deliberately unmanaged — so
+    each series folder is looked for under the monitored directories BY NAME
+    (the server's own path is in its container namespace, so the folder name
+    is the part both filesystems share). Found: the row carries the resolved
+    /library path and is in scope. Not found: out of scope, and the row says
+    so rather than disappearing — an inventory that silently omits what it
+    won't manage looks like a scan bug, not a decision."""
+    dirs = [str(d) for d in (cfg.get("MONITOR_DIRS") or []) if str(d or "").strip()]
+    for row in rows:
+        folder = PurePosixPath(str(row.get("path") or "")).name
+        resolved = None
+        if folder:
+            for d in dirs:
+                candidate = Path(d) / folder
+                try:
+                    if candidate.is_dir():
+                        resolved = str(candidate)
+                        break
+                except OSError:
+                    continue
+        row["path"] = resolved
+        row["tv_in_scope"] = 1 if resolved else 0
+
+
+def _season_score_settings(cfg: dict) -> dict:
+    """The scoring/filter settings season scoring reads, resolved once — the
+    same knobs the movie curve uses, plus the TV series-watch bump."""
+    balance = _config_num(cfg.get("SCORE_BALANCE"))
+    balance = 50.0 if balance is None else max(0.0, min(100.0, balance))
+    quality_weight = balance / 100.0
+    stale = _config_num(cfg.get("MAX_STALENESS_MONTHS"))
+    bump = _config_num(cfg.get("TV_SERIES_WATCH_BUMP"))
+    weight = _config_num(cfg.get("TV_WATCH_WEIGHT"))
+    cutoff = _config_num(cfg.get("MAX_IMDB_RATING"))
+    return {
+        "history_weight": 1.0 - quality_weight,
+        "quality_weight": quality_weight,
+        "max_staleness_months": stale if stale and stale > 0 else 36.0,
+        "series_watch_bump": bump if bump is not None else 10.0,
+        # Percent → multiplier: what one full season-watch (plays = episodes)
+        # is worth against one movie watch. 100 = one watch, 200 = two.
+        "watch_weight": max(1.0, min(2.0, weight / 100.0)) if weight else 1.0,
+        "grace_days": max(0.0, _config_num(cfg.get("GRACE_PERIOD_DAYS")) or 0.0),
+        "max_imdb_rating": cutoff if cutoff and cutoff > 0 else None,
+        "skip_unplayed": bool(cfg.get("SKIP_UNPLAYED_MOVIES")),
+        "protect_favorites": bool(cfg.get("PROTECT_JELLYFIN_FAVORITES")),
+    }
+
+
+def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
+    """The order a TV cleanup would remove seasons in. The season is the unit;
+    a "whole show" is every season of it scoring low. Returned as
+    {"order": [...], "excluded": {...}, "target": ...} with retention scores
+    ASCENDING — the same 0-100 scale movies score on (season_retention_score
+    shares the movie curve family), so this order intersplices directly with
+    the movie deletion order.
+
+    Whole series step aside first — off monitored paths, protected, favorited —
+    and a CONTINUING show's latest season on disk is never in the order (that
+    is the season the household may be keeping up with). The shared
+    eligibility filters then apply at season grain, mirroring the movie rules:
+    the grace period (on the series' added date), the IMDb rating cutoff and
+    the no-IMDb-data rule (on the series rating, when IMDb is in use), and the
+    skip-unplayed switch (a season with no watch history).
+
+    Sizing lives in _merged_pool_takes: seasons and the engine's movie queue
+    sort into ONE order there, and the covering prefix of the pool's deficit
+    decides which seasons (take=True) and how many movie-bytes go.
+    """
+    now = now or time.time()
+    ss = _season_score_settings(cfg)
+    imdb_in_use = ss["quality_weight"] > 0 or ss["max_imdb_rating"] is not None
+
+    order = []
+    excluded = {"off_path": 0, "protected": 0, "favorite": 0,
+                "latest_of_continuing": 0, "recently_added": 0,
+                "high_rated": 0, "no_imdb_data": 0, "unplayed": 0}
+    for r in tv_rows:
+        if not isinstance(r, dict) or r.get("media_type") != "tv":
+            continue
+        seasons = [s for s in (r.get("tv_seasons") or []) if isinstance(s, dict)]
+        if not seasons:
+            continue
+        if not r.get("tv_in_scope"):
+            excluded["off_path"] += len(seasons)
+            continue
+        if r.get("protected"):
+            excluded["protected"] += len(seasons)
+            continue
+        # Favorites shield the whole show under the SAME eligibility toggle
+        # movies use (Don't delete Jellyfin favorites).
+        if ss["protect_favorites"] and r.get("favorite"):
+            excluded["favorite"] += len(seasons)
+            continue
+        # The shared series-level filters, mirroring the movie skip ladder.
+        added_at = r.get("added_at") or 0
+        if ss["grace_days"] and added_at > 0 \
+                and (now - added_at) < ss["grace_days"] * 86400:
+            excluded["recently_added"] += len(seasons)
+            continue
+        rating = r.get("rating")
+        if imdb_in_use and rating is None:
+            excluded["no_imdb_data"] += len(seasons)
+            continue
+        if ss["max_imdb_rating"] is not None and rating is not None \
+                and float(rating) > ss["max_imdb_rating"]:
+            excluded["high_rated"] += len(seasons)
+            continue
+        # The latest season on disk is shielded unless the show is KNOWN to be
+        # ended: a continuing show's current season is what the household may
+        # be keeping up with, and a show whose server states no status (Plex
+        # has none) gets the same benefit of the doubt.
+        continuing = (r.get("tv_status") != "ended")
+        latest_n = max(s.get("n") or 0 for s in seasons)
+        series_facts = {"eps": r.get("tv_episodes"),
+                        "eps_watched": r.get("tv_episodes_watched"),
+                        "users": r.get("users"), "added_at": added_at,
+                        "rating": rating, "votes": r.get("votes")}
+        for s in seasons:
+            if continuing and (s.get("n") or 0) == latest_n:
+                excluded["latest_of_continuing"] += 1
+                continue
+            eps, watched = (s.get("eps") or 0), (s.get("eps_watched") or 0)
+            if ss["skip_unplayed"] and watched <= 0 and not (s.get("last_played") or 0):
+                excluded["unplayed"] += 1
+                continue
+            score, _breakdown = season_retention_score(
+                s, series_facts,
+                history_weight=ss["history_weight"],
+                quality_weight=ss["quality_weight"],
+                max_staleness_months=ss["max_staleness_months"],
+                series_watch_bump=ss["series_watch_bump"],
+                watch_weight=ss["watch_weight"], now=now)
+            order.append({
+                "title": r.get("title"), "season": s.get("n"),
+                # Identity + location for the cleanup pass: the media server's
+                # id is the mark key (stable across title edits), the resolved
+                # series folder is where the season's files live.
+                "sid": r.get("jf_source_id") or r.get("source_id"),
+                "path": r.get("path"),
+                "size_bytes": s.get("size_bytes") or 0,
+                "eps": eps, "eps_watched": watched,
+                "last_played": s.get("last_played") or 0,
+                "score": round(score, 3),
+                "take": False,
+            })
+    # Worst-scored first; a tie goes to the LARGER season, since the order
+    # exists to show where the space would come from.
+    order.sort(key=lambda e: (e["score"], -e["size_bytes"]))
+    return {"order": order, "excluded": excluded}
+
+
+def _refresh_tv_inventory(cfg: dict) -> int | None:
+    """Fetch the media servers' TV inventory and replace the snapshot's TV
+    rows. Returns the row count, or None when nothing was fetched (not
+    configured / no answer) — in which case the stored rows are LEFT ALONE,
+    so a server blip doesn't empty the TV view it filled yesterday."""
+    rows = _tv_inventory_rows(cfg)
+    if rows is None:
+        return None
+    if rows:
+        _resolve_tv_scope(rows, cfg)
+        _annotate_tv_watch(rows, cfg)
+        _annotate_tv_imdb(rows)
+    with db.transaction(db_path()) as conn:
+        db.replace_tv_series(conn, rows)
+    return len(rows)
+
+
+# ── TV cleanup: the season deletion pass ──────────────────────────────────────
+# The season is the deletion unit; the triggers are the POOL's — the Headroom
+# target and the Library Size Cap, shared with the movie side. Once a day,
+# after the configured daily run time, the pass recomputes the season plan
+# from FRESH server data, merges it with the movie queue into one worst-first
+# order, and (a) marks the seasons inside the deficit-covering prefix — each
+# mark waits out the deletion delay like a marked movie — and (b) in
+# Automatic Cleanup, deletes marked seasons whose delay has elapsed and that
+# the fresh plan STILL takes. Monitor Only runs the same pass without the
+# deleting half, so the marks (and their delete-on dates) are visible in the
+# Cache debug before anything is armed.
+#
+# Everything is fail-closed: if any CONFIGURED source (Tautulli, Jellyfin,
+# Plex) does not answer, the pass aborts without touching a file — a missing
+# favorites list must read as "everything might be a favorite", never as
+# "nothing is". Per season, when Sonarr is configured it must accept the
+# season unmonitor BEFORE the first file is removed (a deleted-but-monitored
+# season would just be re-downloaded), and every file is re-checked against
+# the monitored roots. Sonarr itself is OPTIONAL and cleanup-only: the
+# inventory comes from the media servers.
+
+_TV_STATE_KEY = "tv_cleanup"
+
+
+def _tv_mark_key(entry: dict) -> str:
+    return f"{entry.get('sid')}|S{entry.get('season')}"
+
+
+def _tv_cleanup_armed(cfg: dict) -> bool:
+    """TV cleanup exists at all: the switch is on, a media server can supply
+    the inventory, and a DAILY pool trigger is armed — the Headroom target or
+    the Library Size Cap, the same thresholds that size the movie marks (one
+    pool, one cap; Redline is a movie-only emergency). Sonarr is NOT required
+    — it is optional and cleanup-only. Whether a pass may DELETE is decided by
+    RUN_MODE at pass time (Automatic Cleanup deletes, Monitor Only marks)."""
+    return (bool(cfg.get("TV_CLEANUP_ENABLED", True))
+            and _tv_inventory_configured(cfg)
+            and (_threshold_gb_or_none(cfg.get("MAX_LIBRARY_GB")) is not None
+                 or (_config_num(cfg.get("HEADROOM_GB")) or 0) > 0))
+
+
+def _tv_cleanup_state() -> dict:
+    """The pass's persistent state from the store: {"marked": {key: mark},
+    "last_pass": report, "last_pass_date": "YYYY-MM-DD"}. Missing/unreadable
+    reads as empty — worst case marks restart their delay clocks, which only
+    ever delays a deletion."""
+    try:
+        with db.connect(db_path()) as conn:
+            st = db.get_meta(conn, _TV_STATE_KEY, None)
+    except Exception:
+        st = None
+    if not isinstance(st, dict):
+        st = {}
+    if not isinstance(st.get("marked"), dict):
+        st["marked"] = {}
+    return st
+
+
+def _save_tv_cleanup_state(st: dict) -> None:
+    with db.transaction(db_path()) as conn:
+        db.set_meta(conn, _TV_STATE_KEY, st)
+
+
+def _tv_fresh_rows_strict(cfg: dict) -> list:
+    """TV rows with scope, watch and protection facts, every configured source
+    REQUIRED to answer. Raises on any gap — deletion decisions are never made
+    from partial protection data."""
+    rows = _tv_inventory_rows(cfg, strict=True)
+    if rows is None:
+        raise RuntimeError("no media server answered with a TV inventory")
+    _resolve_tv_scope(rows, cfg)
+    _annotate_tv_watch(rows, cfg, strict=True)
+    _annotate_tv_imdb(rows)   # ratings only raise scores; a missing dataset is not a gap
+    return rows
+
+
+def _pool_deletion_target_bytes(cfg: dict) -> int:
+    """The pool's DAILY deficit in bytes — the larger of the headroom overage
+    and the Library Size Cap overage, the same arithmetic the engine sizes its
+    movie marks with (_daily_deficit_bytes there). The cap measures the whole
+    pool: the library size is the measured on-disk total of every monitored
+    directory, TV included. Redline is an emergency and never sizes marks."""
+    disk = disk_stats() or {}
+    try:
+        used, total = float(disk.get("used_gb")), float(disk.get("total_gb"))
+    except (TypeError, ValueError):
+        return 0
+    headroom = _config_num(cfg.get("HEADROOM_GB")) or 0
+    headroom_deficit = max(0.0, used - (total - headroom)) if headroom > 0 else 0.0
+    cap = _threshold_gb_or_none(cfg.get("MAX_LIBRARY_GB"))
+    lib = (library_stats() or {}).get("library_gb")
+    cap_deficit = 0.0
+    if cap is not None and isinstance(lib, (int, float)) and lib > 0:
+        cap_deficit = max(0.0, float(lib) - cap)
+    return int(max(headroom_deficit, cap_deficit) * 1_000_000_000)
+
+
+def _merged_pool_takes(season_order: list, cfg: dict) -> tuple[dict, dict]:
+    """Split the pool's daily deficit between MOVIES and SEASONS with one
+    merged deletion order: every eligible movie (the engine's queue, scores
+    and sizes as the last plan stored them) and every eligible season
+    (season_order, the same 0-100 scale) sorted together worst-first, ties to
+    the larger item. The seasons inside the covering prefix get take=True —
+    those are the TV pass's to delete; the movie bytes inside it are the
+    movie share. The engine learns the split via the tv_share stamp and
+    subtracts the SEASON share from its own target, so the two executors
+    cover the one deficit exactly once."""
+    share = {"target_bytes": _pool_deletion_target_bytes(cfg),
+             "tv_share_bytes": 0, "movie_share_bytes": 0}
+    if share["target_bytes"] <= 0:
+        return {}, share
+    movies = []
+    try:
+        doc = db.read_pending_doc(db_path())
+        for e in (doc.get("entries") or {}).values():
+            if isinstance(e, dict):
+                movies.append((float(e.get("score") or 0.0), _entry_size_bytes(e)))
+    except Exception:
+        movies = []   # no movie plan yet: seasons cover what they can
+    merged = ([((e["score"], -(e["size_bytes"] or 0)), "season", e) for e in season_order]
+              + [((sc, -sz), "movie", sz) for sc, sz in movies])
+    merged.sort(key=lambda t: t[0])
+    covered = 0
+    for _, kind, item in merged:
+        if covered >= share["target_bytes"]:
+            break
+        if kind == "season":
+            item["take"] = True
+            share["tv_share_bytes"] += item["size_bytes"] or 0
+            covered += item["size_bytes"] or 0
+        else:
+            share["movie_share_bytes"] += item
+            covered += item
+    takes = {_tv_mark_key(e): e for e in season_order
+             if e["take"] and e.get("sid") and e.get("path")}
+    return takes, share
+
+
+def _stamp_tv_share(share_bytes) -> None:
+    """Persist the season share of the pool deficit for the engine, which
+    subtracts it from its own movie target (engine reads it with a freshness
+    window, so a stale stamp fails toward the movie side covering it all)."""
+    try:
+        with db.transaction(db_path()) as conn:
+            db.set_meta(conn, "tv_share", {"bytes": int(max(0, share_bytes)),
+                                           "at": time.time()})
+    except Exception:
+        pass
+
+
+def _maybe_run_tv_cleanup(cfg: dict) -> None:
+    """The scheduled tick's TV gate: one pass per day, after the daily run
+    time, while the scheduler is in a running mode. Synchronous — seconds of
+    HTTP inside the tick — and BEFORE the movie branches launch anything, so
+    the two deleters never run concurrently."""
+    if not _tv_cleanup_armed(cfg):
+        return
+    if cfg.get("RUN_MODE") not in ("paused", "headroom"):
+        return
+    if time.strftime("%H:%M") < _daily_run_time(cfg):
+        return
+    if _tv_cleanup_state().get("last_pass_date") == time.strftime("%Y-%m-%d"):
+        return
+    _run_tv_cleanup_pass(cfg, execute=_is_cleanup_mode(cfg.get("RUN_MODE")))
+
+
+def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
+    """One daily TV pass: refresh facts fail-closed, reconcile the marks with
+    the fresh take prefix, and (execute=True only) delete the marked seasons
+    whose delay has elapsed, worst-kept first. Returns the report it also
+    persists as the state's last_pass."""
+    today = time.strftime("%Y-%m-%d")
+    report = {"at": time.time(), "date": today,
+              "mode": "cleanup" if execute else "monitor",
+              "pool_target_gb": 0, "tv_share_gb": 0, "movie_share_gb": 0,
+              "marked_new": 0, "unmarked": 0, "held_by_delay": 0,
+              "deleted_seasons": [], "skipped": [], "aborted": None,
+              "deleted_files": 0, "freed_bytes": 0}
+    st = _tv_cleanup_state()
+
+    def _finish():
+        st["last_pass"] = report
+        st["last_pass_date"] = today
+        _save_tv_cleanup_state(st)
+        return report
+
+    try:
+        rows = _tv_fresh_rows_strict(cfg)
+    except Exception as e:
+        report["aborted"] = str(e)
+        _stamp_tv_share(0)   # seasons will free nothing; the movie side covers it all
+        print(f"TV cleanup: aborted fail-closed — {e}", flush=True)
+        return _finish()
+
+    # The same safety refusal a real Cleanup makes: thresholds so far below
+    # the pool that reaching them would delete more than the safety
+    # percentage allows. Mark nothing rather than pace a config mistake.
+    state = _space_threshold_state(cfg, disk_stats(),
+                                   (library_stats() or {}).get("library_gb"))
+    if state.get("safety_blocked"):
+        report["aborted"] = ("Space Thresholds are outside the safety limits — "
+                             "refusing to mark or delete, like a Cleanup would")
+        _stamp_tv_share(0)
+        print(f"TV cleanup: {report['aborted']}", flush=True)
+        return _finish()
+
+    plan = _tv_season_plan(rows, cfg)
+    takes, pool = _merged_pool_takes(plan["order"], cfg)
+    report["pool_target_gb"] = round(pool["target_bytes"] / 1e9, 1)
+    report["tv_share_gb"] = round(pool["tv_share_bytes"] / 1e9, 1)
+    report["movie_share_gb"] = round(pool["movie_share_bytes"] / 1e9, 1)
+    _stamp_tv_share(pool["tv_share_bytes"])
+    marked = st["marked"]
+
+    # A mark the fresh plan no longer takes is dropped, whatever the reason —
+    # the cap was raised, the show got protected/favorited, someone started
+    # watching, or enough space came back. Marks only ever mirror the plan.
+    for k in [k for k in marked if k not in takes]:
+        del marked[k]
+        report["unmarked"] += 1
+
+    try:
+        delay = max(1, int(float(cfg.get("DELETE_DELAY_DAYS") or 1)))
+    except (TypeError, ValueError):
+        delay = 1
+    now = time.time()
+    for k, e in takes.items():
+        if k not in marked:
+            marked[k] = {"marked_at": now, "delay_days": delay,
+                         "title": e["title"], "season": e["season"],
+                         "path": e["path"], "size_bytes": e["size_bytes"],
+                         "score": e["score"]}
+            report["marked_new"] += 1
+
+    if execute:
+        # Plan order (worst-kept first), never dict order.
+        for e in plan["order"]:
+            if not e["take"]:
+                continue
+            k = _tv_mark_key(e)
+            m = marked.get(k)
+            if not m:
+                continue
+            # Same day-count policy as a marked movie: marked today, deletable
+            # at the earliest by tomorrow's pass.
+            due_on = (datetime.fromtimestamp(m.get("marked_at") or now)
+                      + timedelta(days=int(m.get("delay_days") or delay))).strftime("%Y-%m-%d")
+            if today < due_on:
+                report["held_by_delay"] += 1
+                continue
+            if _delete_tv_season(cfg, e, report):
+                del marked[k]
+
+    _finish()
+    if report["deleted_files"]:
+        _refresh_tv_inventory(cfg)   # sizes changed; keep the stored inventory honest
+    print(f"TV cleanup pass ({report['mode']}): pool deficit {report['pool_target_gb']} GB "
+          f"→ seasons {report['tv_share_gb']} GB, movies {report['movie_share_gb']} GB | "
+          f"{report['marked_new']} newly marked, "
+          f"{report['unmarked']} unmarked, {report['held_by_delay']} waiting out the delay, "
+          f"{len(report['deleted_seasons'])} season(s) deleted "
+          f"({report['freed_bytes'] / 1e9:.1f} GB)", flush=True)
+    return report
+
+
+def _tv_log_deleted(entry: dict, path, size_bytes: int) -> None:
+    """One deleted.log line per removed episode file, in the engine's exact
+    format so lifetime totals and the dashboard count TV alongside movies."""
+    line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {entry.get('title')} "
+            f"S{entry.get('season')} | {path} | size_bytes={int(size_bytes)}"
+            f" | score={entry.get('score')}\n")
+    try:
+        deleted_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(deleted_path(), "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass   # the file is already gone; the record is best-effort
+
+
+def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None]:
+    """The season's episode files as paths RELATIVE to the series folder,
+    freshly listed by the media server that indexed the row (never from the
+    stored inventory). Returns (relpaths, error): any gap — the server not
+    answering, no series path, a file outside the series folder — comes back
+    as an error string and the caller skips the season, fail closed."""
+    conn = _effective_connection_values(cfg)
+    base, files = "", []
+    try:
+        if sid.startswith("jellyfin:"):
+            url, key = conn.get("jellyfin_url"), conn.get("jellyfin_key")
+            if not (url and key):
+                return [], "the Jellyfin connection that indexed this series is gone"
+            jid = sid.split(":", 1)[1]
+            info = (_jellyfin_get(url, key, "/Items",
+                                  {"Ids": jid, "Fields": "Path"}, timeout=15) or {}).get("Items") or []
+            base = str((info[0] if info else {}).get("Path") or "")
+            eps = (_jellyfin_get(url, key, f"/Shows/{jid}/Episodes",
+                                 {"Fields": "Path"}, timeout=30) or {}).get("Items") or []
+            for e in eps:
+                if not isinstance(e, dict) or not e.get("Path"):
+                    continue
+                try:
+                    if int(e.get("ParentIndexNumber")) != int(season_n):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                files.append(str(e["Path"]))
+        elif sid.startswith("plex:"):
+            url, token = conn.get("plex_url"), conn.get("plex_token")
+            if not (url and token):
+                return [], "the Plex connection that indexed this series is gone"
+            rk = sid.split(":", 1)[1]
+            meta = _plex_get(url, token, f"/library/metadata/{rk}", timeout=15) or {}
+            show = next(iter((meta.get("MediaContainer") or {}).get("Metadata") or []), None) or {}
+            base = next((str(l.get("path")) for l in _as_list(show.get("Location"))
+                         if isinstance(l, dict) and l.get("path")), "")
+            leaves = _plex_get(url, token, f"/library/metadata/{rk}/allLeaves", timeout=30) or {}
+            for ep in (leaves.get("MediaContainer") or {}).get("Metadata") or []:
+                if not isinstance(ep, dict):
+                    continue
+                try:
+                    if int(ep.get("parentIndex")) != int(season_n):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                for m in _as_list(ep.get("Media")):
+                    for p in _as_list((m or {}).get("Part")):
+                        if isinstance(p, dict) and p.get("file"):
+                            files.append(str(p["file"]))
+            if not base and files:
+                parent = PurePosixPath(files[0]).parent
+                base = str(parent.parent if parent.parent.name else parent)
+        else:
+            return [], "no usable media-server id"
+    except Exception as e:
+        return [], f"could not list the season's files ({e})"
+    if not base:
+        return [], "the server states no path for the series"
+    if not files:
+        return [], "the server lists no files for this season"
+    rels = []
+    for f in files:
+        try:
+            rels.append(PurePosixPath(f).relative_to(PurePosixPath(base)))
+        except ValueError:
+            return [], f"unsafe file path from the media server: {f!r}"
+    return rels, None
+
+
+def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
+    """Delete one season: unmonitor it in Sonarr first WHEN Sonarr is
+    configured (it is optional and cleanup-only), then remove its episode
+    files — freshly listed by the media server that indexed the series — from
+    under the resolved series folder, then tidy any now-empty season
+    directory and ask Sonarr to rescan. Returns True when the mark is
+    finished; False leaves it marked for the next pass. Any doubt — an id
+    that doesn't parse, a path that escapes the series folder, a server call
+    that fails — skips the season rather than improvising."""
+    def skip(why: str) -> bool:
+        report["skipped"].append({"title": entry.get("title"),
+                                  "season": entry.get("season"), "why": why})
+        print(f"TV cleanup: SKIP {entry.get('title')} S{entry.get('season')} — {why}",
+              flush=True)
+        return False
+
+    sid = str(entry.get("sid") or "")
+    if ":" not in sid:
+        return skip("no usable media-server id")
+
+    series_dir = Path(str(entry.get("path") or ""))
+    roots = [str(d) for d in (cfg.get("MONITOR_DIRS") or []) if str(d or "").strip()]
+    try:
+        if not series_dir.is_dir():
+            return skip("series folder is gone")
+        series_real = series_dir.resolve()
+        if not any(series_real.is_relative_to(Path(d).resolve()) for d in roots):
+            return skip("series folder is not under a monitored directory")
+    except OSError as e:
+        return skip(f"could not verify the series folder ({e})")
+
+    # 1) Unmonitor the season FIRST, when Sonarr is part of the setup.
+    #    Deleting a monitored season just queues its re-download; if Sonarr is
+    #    configured but won't take the change, nothing is deleted. No Sonarr
+    #    configured = nothing manages downloads, nothing to unmonitor.
+    #    SONARR_CLEANUP_ENABLED off skips the step by explicit choice: the
+    #    files still delete, and Sonarr will re-download the season if it is
+    #    monitored — the user opted to manage monitoring themselves.
+    conn_values = _effective_connection_values(cfg)
+    s_url = str(conn_values.get("sonarr_url") or "").strip().rstrip("/")
+    s_key = str(conn_values.get("sonarr_key") or "").strip()
+    s_headers = {"X-Api-Key": s_key}
+    sonarr_sid = None
+    if not (s_url and s_key):
+        pass
+    elif not bool(cfg.get("SONARR_CLEANUP_ENABLED", True)):
+        print(f"TV cleanup: Sonarr cleanup is off — leaving {entry.get('title')} "
+              f"S{entry.get('season')} monitored in Sonarr", flush=True)
+    else:
+        try:
+            series_list = _json_request(f"{s_url}/api/v3/series",
+                                        headers=s_headers, timeout=20)
+            if not isinstance(series_list, list):
+                raise RuntimeError("series list did not answer")
+            match = next((s for s in series_list if isinstance(s, dict)
+                          and s.get("id") is not None
+                          and _norm_series_title(s.get("title"))
+                          == _norm_series_title(entry.get("title"))), None)
+            if match is None:
+                # Not managed by Sonarr — no re-download risk, nothing to do.
+                print(f"TV cleanup: {entry.get('title')} is not in Sonarr — "
+                      f"nothing to unmonitor", flush=True)
+            else:
+                sonarr_sid = match["id"]
+                found = False
+                for s in match.get("seasons") or []:
+                    if isinstance(s, dict) and s.get("seasonNumber") == entry.get("season"):
+                        s["monitored"] = False
+                        found = True
+                if not found:
+                    raise RuntimeError(f"Sonarr lists no season {entry.get('season')}")
+                _json_request(f"{s_url}/api/v3/series/{sonarr_sid}", headers=s_headers,
+                              timeout=20, method="PUT", payload=match)
+        except Exception as e:
+            return skip(f"could not unmonitor the season in Sonarr ({e})")
+
+    # 2) The season's files, as the media server that indexed the series
+    #    knows them — relative paths joined to OUR resolved series folder
+    #    (the server's absolute paths are in its own container namespace).
+    rels, err = _tv_season_relpaths(cfg, sid, entry.get("season"))
+    if err:
+        return skip(err)
+
+    deleted, freed, dirs = 0, 0, set()
+    for rp in rels:
+        if not rp.parts or rp.is_absolute() or any(p in ("..", ".") for p in rp.parts):
+            return skip(f"unsafe file path from the media server: {str(rp)!r}")
+        target = series_dir.joinpath(*rp.parts)
+        try:
+            if target.is_symlink():
+                return skip(f"refusing a symlink: {target}")
+            if not target.is_file():
+                continue   # already gone — nothing to remove
+            if not target.resolve().is_relative_to(series_real):
+                return skip(f"file escapes the series folder: {target}")
+            size = target.stat().st_size
+            target.unlink()
+        except OSError as e:
+            return skip(f"could not delete {target} ({e})")
+        deleted += 1
+        freed += size
+        dirs.add(target.parent)
+        _tv_log_deleted(entry, target, size)
+
+    # 3) A season folder emptied by the deletions is removed; rmdir refuses a
+    #    non-empty directory, so this can never take anything but the empty
+    #    shell. The series folder itself always stays — the media server and
+    #    Sonarr both key on it.
+    for d in sorted(dirs, key=lambda p: len(str(p)), reverse=True):
+        if d != series_dir:
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+
+    # 4) Best-effort: have Sonarr rescan so its size/episode facts follow
+    #    (only when the unmonitor step found the series there).
+    if sonarr_sid is not None:
+        try:
+            _json_request(f"{s_url}/api/v3/command", headers=s_headers, timeout=15,
+                          method="POST",
+                          payload={"name": "RescanSeries", "seriesId": sonarr_sid})
+        except Exception:
+            pass
+
+    report["deleted_seasons"].append({"title": entry.get("title"),
+                                      "season": entry.get("season"),
+                                      "files": deleted, "bytes": freed})
+    report["deleted_files"] += deleted
+    report["freed_bytes"] += freed
+    print(f"TV cleanup: DELETED {entry.get('title')} S{entry.get('season')} — "
+          f"{deleted} file(s), {freed / 1e9:.1f} GB", flush=True)
+    return True
+
+
 def _autodetected_connection_field_values() -> dict:
     """One-shot appdata detections mapped to Config form field names —
     credentials only, since URLs are default-driven and the Auto Detect
@@ -3387,8 +4628,17 @@ def _autodetected_connection_field_values() -> dict:
             if not field.endswith("_URL")}
 
 
-def _json_request(url: str, headers: dict | None = None, timeout: int = 15):
-    req = urllib.request.Request(url, headers=headers or {})
+def _json_request(url: str, headers: dict | None = None, timeout: int = 15,
+                  method: str | None = None, payload=None):
+    """One JSON round-trip. GET by default; pass method/payload for the write
+    calls (Sonarr season unmonitor, rescan command). An empty response body
+    reads as None."""
+    hdrs = dict(headers or {})
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        hdrs.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, headers=hdrs, data=data, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8")
         return json.loads(raw) if raw else None
@@ -3420,6 +4670,7 @@ def _appdata_mount_state() -> dict:
     return {
         "tautulli":  _appdata_marker(TAUTULLI_APPDATA_DIR, "config.ini", "tautulli.db"),
         "radarr":    _appdata_marker(RADARR_APPDATA_DIR, "config.xml"),
+        "sonarr":    _appdata_marker(SONARR_APPDATA_DIR, "config.xml"),
         "library":   {"mounted": library.exists(), "ok": library_ok, "path": FILESYSTEM_CHECK_PATH if library_ok else None},
     }
 
@@ -3480,6 +4731,10 @@ def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: boo
         rurl = f"{conn['radarr_url'].rstrip('/')}/api/v3/system/status"
         rkey = conn["radarr_key"]
         jobs["radarr"] = lambda: _probe_json(rurl, headers={"X-Api-Key": rkey}, timeout=6)
+    if conn.get("sonarr_url") and conn.get("sonarr_key"):
+        surl = f"{conn['sonarr_url'].rstrip('/')}/api/v3/system/status"
+        skey = conn["sonarr_key"]
+        jobs["sonarr"] = lambda: _probe_json(surl, headers={"X-Api-Key": skey}, timeout=6)
     if not jobs:
         return {}
 
@@ -4445,9 +5700,108 @@ def api_debug_cache():
     snap = cache.get("library_snapshot")
     if isinstance(snap, dict):
         sm = snap.get("movies") or []
+        movie_rows = [r for r in sm if isinstance(r, dict)
+                      and (r.get("media_type") or "movie") == "movie"]
+        tv_rows = [r for r in sm if isinstance(r, dict) and r.get("media_type") == "tv"]
         dirs = snap.get("monitor_dirs")
-        lines.append(f"library_snapshot: built {_fmt_epoch(snap.get('built_at'))} | {len(sm)} movies"
+        lines.append(f"library_snapshot: built {_fmt_epoch(snap.get('built_at'))} | "
+                     f"{len(movie_rows)} movies + {len(tv_rows)} TV series"
                      + (f" | monitor_dirs={dirs}" if dirs else ""))
+        if tv_rows:
+            in_scope = sum(1 for r in tv_rows if r.get("tv_in_scope"))
+            watched = sum(1 for r in tv_rows if (r.get("tv_episodes_watched") or 0) > 0)
+            favs = sum(1 for r in tv_rows if r.get("favorite"))
+            size_gb = sum(r.get("size_bytes") or 0 for r in tv_rows) / 1e9
+            eps = sum(r.get("tv_episodes") or 0 for r in tv_rows)
+            lines.append("")
+            lines.append(f"TV inventory (from the media servers): {len(tv_rows)} series | {eps:,} episode files | "
+                         f"{size_gb:,.1f} GB | {in_scope} under monitored paths | "
+                         f"{watched} with watch history | {favs} Jellyfin-favorited")
+            _tv_cfg = load_config()
+            tv_cleanup_on = bool(_tv_cfg.get("TV_CLEANUP_ENABLED", True))
+            plan = _tv_season_plan(tv_rows, _tv_cfg)
+            porder = plan["order"]
+            pex = plan["excluded"]
+            _pool = {"target_bytes": 0, "tv_share_bytes": 0, "movie_share_bytes": 0}
+            if tv_cleanup_on:
+                _, _pool = _merged_pool_takes(porder, _tv_cfg)
+            total_gb = sum(e["size_bytes"] for e in porder) / 1e9
+            tv_state = _tv_cleanup_state()
+            tv_marked = tv_state.get("marked") or {}
+            lines.append("")
+            lines.append(f"TV season plan (the deletion order the daily TV pass uses): "
+                         f"{len(porder)} seasons | {total_gb:,.1f} GB in the order | "
+                         f"held back: {pex['protected']} protected, {pex['favorite']} favorited, "
+                         f"{pex['latest_of_continuing']} latest-of-continuing, {pex['off_path']} off-path")
+            lp = tv_state.get("last_pass") if isinstance(tv_state.get("last_pass"), dict) else None
+            if lp:
+                lines.append(f"  TV cleanup last pass: {lp.get('date')} ({lp.get('mode')}) | "
+                             f"{lp.get('marked_new')} newly marked, {lp.get('unmarked')} unmarked, "
+                             f"{lp.get('held_by_delay')} waiting out the delay | "
+                             f"{len(lp.get('deleted_seasons') or [])} season(s) deleted "
+                             f"({(lp.get('freed_bytes') or 0) / 1e9:.1f} GB)"
+                             + (f" | ABORTED fail-closed: {lp.get('aborted')}" if lp.get("aborted") else ""))
+                for sk in (lp.get("skipped") or [])[:10]:
+                    lines.append(f"    skipped {sk.get('title')} S{sk.get('season')}: {sk.get('why')}")
+            else:
+                lines.append("  TV cleanup last pass: none yet — the pass runs once a day, after "
+                             "the daily run time, while Monitor Only or Automatic Cleanup is on")
+            if tv_marked:
+                lines.append(f"  marked seasons ({len(tv_marked)} — deleted by an Automatic "
+                             f"Cleanup pass once their delete-on date arrives):")
+                for m in sorted(tv_marked.values(), key=lambda x: x.get("score") or 0):
+                    try:
+                        _due = (datetime.fromtimestamp(m.get("marked_at") or 0)
+                                + timedelta(days=int(m.get("delay_days") or 1))).strftime("%Y-%m-%d")
+                    except (OSError, OverflowError, ValueError):
+                        _due = "?"
+                    lines.append(f"    {m.get('title')} S{m.get('season')} | "
+                                 f"{(m.get('size_bytes') or 0) / 1e9:.1f} GB | score={m.get('score')} | "
+                                 f"delete on {_due}")
+            if not tv_cleanup_on:
+                lines.append("  TV cleanup: OFF (Filtering & Scoring) — the order below is "
+                             "informational and nothing would be taken")
+            elif _pool["target_bytes"] <= 0:
+                lines.append("  pool within its limits (Headroom / Library Size Cap) — "
+                             "a TV pass would take nothing")
+            else:
+                lines.append(f"  pool deficit {_pool['target_bytes'] / 1e9:,.1f} GB "
+                             f"(Headroom / Library Size Cap, movies and TV in ONE order) → "
+                             f"seasons cover {_pool['tv_share_bytes'] / 1e9:,.1f} GB (TAKE), "
+                             f"movies {_pool['movie_share_bytes'] / 1e9:,.1f} GB")
+            run = 0
+            for e in porder[:40]:
+                run += e["size_bytes"]
+                lines.append(
+                    f"    {'TAKE ' if e['take'] else ''}{e['title']} S{e['season']} | "
+                    f"{e['size_bytes'] / 1e9:.1f} GB "
+                    f"(cum {run / 1e9:,.1f}) | score={e['score']} | "
+                    f"eps {e['eps_watched']}/{e['eps']} watched | "
+                    f"last={_fmt_epoch(e['last_played']) if e['last_played'] else 'never'}")
+            if len(porder) > 40:
+                hidden_takes = sum(1 for e in porder[40:] if e["take"])
+                lines.append(f"    … and {len(porder) - 40} more seasons"
+                             + (f" ({hidden_takes} of them TAKE)" if hidden_takes else ""))
+            lines.append("")
+            lines.append("  per series (biggest first):")
+            for r in tv_rows:
+                seasons = r.get("tv_seasons") or []
+                s_bits = ", ".join(
+                    f"S{s.get('n')}:{s.get('eps_watched') or 0}/{s.get('eps') or 0}"
+                    for s in seasons if isinstance(s, dict))
+                _title = str(r.get("title") or "")
+                if not _title.endswith(f"({r.get('year')})"):
+                    _title = f"{_title} ({r.get('year')})"
+                lines.append(
+                    f"    {'[in-scope]' if r.get('tv_in_scope') else '[off-path]'} "
+                    f"{_title} | {r.get('tv_status') or '?'} | "
+                    f"{(r.get('size_bytes') or 0) / 1e9:.1f} GB | "
+                    f"eps {r.get('tv_episodes_watched') or 0}/{r.get('tv_episodes') or 0} watched | "
+                    f"users={r.get('users') or 0} | plays={r.get('plays') or 0} | "
+                    f"last={_fmt_epoch(r.get('last_played')) if r.get('last_played') else 'never'}"
+                    + (" | PROTECTED" if r.get("protected") else "")
+                    + (" | FAVORITE" if r.get("favorite") else "")
+                    + (f" | seasons {s_bits}" if s_bits else ""))
     else:
         lines.append("library_snapshot: (none — run a Simulate to build it)")
 
@@ -4512,8 +5866,10 @@ def api_debug_cache():
 # the same token, so cross-server path/title comparisons still line up within one
 # report. The report is downloaded via the browser and never written to disk.
 
-_REPORT_SECRET_KEYS = ("TAUTULLI_API_KEY", "PLEX_TOKEN", "JELLYFIN_API_KEY", "RADARR_API_KEY") + notify.SECRET_KEYS
-_REPORT_URL_KEYS = ("TAUTULLI_URL", "PLEX_URL", "JELLYFIN_URL", "RADARR_URL", "IMDB_RATINGS_URL")
+_REPORT_SECRET_KEYS = ("TAUTULLI_API_KEY", "PLEX_TOKEN", "JELLYFIN_API_KEY",
+                       "RADARR_API_KEY", "SONARR_API_KEY") + notify.SECRET_KEYS
+_REPORT_URL_KEYS = ("TAUTULLI_URL", "PLEX_URL", "JELLYFIN_URL", "RADARR_URL",
+                    "SONARR_URL", "IMDB_RATINGS_URL")
 
 
 class _ReportSanitizer:
@@ -4665,7 +6021,8 @@ def _build_debug_report() -> str:
         health = _connection_health_state(cfg, probe=True)
         add(f"  critical_ok={health.get('critical_ok')} | severity={health.get('severity')}")
         add(f"  plex_connected={health.get('plex_connected')} | tautulli_connected={health.get('tautulli_connected')} | "
-            f"jellyfin_connected={health.get('jellyfin_connected')} | radarr_connected={health.get('radarr_connected')}")
+            f"jellyfin_connected={health.get('jellyfin_connected')} | radarr_connected={health.get('radarr_connected')} | "
+            f"sonarr_connected={health.get('sonarr_connected')}")
         for err in health.get("errors") or []:
             add(f"  ERROR: {s.redact(str(err))}")
         for warn in health.get("warnings") or []:
@@ -5052,6 +6409,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
     plex_connected = False
     tautulli_connected = False
     radarr_connected = False
+    sonarr_connected = False
     use_plex = bool(cfg.get("USE_PLEX"))
     use_jellyfin = bool(cfg.get("USE_JELLYFIN"))
     jellyfin_connected = False
@@ -5228,6 +6586,24 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                 ["RADARR_URL", "RADARR_API_KEY"],
                 )
 
+    # Sonarr is informational: it gates nothing yet, so a bad connection warns
+    # about itself and nothing else.
+    sonarr_url = conn.get("sonarr_url")
+    sonarr_key = conn.get("sonarr_key")
+    if sonarr_key and not sonarr_url:
+        add_warning(
+            "Sonarr API key is set but no URL default could be detected — enter the Sonarr URL.",
+            ["SONARR_URL"],
+        )
+    if probe and sonarr_url and sonarr_key:
+        ok, msg = _probe_result(pre, "sonarr")
+        sonarr_connected = ok
+        if not ok:
+            add_warning(
+                "Sonarr did not connect.",
+                ["SONARR_URL", "SONARR_API_KEY"],
+                )
+
     # A missing or empty library root makes every path sample fail, and "paths do
     # not line up" then sends people hunting for a Plex prefix mismatch that isn't
     # there. Reword that case; do NOT widen it. This replaces the alignment
@@ -5330,6 +6706,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
         "probed": probe,
         "appdata": mounts,
         "radarr_connected": radarr_connected,
+        "sonarr_connected": sonarr_connected,
         "plex_connected": plex_connected,
         "tautulli_connected": tautulli_connected,
         "jellyfin_connected": jellyfin_connected,
@@ -6139,7 +7516,7 @@ _PLAN_CONFIG_KEYS = (
     "HEADROOM_GB", "REDLINE_GB", "REDLINE_ONLY_MODE", "MAX_LIBRARY_GB",
     "GRACE_PERIOD_DAYS", "SKIP_UNPLAYED_MOVIES", "PROTECT_JELLYFIN_FAVORITES",
     "MAX_IMDB_RATING", "SCORE_BALANCE", "NEAR_TIE_PTS", "MAX_STALENESS_MONTHS",
-    "MOVIE_EXTENSIONS", "_SCORING_CURVES",
+    "MOVIE_EXTENSIONS", "MOVIE_CLEANUP_ENABLED", "_SCORING_CURVES",
 )
 
 
@@ -6376,6 +7753,118 @@ def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True
     return out
 
 
+def _tv_marked_entries(cfg: dict | None = None) -> list[dict]:
+    """The TV pass's marked seasons, in the movie marked-entry shape, so the
+    deletion-history window shows ONE marked list for the whole pool. Delay
+    math mirrors the pass: calendar-day aging against the delay stamped on
+    the mark."""
+    marked = _tv_cleanup_state().get("marked") or {}
+    if not marked:
+        return []
+    today = datetime.now().date()
+    _fmt = _request_time_format()
+    out = []
+    for m in marked.values():
+        if not isinstance(m, dict):
+            continue
+        try:
+            marked_at = float(m["marked_at"]) if m.get("marked_at") is not None else None
+        except (TypeError, ValueError):
+            marked_at = None
+        delete_on = remaining = None
+        if marked_at is not None:
+            try:
+                delete_on = (datetime.fromtimestamp(marked_at).date()
+                             + timedelta(days=max(1, int(m.get("delay_days") or 1))))
+                remaining = max(0, (delete_on - today).days)
+            except (OverflowError, OSError, ValueError):
+                marked_at = None
+        size_bytes = int(m.get("size_bytes") or 0)
+        out.append({
+            "time": "" if marked_at is None else _format_log_timestamp_for_display(
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(marked_at)), _fmt),
+            "marked_at": marked_at,
+            "title": str(m.get("title") or ""),
+            "media": "tv", "season": m.get("season"),
+            "path": str(m.get("path") or ""),
+            "size_bytes": size_bytes,
+            "size": _format_reclaimed_size(size_bytes) if size_bytes else "",
+            "score": m.get("score"),
+            "marked": True,
+            "days_remaining": remaining,
+            "delete_on": delete_on.isoformat() if delete_on else None,
+        })
+    return out
+
+
+def _tv_eligible_entries(cfg: dict, marked_keys) -> list[dict]:
+    """Seasons in the current plan order that are NOT marked — the eligible
+    TV tail of the pool's deletion order, in the movie entry shape. No dates:
+    eligibility is visible order, not a schedule, exactly like the eligible
+    movies behind the marked prefix."""
+    if not bool(cfg.get("TV_CLEANUP_ENABLED", True)):
+        return []
+    try:
+        data, _err = _read_library_snapshot()
+        tv_rows = [r for r in ((data or {}).get("movies") or [])
+                   if isinstance(r, dict) and r.get("media_type") == "tv"]
+    except Exception:
+        return []
+    if not tv_rows:
+        return []
+    out = []
+    for e in _tv_season_plan(tv_rows, cfg)["order"]:
+        if _tv_mark_key(e) in marked_keys:
+            continue
+        size_bytes = int(e.get("size_bytes") or 0)
+        out.append({
+            "time": "", "marked_at": None,
+            "title": str(e.get("title") or ""),
+            "media": "tv", "season": e.get("season"),
+            "path": str(e.get("path") or ""),
+            "size_bytes": size_bytes,
+            "size": _format_reclaimed_size(size_bytes) if size_bytes else "",
+            "score": e.get("score"),
+            "marked": False, "days_remaining": None, "delete_on": None,
+        })
+    return out
+
+
+def _pool_marked_entries(cfg: dict | None = None) -> list[dict]:
+    """Movies and TV seasons as ONE marked & eligible window: the movie queue
+    plus the TV marks AND the eligible season order, renumbered and re-lined
+    as one list — marked first (soonest deletion first), then the eligible
+    tail interspliced across both types by the shared retention score, ties
+    to the larger item, matching the merged pool order the daily passes
+    split. Used where the display means the whole pool; the movie-only
+    callers (notify items, the forecast) keep pending_deletion_entries."""
+    cfg = cfg or load_config()
+    out = pending_deletion_entries(cfg)
+    marked_keys = set(_tv_cleanup_state().get("marked") or {})
+    tv = _tv_marked_entries(cfg) + _tv_eligible_entries(cfg, marked_keys)
+    if not tv:
+        return out
+    out = out + tv
+
+    def _order(r):
+        if r.get("marked"):
+            return (0, r["days_remaining"] if r.get("days_remaining") is not None else 0,
+                    0.0, 0)
+        return (1, 0, float(r.get("score") or 0.0), -(r.get("size_bytes") or 0))
+    out.sort(key=_order)
+    for n, r in enumerate(out, start=1):
+        r["when"] = f"#{n}"
+        media = (f"TV Show · S{r.get('season')}" if r.get("media") == "tv" else "Movie")
+        parts = [p for p in (r["time"], r["title"], media) if p]
+        if r["size"]:
+            parts.append(r["size"])
+        if r.get("score") is not None:
+            parts.append(f"score {r['score']}")
+        parts.extend((r["when"], r["path"]))
+        r["line"] = " | ".join(parts)
+    return out
+
+
 def _delete_delay_days(cfg: dict | None = None) -> int:
     try:
         # Defensive floor of 1: a marked movie is never deleted the same day. Valid
@@ -6563,6 +8052,10 @@ def _score_page_config(cfg: dict) -> dict:
         "SCORE_BALANCE": cfg.get("SCORE_BALANCE", 50),
         "MAX_IMDB_RATING": cfg.get("MAX_IMDB_RATING"),
         "SKIP_UNPLAYED_MOVIES": bool(cfg.get("SKIP_UNPLAYED_MOVIES")),
+        "MOVIE_CLEANUP_ENABLED": bool(cfg.get("MOVIE_CLEANUP_ENABLED", True)),
+        "TV_CLEANUP_ENABLED": bool(cfg.get("TV_CLEANUP_ENABLED", True)),
+        "TV_SERIES_WATCH_BUMP": cfg.get("TV_SERIES_WATCH_BUMP", 10),
+        "TV_WATCH_WEIGHT": cfg.get("TV_WATCH_WEIGHT", 100),
         "GRACE_PERIOD_DAYS": cfg.get("GRACE_PERIOD_DAYS", 0),
         "PROTECT_JELLYFIN_FAVORITES": bool(cfg.get("PROTECT_JELLYFIN_FAVORITES")),
         "NEAR_TIE_PTS": cfg.get("NEAR_TIE_PTS", 2),
@@ -6760,6 +8253,7 @@ def api_config_check():
             cfg["CHECK_PATH"] = FILESYSTEM_CHECK_PATH
             cfg["TAUTULLI_APPDATA"] = TAUTULLI_APPDATA_DIR
             cfg["RADARR_APPDATA"] = RADARR_APPDATA_DIR
+            cfg["SONARR_APPDATA"] = SONARR_APPDATA_DIR
             # The form posts 'auto' for an enabled Radarr cleanup; a save normalizes
             # that to the cached detection. Mirror it here so a clean form's check
             # carries the SAVED config's signature; otherwise every manual check looks
@@ -6816,6 +8310,8 @@ def api_verify_connections():
                      "keys": tautulli_keys},
         "radarr":   {"mounted": bool(mounts["radarr"].get("ok")),
                      "keys": ["Radarr"] if detected.get("radarr_key") else []},
+        "sonarr":   {"mounted": bool(mounts["sonarr"].get("ok")),
+                     "keys": ["Sonarr"] if detected.get("sonarr_key") else []},
     })
 
 
@@ -6965,6 +8461,8 @@ def api_save_score_config():
             "MAX_IMDB_RATING": "Maximum IMDb rating",
             "NEAR_TIE_PTS": "The file-size-optimization window",
             "MAX_STALENESS_MONTHS": "Max staleness",
+            "TV_SERIES_WATCH_BUMP": "The all-season watch boost",
+            "TV_WATCH_WEIGHT": "The TV watch weight",
         }
 
         def _float_field(name, minimum=None, maximum=None):
@@ -7017,6 +8515,14 @@ def api_save_score_config():
                     raise ValueError("The file-size-optimization window must be at least 0.5 points — uncheck it instead.")
             updates["NEAR_TIE_PTS"] = _clamp_near_tie_pts(raw_tie)
 
+        if "TV_SERIES_WATCH_BUMP" in payload:
+            bump_val = _float_field("TV_SERIES_WATCH_BUMP", 0, 25)
+            updates["TV_SERIES_WATCH_BUMP"] = round(bump_val * 10) / 10
+
+        if "TV_WATCH_WEIGHT" in payload:
+            weight_val = _float_field("TV_WATCH_WEIGHT", 100, 200)
+            updates["TV_WATCH_WEIGHT"] = int(round(weight_val))
+
         if "MAX_STALENESS_MONTHS" in payload:
             try:
                 stale_val = float(payload.get("MAX_STALENESS_MONTHS"))
@@ -7032,6 +8538,13 @@ def api_save_score_config():
             updates["SKIP_UNPLAYED_MOVIES"] = _coerce_bool(payload.get("SKIP_UNPLAYED_MOVIES"))
         if "PROTECT_JELLYFIN_FAVORITES" in payload:
             updates["PROTECT_JELLYFIN_FAVORITES"] = _coerce_bool(payload.get("PROTECT_JELLYFIN_FAVORITES"))
+        # The per-type cleanup switches live on the Filtering & Scoring page:
+        # movies off empties the deletion plan (a pure reconcile below), TV off
+        # stops the season plan preview from proposing seasons.
+        if "MOVIE_CLEANUP_ENABLED" in payload:
+            updates["MOVIE_CLEANUP_ENABLED"] = _coerce_bool(payload.get("MOVIE_CLEANUP_ENABLED"), default=True)
+        if "TV_CLEANUP_ENABLED" in payload:
+            updates["TV_CLEANUP_ENABLED"] = _coerce_bool(payload.get("TV_CLEANUP_ENABLED"), default=True)
         # Disabled optional fields keep their last entered value so the grayed-out field
         # still shows it (surviving restarts). Prefer the text still in the disabled
         # input (posted as _<key>_LAST), then the value this save is disabling, then the
@@ -7244,6 +8757,7 @@ def api_save_config():
         _score_fields = ("GRACE_PERIOD_DAYS", "MAX_IMDB_RATING", "SCORE_BALANCE",
                          "SKIP_UNPLAYED_MOVIES", "PROTECT_JELLYFIN_FAVORITES",
                          "NEAR_TIE_PTS", "MAX_STALENESS_MONTHS",
+                         "MOVIE_CLEANUP_ENABLED", "TV_CLEANUP_ENABLED",
                          "_MAX_IMDB_RATING_LAST", "_NEAR_TIE_PTS_LAST")
         _carried_score_fields = [k for k in _score_fields if k not in cfg]
         for key in _carried_score_fields:
@@ -7398,6 +8912,7 @@ def api_save_config():
             if not cap_ok:
                 return jsonify({"ok": False, "error": "Enter a Library Size Cap value or disable it."}), 400
 
+
         # Deletion delay: whole days, minimum 1. A marked movie is never deleted
         # the same day it is marked; the earliest is the next day's daily run,
         # so 1 is the floor. Blank = 1.
@@ -7488,6 +9003,16 @@ def api_save_config():
             server_software_auto_disabled.append("Jellyfin")
         if server_software_auto_disabled:
             save_health = _refresh_connection_health_cache(cfg, probe=True)
+        # The TV inventory refreshes on save, while the probe that just ran is
+        # fresh: connect a media server, save, and the Filtering page's TV
+        # view fills. In its OWN thread: the inventory is every episode from
+        # every server plus the per-user watch sweeps — minutes of HTTP on a
+        # big library — and the save response must return immediately, not
+        # time the browser's fetch out.
+        if _tv_inventory_configured(cfg):
+            _tv_save_cfg = dict(cfg)
+            threading.Thread(target=lambda: _refresh_tv_inventory(_tv_save_cfg),
+                             daemon=True, name="tv-inventory-refresh").start()
         # A save is never rejected over connection state; it lands, dependent fields
         # re-lock from the fresh probe, and Automatic Cleanup is just never left armed on shaky ground:
         #   - API/connection edits while Automatic Cleanup was on force a pause (the changed values
@@ -7591,6 +9116,7 @@ def api_save_config():
         cfg["CHECK_PATH"] = FILESYSTEM_CHECK_PATH
         cfg["TAUTULLI_APPDATA"] = TAUTULLI_APPDATA_DIR
         cfg["RADARR_APPDATA"] = RADARR_APPDATA_DIR
+        cfg["SONARR_APPDATA"] = SONARR_APPDATA_DIR
         # OUTPUT_DIR is infrastructure, not a setting: it decides where app and engine
         # write their files, so it is never accepted from the request body; only the
         # value already on disk carries through.
@@ -8411,7 +9937,7 @@ def api_logs_deleted():
     # Newest first for display; marked-for-deletion entries ride along so the history
     # modal can pin them on top.
     entries = list(reversed(entries))
-    marked = pending_deletion_entries()
+    marked = _pool_marked_entries()
     resp = jsonify({
         "count": deleted["count"],
         "reclaimed_bytes": deleted["reclaimed_bytes"],
@@ -8685,6 +10211,15 @@ def _scheduled_tick_body():
     # once-per-change, never once-per-tick.
     _check_marked_change_notification()
     _check_low_space_notification(cfg, disk_stats())
+
+    # The daily TV pass rides this tick, before the movie branches launch
+    # anything, so the two deleters never run concurrently. It is synchronous
+    # (seconds of HTTP) and self-gated: armed TV cleanup only, once per day,
+    # after the daily run time; Monitor Only marks, Automatic Cleanup deletes.
+    try:
+        _maybe_run_tv_cleanup(cfg)
+    except Exception as e:
+        print(f"TV cleanup pass failed: {e}", flush=True)
 
     if _is_cleanup_mode(cfg.get("RUN_MODE")):
         # Only launch a deletion pass when it's actually safe. If connections aren't

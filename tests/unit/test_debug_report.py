@@ -36,6 +36,9 @@ CFG = {
     "TAUTULLI_URL": "", "TAUTULLI_API_KEY": "", "JELLYFIN_URL": "",
     "JELLYFIN_API_KEY": "", "PLEX_URL": "", "PLEX_TOKEN": "",
     "RADARR_URL": "", "RADARR_API_KEY": "",
+    # A real-looking Sonarr credential and a host of its OWN: the report must
+    # mask the key and scrub the host even when no other service shares it.
+    "SONARR_URL": "http://sonarr-box.lan:8989", "SONARR_API_KEY": "sonarrsecret123",
 }
 
 A.load_config = lambda: dict(CFG)
@@ -105,6 +108,13 @@ check("sample row shows score", "score=12.5" in report)
 # Measured sizes carry one decimal at every magnitude — a 5 GB file reads
 # "5.0 GB", not "5.00 GB" as it did when 1-10 GB got two.
 check("sample row shows size, not title", "size=5.0 GB" in report)
+
+# A configured credential must never appear in the report — the CONFIG section
+# shows <set> instead — and a connection host is scrubbed even when no other
+# configured service shares it.
+check("Sonarr API key never leaks", "sonarrsecret123" not in report)
+check("Sonarr key reads as <set>", "SONARR_API_KEY = <set>" in report)
+check("Sonarr host never leaks", "sonarr-box.lan" not in report)
 
 # (3) No private value leaks anywhere in the report.
 check("no private movie title leaks", PRIVATE_TITLE not in report)

@@ -272,6 +272,17 @@ check('Monitor Only ghosts once nothing armed is the SAVED state',
 check('...naming the fix rather than just going gray',
       /Arm a space threshold/.test(savedOff.reason), savedOff.reason);
 
+// ── One pool, one cap ───────────────────────────────────────────────────────
+// There is exactly one Library Size Cap — it covers movies and TV together,
+// so no separate TV-cap field exists anywhere on the page.
+const onePool = await p.evaluate(() => ({
+  tvField: !!document.getElementById('TV_MAX_LIBRARY_GB'),
+  tvBox: !!document.getElementById('tv-cap-enabled'),
+  capHelp: document.getElementById('cap-input-group')?.closest('div')?.parentElement?.textContent || '',
+}));
+check('no TV-cap field or toggle exists — the one cap covers the pool',
+      !onePool.tvField && !onePool.tvBox, JSON.stringify(onePool));
+
 check('no page errors', errs.length === 0, errs.join('; '));
 console.log('RESULT:', ok ? 'PASS' : 'FAIL');
 await b.close();

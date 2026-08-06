@@ -1106,6 +1106,7 @@
             <thead><tr>
               <th>Status</th>
               <th>Title</th>
+              <th>Type</th>
               <th>Size</th>
               <th id="dh-th-date">Date</th>
               <th>Details</th>
@@ -2059,6 +2060,12 @@ function _dhDeletesCell(r) {
   return 'at Redline';
 }
 
+// One pool, two kinds: the Type column says which — a season names itself
+// "TV Show · S2" so the title can stay the show's plain name.
+function _dhTypeCell(r) {
+  return r.media === 'tv' ? 'TV Show · S' + (r.season ?? '?') : 'Movie';
+}
+
 function _dhRenderRow(r) {
   const path = prHtmlEsc(r.path || '');
   if (r._kind === 'marked') {
@@ -2075,6 +2082,7 @@ function _dhRenderRow(r) {
       + (r.marked ? `<td><span class="dh-badge marked">marked</span></td>`
                   : `<td><span class="dh-badge eligible">eligible</span></td>`)
       + `<td class="dh-title">${prHtmlEsc(r.title || '—')}</td>`
+      + `<td class="dh-num">${prHtmlEsc(_dhTypeCell(r))}</td>`
       + `<td class="dh-num">${prHtmlEsc(r.size || '—')}</td>`
       + `<td class="dh-num">${prHtmlEsc(_dhDeletesCell(r))}</td>`
       + `<td class="dh-details">${bits.join(' · ') || '—'}</td>`
@@ -2083,11 +2091,12 @@ function _dhRenderRow(r) {
   // A deleted line the server couldn't parse into fields: show it whole.
   if (!r.title && r.line) {
     return `<tr><td><span class="dh-badge deleted">deleted</span></td>`
-      + `<td class="dh-details" colspan="5">${prHtmlEsc(r.line)}</td></tr>`;
+      + `<td class="dh-details" colspan="6">${prHtmlEsc(r.line)}</td></tr>`;
   }
   return `<tr>`
     + `<td><span class="dh-badge deleted">deleted</span></td>`
     + `<td class="dh-title">${prHtmlEsc(r.title || '—')}</td>`
+    + `<td class="dh-num">${prHtmlEsc(_dhTypeCell(r))}</td>`
     + `<td class="dh-num">${prHtmlEsc(r.size || '—')}</td>`
     + `<td class="dh-num">${prHtmlEsc(r.time || '—')}</td>`
     + `<td class="dh-details">${prHtmlEsc(r.why || '—')}</td>`
@@ -2134,7 +2143,7 @@ function _dhPage(delta) { _dhPageIdx += delta; _dhRenderPage(); }
 function _dhHeaderText() {
   // Mirror the on-screen table: the marked view's 4th column is the deletion
   // schedule, the deleted view's is the deletion timestamp.
-  return ['Status', 'Title', 'Size', _dhView === 'marked' ? 'Deletes' : 'Date',
+  return ['Status', 'Title', 'Type', 'Size', _dhView === 'marked' ? 'Deletes' : 'Date',
           'Details', 'Path'];
 }
 
@@ -2145,11 +2154,11 @@ function _dhRowText(r) {
     if (r.score !== null && r.score !== undefined && r.score !== '') bits.push('score ' + r.score);
     if (r.marked && r.delete_on) { if (r.time) bits.push('marked ' + r.time); }
     else if (r.when) bits.push(_dhCap(r.when));
-    return [r.marked ? 'Marked' : 'Eligible', r.title || dash, r.size || dash,
+    return [r.marked ? 'Marked' : 'Eligible', r.title || dash, _dhTypeCell(r), r.size || dash,
             'deletes ' + _dhDeletesCell(r), bits.join(' · ') || dash, r.path || dash];
   }
-  if (!r.title && r.line) return ['Deleted', r.line, '', '', '', ''];
-  return ['Deleted', r.title || dash, r.size || dash, r.time || dash, r.why || dash, r.path || dash];
+  if (!r.title && r.line) return ['Deleted', r.line, '', '', '', '', ''];
+  return ['Deleted', r.title || dash, _dhTypeCell(r), r.size || dash, r.time || dash, r.why || dash, r.path || dash];
 }
 
 function downloadDeletedHistory(btn) {

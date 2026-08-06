@@ -84,7 +84,133 @@ SCORING = {
 # engine's code_checksum, which wipes it).
 import hashlib as _hashlib
 import json as _json
+import math as _math
 
 FINGERPRINT = _hashlib.sha256(
     _json.dumps(SCORING, sort_keys=True, default=str).encode("utf-8")
 ).hexdigest()[:16]
+
+
+def _vote_confidence(votes) -> float:
+    """The movie curve's vote-count confidence, shared verbatim: log10 ramp
+    from the floor to 1.0 at 10^VOTE_CONF_FULL_LOG10 votes; a missing count
+    gets the medium-low UNKNOWN value."""
+    try:
+        v = int(votes)
+    except (TypeError, ValueError):
+        v = 0
+    if v <= 0:
+        return SCORING["VOTE_CONF_UNKNOWN"]
+    frac = min(1.0, _math.log10(max(v, 1)) / SCORING["VOTE_CONF_FULL_LOG10"])
+    return SCORING["VOTE_CONF_FLOOR"] + (1.0 - SCORING["VOTE_CONF_FLOOR"]) * frac
+
+
+def season_retention_score(season: dict, series: dict, *,
+                           history_weight: float, quality_weight: float,
+                           max_staleness_months: float,
+                           series_watch_bump: float, now: float,
+                           watch_weight: float = 1.0):
+    """RetentionScore for one TV SEASON on the movie 0-100 scale — HIGHER =
+    keep. The season is the deletion unit, so seasons and movies sort into ONE
+    deletion order by this number and compute_retention_score's.
+
+    Same curve family as the movie score, at season grain:
+
+      usage       the MOVIE play curve on the season's play count expressed
+                  as movie-watch equivalents: plays ÷ episodes × the watch
+                  weight. Watching a whole 12-episode season once (12 plays)
+                  equals ONE movie watch at the default weight of 1.0; 6
+                  plays of it weigh half a watch. The TV watch weight knob
+                  (1.0-2.0) sets what a full season-watch is worth — at 2.0
+                  those 12 plays count like two movie watches.
+      recency     the movie RECENCY_TIERS + soft shelf on this season's last
+                  watch, falling back to the SERIES added date when never
+                  watched (a new show's untouched seasons read fresh, an old
+                  show's read stale). Distinct-watcher decay stretch applies,
+                  from THIS season's watcher count — exactly as a movie's own
+                  watchers stretch its decay.
+      multi-user  the movie curve on THIS season's distinct watchers — a
+                  unique user counts for a season what they count for a
+                  movie.
+      series bump every watched episode of the show lifts EVERY season a
+                  little: series_watch_bump × a log curve of the show's
+                  watched-episode count against its total, so one watched
+                  episode is a subtle-but-real nudge (interest in the show)
+                  and the lift grows toward the full knob as more of the
+                  show is consumed — the untouched middle seasons of a
+                  loved show outrank the seasons of a show nobody has
+                  touched. The knob (TV_SERIES_WATCH_BUMP) sets the points
+                  at a fully-watched series; 0 turns the lift off.
+      quality     the movie IMDb side on the SERIES rating/votes.
+
+    Rows written before seasons carried their own plays/users fall back to
+    the nearest older fact (watched-episode count; the series' users) rather
+    than to zero. The history side is clamped to 100 before weighting so the
+    bump enriches the blend without pushing seasons onto a different scale
+    than movies. Returns (score, breakdown); breakdown values are already
+    weighted.
+    """
+    def _num(v, default=0):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    b = {}
+    eps = max(_num(season.get("eps")), 0.0)
+    watched = max(_num(season.get("eps_watched")), 0.0)
+    plays = _num(season.get("plays"), -1.0)
+    if plays < 0:
+        plays = watched   # pre-plays rows: each watched episode was ≥1 play
+    eff_plays = (plays / eps) * max(0.0, float(watch_weight)) if eps > 0 else 0.0
+    usage = (SCORING["USAGE_MAX_PTS"]
+             * min(1.0, _math.log1p(eff_plays) / _math.log1p(SCORING["USAGE_FULL_PLAYS"])))
+
+    season_users = season.get("users")
+    users = max(int(_num(season_users if season_users is not None
+                         else series.get("users"))), 0)
+    stale_scale = max_staleness_months / SCORING["RECENCY_DEFAULT_MONTHS"]
+    decay_mult = min(SCORING["USER_DECAY_MAX_MULT"],
+                     1.0 + SCORING["USER_DECAY_PER_USER"] * users)
+    eff_scale = stale_scale * decay_mult
+    last_played = int(_num(season.get("last_played")))
+    recency_at = last_played if last_played > 0 else int(_num(series.get("added_at")))
+    rec_pts = 0.0
+    shelf_pts = 0.0
+    if recency_at > 0:
+        days_since = (now - recency_at) / 86400.0
+        for max_days, pts in SCORING["RECENCY_TIERS"]:
+            if days_since <= max_days * eff_scale:
+                rec_pts = pts
+                break
+        cliff_days = SCORING["RECENCY_TIERS"][-1][0] * eff_scale
+        span_days = cliff_days * SCORING["SHELF_SPAN_MULT"]
+        if days_since > cliff_days and span_days > 0:
+            frac = 1.0 - (days_since - cliff_days) / span_days
+            shelf_pts = SCORING["SHELF_MAX_PTS"] * max(0.0, min(1.0, frac))
+
+    multi_user = min(SCORING["MULTI_USER_PTS"] * users, SCORING["MULTI_USER_MAX_PTS"])
+
+    series_eps = max(_num(series.get("eps")), 0.0)
+    series_watched = max(_num(series.get("eps_watched")), 0.0)
+    # Log curve, not a linear fraction: one watched episode of a big show must
+    # read as a visible nudge, not as watched/total ≈ zero.
+    series_frac = (min(1.0, _math.log1p(series_watched) / _math.log1p(series_eps))
+                   if series_eps > 1 else (1.0 if series_watched > 0 else 0.0))
+    bump = max(0.0, float(series_watch_bump)) * series_frac
+
+    history_raw = min(100.0, usage + rec_pts + multi_user + bump)
+    b["history"] = history_raw * history_weight
+
+    rating = series.get("rating")
+    if rating is not None:
+        conf = _vote_confidence(series.get("votes"))
+        b["imdb"] = min(float(rating) * 10.0 * conf, 100.0) * quality_weight
+    else:
+        b["imdb"] = 0.0
+
+    full_q = SCORING["SHELF_RAMP_FULL_Q"]
+    shelf_ramp = min(1.0, quality_weight / full_q) if full_q > 0 else 1.0
+    b["shelf"] = shelf_pts * history_weight * shelf_ramp
+
+    return sum(b.values()), b

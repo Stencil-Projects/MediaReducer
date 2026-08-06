@@ -404,6 +404,9 @@
     padding: 0;
     margin: 0;
   }
+  .optional-cleanup-box + .optional-cleanup-box {
+    margin-top: 1.5rem;
+  }
   /* .config-inline-warning is shared with Filtering & Scoring — base.html. */
   .space-thresholds-locked .gb-input-group {
     opacity: .72;
@@ -476,8 +479,8 @@
 {% set connection_warnings = connection_health.warnings or [] %}
 {% set connection_highlights = connection_health.highlights or [] %}
 {% set connection_mount_highlights = connection_health.mount_highlights or [] %}
-{% set override_highlight_names = ['TAUTULLI_URL', 'TAUTULLI_API_KEY', 'PLEX_URL', 'PLEX_TOKEN', 'JELLYFIN_URL', 'JELLYFIN_API_KEY', 'RADARR_URL', 'RADARR_API_KEY'] %}
-{% set optional_override_names = ['PLEX_URL', 'PLEX_TOKEN', 'RADARR_URL', 'RADARR_API_KEY'] %}
+{% set override_highlight_names = ['TAUTULLI_URL', 'TAUTULLI_API_KEY', 'PLEX_URL', 'PLEX_TOKEN', 'JELLYFIN_URL', 'JELLYFIN_API_KEY', 'RADARR_URL', 'RADARR_API_KEY', 'SONARR_URL', 'SONARR_API_KEY'] %}
+{% set optional_override_names = ['PLEX_URL', 'PLEX_TOKEN', 'RADARR_URL', 'RADARR_API_KEY', 'SONARR_URL', 'SONARR_API_KEY'] %}
 {% set optional_cleanup_enabled = config.RADARR_OVERSEERR_SECTION_ID is not none %}
 {% set use_plex = config.USE_PLEX %}
 {% set use_jellyfin = config.USE_JELLYFIN %}
@@ -727,6 +730,7 @@
         {% for svc, path, optional in [
           ('Tautulli',  config.TAUTULLI_APPDATA,  true),
           ('Radarr',    config.RADARR_APPDATA,    true),
+          ('Sonarr',    config.SONARR_APPDATA,    true),
         ] %}
         <div id="mount-card-{{ svc | lower }}" class="config-card mount-card {{ 'mount-card-problem' if ((svc | lower) in connection_mount_highlights and ((svc | lower) != 'radarr' or optional_cleanup_enabled)) else '' }}">
           <div class="flex-grow-1">
@@ -757,6 +761,7 @@
             'TAUTULLI_URL': 'Tautulli URL', 'TAUTULLI_API_KEY': 'Tautulli API key',
             'PLEX_URL': 'Plex URL', 'PLEX_TOKEN': 'Plex token',
             'RADARR_URL': 'Radarr URL', 'RADARR_API_KEY': 'Radarr API key',
+            'SONARR_URL': 'Sonarr URL', 'SONARR_API_KEY': 'Sonarr API key',
             'JELLYFIN_URL': 'Jellyfin URL', 'JELLYFIN_API_KEY': 'Jellyfin API key',
           } %}
           <div class="row g-3 mt-1">
@@ -769,6 +774,8 @@
               ('PLEX_TOKEN', 'plex'),
               ('RADARR_URL', 'plex'),
               ('RADARR_API_KEY', 'plex'),
+              ('SONARR_URL', 'any'),
+              ('SONARR_API_KEY', 'any'),
             ] %}
             {% set secret_field = ('API_KEY' in name or 'TOKEN' in name) %}
             {% set is_url_field = name.endswith('_URL') %}
@@ -901,7 +908,19 @@
             <div id="section-detected" class="form-text"{% if cached_radarr_section_id %} data-section-id="{{ cached_radarr_section_id }}"{% endif %}{% if cached_radarr_section_name %} data-section-name="{{ cached_radarr_section_name }}"{% endif %}{% if cached_radarr_section_method %} data-section-method="{{ cached_radarr_section_method }}"{% endif %}{% if cached_radarr_section_method_label %} data-section-method-label="{{ cached_radarr_section_method_label }}"{% endif %}>{% if cached_radarr_section_id %}Detected section: {{ cached_radarr_section_id }}{% if cached_radarr_section_name %} ({{ cached_radarr_section_name }}){% endif %}{% if cached_radarr_section_method_label or cached_radarr_section_method %} via {{ cached_radarr_section_method_label or cached_radarr_section_method }}{% endif %}{% else %}The Plex section ID is detected automatically after Radarr and Plex connect.{% endif %}</div>
           </div>
           <div id="section-requires-radarr" class="form-text connection-unlock-note"{{ '' if not radarr_connected else ' hidden' }}>Connect Radarr to unlock this.</div>
-          <div class="form-text">When the copy in Radarr's movie section is deleted, remove the movie from Radarr so it isn't re-downloaded.</div>
+          <div class="form-text">Removes a deleted movie from Radarr so it isn't re-downloaded.</div>
+        </div>
+
+        <div id="sonarr-cleanup-box" class="optional-cleanup-box">
+          <h6 class="mb-2">Optional Sonarr cleanup</h6>
+          <div class="config-form-width-xl">
+            <label class="filter-score-toggle-row" for="sonarr-cleanup-enabled">
+              <input class="form-check-input" type="checkbox" id="sonarr-cleanup-enabled"
+                     {{ 'checked' if config.SONARR_CLEANUP_ENABLED else '' }}>
+              <span class="form-check-label">Unmonitor deleted seasons in Sonarr</span>
+            </label>
+          </div>
+          <div class="form-text">Unmonitors a season in Sonarr before deleting it, so it isn't re-downloaded. Off = files still delete, but Sonarr will grab monitored seasons again.</div>
         </div>
         </div>
 
@@ -1035,7 +1054,7 @@
           </div>
           <div id="cap-error" class="field-error">Enter a Library Size Cap value before saving, or uncheck this option.</div>
           <div id="cap-paths-note" class="form-text" {{ 'hidden' if thresholds_have_library else '' }}>{{ 'Save a monitored directory first.' if selected_media_apis_ready else ('Fix the /config read/write problem first.' if not filesystem_ready else ('Connect or uncheck the selected media server first.' if (use_plex or use_jellyfin) else 'Select Plex or Jellyfin under Server software first.')) }}</div>
-          <div class="form-text">Optional. Caps the total size of your monitored movies — the daily cleanup trims back under it. Refresh the measurement with &#8635; on the Dashboard's Storage card.</div>
+          <div class="form-text">Optional. Caps the combined size of your monitored movies and TV; the daily cleanup trims back under it. Refresh the measurement with &#8635; on the Dashboard.</div>
         </div>
 
         <hr class="config-divider my-4">
@@ -1434,6 +1453,7 @@ const LIBRARY_ROOT = {{ library_root | tojson }};
 const LIBRARY_ROOT_NAME = LIBRARY_ROOT.split('/').filter(Boolean).pop() || 'library';
 const TAUTULLI_APPDATA_DIR = {{ config.TAUTULLI_APPDATA | tojson }};
 const RADARR_APPDATA_DIR = {{ config.RADARR_APPDATA | tojson }};
+const SONARR_APPDATA_DIR = {{ config.SONARR_APPDATA | tojson }};
 
 // ── Dirty state ───────────────────────────────────────────────────────────────
 
@@ -1466,9 +1486,9 @@ const _connectionOnboardingActive = {{ 'true' if connection_onboarding_active | 
 const _connectionErrorOnLoad = {{ 'true' if api_connection_error | default(false) else 'false' }};
 let _requiredConnectionOk = {{ 'true' if connection_health.critical_ok else 'false' }};
 let _requiredConnectionMessage = {{ (connection_health.required_tooltip or 'Connect the selected media server first.')|tojson }};
-const CONNECTION_OVERRIDE_FIELDS = new Set(['TAUTULLI_URL', 'TAUTULLI_API_KEY', 'PLEX_URL', 'PLEX_TOKEN', 'JELLYFIN_URL', 'JELLYFIN_API_KEY', 'RADARR_URL', 'RADARR_API_KEY']);
+const CONNECTION_OVERRIDE_FIELDS = new Set(['TAUTULLI_URL', 'TAUTULLI_API_KEY', 'PLEX_URL', 'PLEX_TOKEN', 'JELLYFIN_URL', 'JELLYFIN_API_KEY', 'RADARR_URL', 'RADARR_API_KEY', 'SONARR_URL', 'SONARR_API_KEY']);
 const SECRET_OVERRIDE_FIELDS = new Set([
-  'TAUTULLI_API_KEY', 'PLEX_TOKEN', 'JELLYFIN_API_KEY', 'RADARR_API_KEY',
+  'TAUTULLI_API_KEY', 'PLEX_TOKEN', 'JELLYFIN_API_KEY', 'RADARR_API_KEY', 'SONARR_API_KEY',
   // Notification credentials — masked with a Show toggle just like the API keys.
   'NOTIFY_DISCORD_WEBHOOK', 'NOTIFY_TELEGRAM_BOT_TOKEN', 'NOTIFY_SLACK_WEBHOOK',
   'NOTIFY_PUSHOVER_USER_KEY', 'NOTIFY_PUSHOVER_TOKEN', 'NOTIFY_NTFY_TOPIC', 'NOTIFY_GOTIFY_TOKEN',
@@ -1781,7 +1801,7 @@ function _hideAllSecretFields() {
 
 // Auto Detect only fills credentials — URLs are handled by their placeholders
 // and the blank-saves-to-default rule, so it never overwrites a URL field.
-const CONNECTION_KEY_FIELDS = new Set(['TAUTULLI_API_KEY', 'PLEX_TOKEN', 'RADARR_API_KEY', 'JELLYFIN_API_KEY']);
+const CONNECTION_KEY_FIELDS = new Set(['TAUTULLI_API_KEY', 'PLEX_TOKEN', 'RADARR_API_KEY', 'SONARR_API_KEY', 'JELLYFIN_API_KEY']);
 function _applyDetectedConnectionValues(values, { overwrite = false } = {}) {
   if (!values || typeof values !== 'object') return false;
   let changed = false;
@@ -2202,6 +2222,7 @@ function _canonicalConfig(cfg) {
     DISPLAY_TIME_FORMAT: _str(cfg.DISPLAY_TIME_FORMAT || '12h'),
     DAILY_RUN_TIME: _str(cfg.DAILY_RUN_TIME || '00:00'),
     TAUTULLI_APPDATA: _str(cfg.TAUTULLI_APPDATA),
+    SONARR_APPDATA: _str(cfg.SONARR_APPDATA),
     RADARR_APPDATA: _str(cfg.RADARR_APPDATA),
     TAUTULLI_URL: _str(cfg.TAUTULLI_URL),
     TAUTULLI_API_KEY: _str(cfg.TAUTULLI_API_KEY),
@@ -2209,6 +2230,9 @@ function _canonicalConfig(cfg) {
     PLEX_TOKEN: _str(cfg.PLEX_TOKEN),
     RADARR_URL: _str(cfg.RADARR_URL),
     RADARR_API_KEY: _str(cfg.RADARR_API_KEY),
+    SONARR_URL: _str(cfg.SONARR_URL),
+    SONARR_API_KEY: _str(cfg.SONARR_API_KEY),
+    SONARR_CLEANUP_ENABLED: cfg.SONARR_CLEANUP_ENABLED !== false,
     // Notifications — included so edits here arm Save/Revert. The defaults in
     // _NOTIFY_FIELDS mirror notify.TOGGLE_DEFAULTS: the three alert types that
     // report on the library are pre-selected, the ones that add detail or
@@ -2648,7 +2672,8 @@ function populateForm(cfg) {
   syncSavedVisibilitySections();
 
   [   'TAUTULLI_URL','TAUTULLI_API_KEY','PLEX_URL','PLEX_TOKEN',
-   'RADARR_URL','RADARR_API_KEY'].forEach(k => sv(k, cfg[k]));
+   'RADARR_URL','RADARR_API_KEY','SONARR_URL','SONARR_API_KEY'].forEach(k => sv(k, cfg[k]));
+  sc('sonarr-cleanup-enabled', cfg.SONARR_CLEANUP_ENABLED !== false);
   _hideAllSecretFields();
 
   const hasSection = cfg.RADARR_OVERSEERR_SECTION_ID !== null && cfg.RADARR_OVERSEERR_SECTION_ID !== undefined;
@@ -2752,11 +2777,15 @@ function getFormConfig() {
     DISPLAY_TIME_FORMAT:          v('DISPLAY_TIME_FORMAT') || '12h',
     TAUTULLI_APPDATA:  TAUTULLI_APPDATA_DIR,
     RADARR_APPDATA:    RADARR_APPDATA_DIR,
+    SONARR_APPDATA:    SONARR_APPDATA_DIR,
     TAUTULLI_URL:      v('TAUTULLI_URL'),
     TAUTULLI_API_KEY:  v('TAUTULLI_API_KEY'),
     PLEX_URL:          v('PLEX_URL'),
     PLEX_TOKEN:        v('PLEX_TOKEN'),
     RADARR_URL:        v('RADARR_URL'),
+    SONARR_URL:        v('SONARR_URL'),
+    SONARR_API_KEY:    v('SONARR_API_KEY'),
+    SONARR_CLEANUP_ENABLED: chk('sonarr-cleanup-enabled') !== false,
     RADARR_API_KEY:    v('RADARR_API_KEY'),
     ...Object.fromEntries(_NOTIFY_FIELDS.map(([key, kind, dflt]) => [key,
       kind === 'check' ? chk(key)
@@ -3904,6 +3933,7 @@ function renderMountBadges() {
   };
   _show('tautulli', d.tautulli);
   _show('radarr',   d.radarr);
+  _show('sonarr',   d.sonarr);
 }
 (async function _verifyMounts() {
   try {

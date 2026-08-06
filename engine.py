@@ -301,6 +301,10 @@ MOVIE_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv",
 MAX_STALENESS_MONTHS        = SCORING["RECENCY_DEFAULT_MONTHS"]  # recency fades to 0 over this window.
 
 # ── Filtering ─────────────────────────────────────────────────────────────────
+MOVIE_CLEANUP_ENABLED       = True           # Master per-type switch. When false, NO movie is ever
+                                             # eligible: scans still scan and score (the snapshot and
+                                             # the Filtering & Scoring table stay live), but the
+                                             # deletion plan is empty and cleanup deletes nothing.
 PROTECTED_COLLECTIONS       = set()          # Plex collection name(s); never deleted.
 GRACE_PERIOD_DAYS           = 30             # Skip movies added to the library within this many days.
 SKIP_UNPLAYED_MOVIES        = False          # When true, movies with no play history are never deleted.
@@ -1875,6 +1879,7 @@ def _load_config_from_file():
     global DAILY_RUN_TIME
     global MONITOR_DIRS, MOVIE_EXTENSIONS
     global PROTECTED_COLLECTIONS, GRACE_PERIOD_DAYS, SKIP_UNPLAYED_MOVIES, PROTECT_JELLYFIN_FAVORITES, MAX_IMDB_RATING
+    global MOVIE_CLEANUP_ENABLED
     global SCORE_BALANCE, HISTORY_WEIGHT, QUALITY_WEIGHT, NEAR_TIE_PTS, MAX_STALENESS_MONTHS
     global RADARR_OVERSEERR_SECTION_ID, RADARR_OVERSEERR_SECTION_ID_SOURCE, IMDB_RATINGS_URL, IMDB_RATINGS_MAX_AGE_DAYS
     global LOG_RETENTION_DAYS, KEEP_INTERRUPTED_LOGS
@@ -1929,6 +1934,12 @@ def _load_config_from_file():
     except (TypeError, ValueError):
         pass
     if "PROTECT_JELLYFIN_FAVORITES" in _c: PROTECT_JELLYFIN_FAVORITES = _coerce_config_bool(_c["PROTECT_JELLYFIN_FAVORITES"])
+    # Absent means ON — the shipped behavior — so a config written before the
+    # key existed keeps deleting movies rather than silently going inert. The
+    # plan-stamp copy carries the effective bool for the same reason: an absent
+    # key must compare equal to an explicit true.
+    MOVIE_CLEANUP_ENABLED = _coerce_config_bool(_c["MOVIE_CLEANUP_ENABLED"]) if "MOVIE_CLEANUP_ENABLED" in _c else True
+    _PLAN_CONFIG_RAW["MOVIE_CLEANUP_ENABLED"] = MOVIE_CLEANUP_ENABLED
 
     # SCORE_BALANCE is the only scoring knob; unknown keys are ignored.
     if "SCORE_BALANCE" in _c: SCORE_BALANCE = _coerce_config_number(_c["SCORE_BALANCE"], "SCORE_BALANCE", min_value=0, max_value=100, default=SCORE_BALANCE)
@@ -2126,7 +2137,7 @@ _PLAN_CONFIG_KEYS = (
     "HEADROOM_GB", "REDLINE_GB", "REDLINE_ONLY_MODE", "MAX_LIBRARY_GB",
     "GRACE_PERIOD_DAYS", "SKIP_UNPLAYED_MOVIES", "PROTECT_JELLYFIN_FAVORITES",
     "MAX_IMDB_RATING", "SCORE_BALANCE", "NEAR_TIE_PTS", "MAX_STALENESS_MONTHS",
-    "MOVIE_EXTENSIONS", "_SCORING_CURVES",
+    "MOVIE_EXTENSIONS", "MOVIE_CLEANUP_ENABLED", "_SCORING_CURVES",
 )
 # Raw config values for those keys, captured verbatim at config load so the
 # stamp and the app compare like with like (both sides read config.json).
@@ -2274,8 +2285,10 @@ def debug_startup():
         log("(re-score marked vs next-in-line on fresh watch data) and the delete-from-")
         log("queue a cleanup tick WOULD perform, but nothing is deleted, the queue on disk")
         log("is left untouched, and the daily schedule is not advanced. It ignores the")
-        log("headroom safety percentage (like Simulate). Run Simulate first to build the")
-        log("queue this works from. Engine state (thresholds, disk, connections) follows.")
+        log("headroom safety percentage (like Simulate) and the deletion delay — like the")
+        log("manual Cleanup button and a Redline emergency, which delete without waiting.")
+        log("The SCHEDULED daily cleanup honors each mark's delete-on date. Run Simulate")
+        log("first to build the queue this works from. Engine state follows.")
         log("============================================================================")
         log_blank()
     log_stage("CHECKING", phase="checking")
@@ -2334,6 +2347,8 @@ def debug_startup():
     log(f"File size optimization: {f'{NEAR_TIE_PTS:g}-pt near-tie window' if NEAR_TIE_PTS else 'off'}")
     log(f"Scoring constants: {json.dumps(SCORING, separators=(',', ':'))}")
     log("ELIGIBILITY FILTERS:")
+    if not MOVIE_CLEANUP_ENABLED:
+        log("Movie cleanup: DISABLED (Filtering & Scoring) — no movie is eligible; this run deletes nothing")
     log(f"Minimum age (grace period): {GRACE_PERIOD_DAYS} days")
     log(f"Skip unplayed movies: {SKIP_UNPLAYED_MOVIES}")
     log(f"Max IMDb rating cutoff: {MAX_IMDB_RATING if MAX_IMDB_RATING is not None else 'off'}")
@@ -3988,13 +4003,24 @@ def _fresh_watch_data(source_ids) -> dict:
             uids = []
             log(f"Re-verify: could not list Jellyfin users ({e}); Jellyfin movies treated as unverifiable.")
         for uid in uids:
-            try:
-                items = (_jellyfin_request(f"Users/{uid}/Items", {
-                    "Ids": ",".join(jf_ids),
-                    "EnableUserData": "true",
-                }) or {}).get("Items", [])
-            except Exception as e:
-                log(f"Re-verify: fresh Jellyfin watch fetch failed for user {uid} ({e}).")
+            # The ids ride the query string, and a cap far below the library can
+            # put the ENTIRE queue in the marked set — thousands of ids in one
+            # URL is an HTTP 414, which read every Jellyfin movie as
+            # unverifiable. Batched requests keep the URL sane; a failed batch
+            # discards the whole user's read (partial per-user data could
+            # undercount plays, and an undercount leans toward deleting).
+            items, user_failed = [], False
+            for i in range(0, len(jf_ids), 100):
+                try:
+                    items.extend((_jellyfin_request(f"Users/{uid}/Items", {
+                        "Ids": ",".join(jf_ids[i:i + 100]),
+                        "EnableUserData": "true",
+                    }) or {}).get("Items", []))
+                except Exception as e:
+                    log(f"Re-verify: fresh Jellyfin watch fetch failed for user {uid} ({e}).")
+                    user_failed = True
+                    break
+            if user_failed:
                 continue
             for item in items:
                 jid = str(item.get("Id"))
@@ -4415,6 +4441,8 @@ def _snapshot_entry(title, year, rating, votes, plays, users,
         # the browser-facing /api/library-snapshot response (paths never leave the
         # server), and absent from older snapshots (the re-verify tolerates None).
         "path": str(path) if path else None,
+        # This scan only knows movies; the TV scan stamps its own type.
+        "media_type": "movie",
         "title": str(title or ""),
         "year": parse_int(year, 0) or None,
         "rating": float(rating) if rating is not None else None,
@@ -4592,6 +4620,10 @@ def _hard_filter_reason(*, protected, favorite, imdb_rating, imdb_votes,
     identity mismatch — the scan records that as the snapshot's `excluded` flag so
     the reconcile still honors it."""
     now = now if now is not None else time.time()
+    # The per-type master switch outranks every other rule: movies off means
+    # nothing is eligible, whatever its facts say.
+    if not MOVIE_CLEANUP_ENABLED:
+        return "movie_cleanup_off"
     if protected:
         return "protected"
     if PROTECT_JELLYFIN_FAVORITES and favorite:
@@ -4643,6 +4675,7 @@ def build_candidates():
         "outside_monitored_dirs": 0,
         "protected": 0,
         "identity_mismatch": 0,
+        "movie_cleanup_off": 0,
         "jellyfin_favorite": 0,
         "recently_added": 0,
         "unplayed": 0,
@@ -5439,16 +5472,37 @@ def _snapshot_by_store_key(store) -> dict:
     return out
 
 
+def _tv_share_bytes() -> int:
+    """Bytes of the current pool deficit the app's daily TV pass has claimed
+    for SEASONS, from the merged movie+season deletion order it computes (one
+    pool, one score scale). The movie side frees the remainder, so the two
+    executors cover the one deficit exactly once. A stamp older than 26 hours
+    reads as 0 — the TV pass stopped running (disarmed, aborted, or the app is
+    down), and the fail direction is the movie side covering everything."""
+    try:
+        with db.connect(DB_FILE) as conn:
+            share = db.get_meta(conn, "tv_share")
+        if (isinstance(share, dict)
+                and time.time() - float(share.get("at") or 0) <= 26 * 3600):
+            return max(0, int(share.get("bytes") or 0))
+    except Exception:
+        pass
+    return 0
+
+
 def _daily_deficit_bytes(used_gb, max_gb, library_gb) -> int:
-    """Bytes the daily headroom/cap run must free right now — the larger of the
-    headroom deficit (used over its limit) and the Library Size Cap deficit. This
-    is what sizes the delay-clocked marked set. Redline is an emergency (immediate,
+    """Bytes the daily headroom/cap run must free right now FROM MOVIES — the
+    larger of the headroom deficit (used over its limit) and the Library Size
+    Cap deficit (the cap measures every monitored directory, TV included),
+    minus the share the TV pass covers with season deletions. This is what
+    sizes the delay-clocked marked set. Redline is an emergency (immediate,
     no delay clock), so it never sizes the marks and is excluded here."""
     headroom = max(0.0, used_gb - max_gb)
     cap = 0.0
     if MAX_LIBRARY_GB is not None and library_gb is not None:
         cap = max(0.0, library_gb - MAX_LIBRARY_GB)
-    return int(max(headroom, cap) * 1_000_000_000)
+    total = int(max(headroom, cap) * 1_000_000_000)
+    return max(0, total - _tv_share_bytes()) if total > 0 else 0
 
 
 # ── Config-save reconcile: rebuild the queue from the snapshot, no rescan ──────
@@ -5622,6 +5676,10 @@ def reconcile_from_snapshot(trigger="config change", *, refetch_protection=False
     with db.connect(DB_FILE) as conn:
         snapshot = db.read_snapshot(conn) or {}
     rows = snapshot.get("movies") or []
+    # Movie rows only, and absent reads as movie (rows that predate the column).
+    # This reconcile rebuilds the MOVIE deletion plan; a TV row swept into it
+    # would be scored and marked by machinery that knows nothing about seasons.
+    rows = [r for r in rows if (r.get("media_type") or "movie") == "movie"]
     if not rows:
         log(f"Reconcile [{trigger}]: no library snapshot yet — run Simulate first.")
         return
@@ -6584,6 +6642,8 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
     path_issues = (build_stats["no_file_path"] + build_stats["bad_extension"]
                    + build_stats["missing_on_disk"] + build_stats["outside_monitored_dirs"])
     row("Movies scanned:", total_scanned)
+    if build_stats.get("movie_cleanup_off"):
+        row("Cleanup off:", f"{build_stats['movie_cleanup_off']} (movie cleanup is turned off in Filtering & Scoring)")
     row("Protected:", f"{build_stats['protected']} (in Protected collection)")
     if build_stats.get("jellyfin_favorite"):
         row("JF favorites:", f"{build_stats['jellyfin_favorite']} (favorited by a Jellyfin user — protected)")
@@ -7017,12 +7077,22 @@ def main():
     # library cap is a daily target that also honors the deletion delay, so
     # its deficit never rides along on an emergency run. Simulate previews
     # the full combined plan.
+    # The daily (delay-clocked) share of the deficit, minus what the TV pass
+    # covers with season deletions from the merged pool order. Redline stays a
+    # whole, movie-immediate emergency — season deletion needs Sonarr and the
+    # full fail-closed protection fetch, which an emergency can't wait on.
+    _daily_gb = max(_headroom_deficit_gb, _library_deficit_gb)
+    _tv_share_gb = bytes_to_gb(_tv_share_bytes())
+    if _tv_share_gb > 0 and _daily_gb > 0:
+        log(f"TV pass share: season deletions cover {min(_tv_share_gb, _daily_gb):.1f} GB "
+            f"of the {_daily_gb:.1f} GB daily deficit — movies target the remainder.")
+        _daily_gb = max(0.0, _daily_gb - _tv_share_gb)
     if _is_sim or _manual_cleanup:
-        to_free_gb = max(_headroom_deficit_gb, _redline_deficit_gb, _library_deficit_gb)
+        to_free_gb = max(_daily_gb, _redline_deficit_gb)
     elif immediate_trigger:
         to_free_gb = _redline_deficit_gb
     else:
-        to_free_gb = max(_headroom_deficit_gb, _library_deficit_gb)
+        to_free_gb = _daily_gb
     to_free_bytes = int(to_free_gb * 1_000_000_000)  # decimal GB → bytes, consistent with bytes_to_gb()
 
     # Build trigger label used in logs and summary headers.

@@ -264,7 +264,10 @@ disc-structure rips where one movie spans many files. To change the set:
 When Plex or Jellyfin is connected this section also shows protected collection
 pickers; selected collections are always skipped. When Radarr is connected,
 **Optional Radarr cleanup** removes a deleted movie from Radarr so it doesn't
-get re-downloaded. It never asks Radarr to delete files.
+get re-downloaded. It never asks Radarr to delete files. **Optional Sonarr
+cleanup** (on by default) marks a season unmonitored in Sonarr before a TV
+cleanup deletes it, so it isn't re-downloaded; turn it off only if you manage
+season monitoring yourself.
 
 ### 4. Space Thresholds
 
@@ -283,8 +286,10 @@ saving it.
 - **Redline emergency floor** — optional. When free space drops below it,
   cleanup runs immediately and frees just enough to get back above. Must sit
   below the Headroom target.
-- **Library Size Cap** — optional cap on the total size of your monitored
-  movies, cleaned up on the same daily schedule as Headroom.
+- **Library Size Cap** — optional cap on the total measured size of everything
+  under your monitored paths, movies and TV together. The daily cleanup trims
+  the whole pool back under it: movies and TV seasons compete in one deletion
+  order by retention score (see [TV cleanup](#tv-cleanup)).
 - **Deletion delay** — how many whole days a movie stays marked before a daily
   cleanup deletes it. Redline and manual runs skip the wait. Each mark keeps the
   delay it was made under, so changing this affects only future marks; use
@@ -306,6 +311,51 @@ at Paused. A fresh install ships this way. With something else armed:
   just without a free-space target. A Redline floor alongside still handles
   emergencies.
 
+### TV cleanup
+
+TV works in whole seasons, never individual episodes or per-title picks.
+Movies and TV share **one pool**: the monitored paths, the space triggers
+(the Headroom target and the Library Size Cap), and one deletion order on the
+same 0–100 retention scale. The TV inventory — every show, its seasons,
+episode counts and on-disk sizes — comes from your media servers (Jellyfin
+and/or Plex, title-merged when both watch the same library), and watch
+history comes from Jellyfin and Tautulli. **Sonarr is optional and
+cleanup-only**: it never supplies the inventory, and is only asked to
+unmonitor a season before deletion so it isn't re-downloaded. With a media
+server connected, TV cleanup enabled (Filtering & Scoring → Cleanup scope)
+and a Headroom target or Library Size Cap armed, a TV pass runs once a day
+after the daily run time:
+
+1. It refreshes everything from the live servers — the media servers'
+   inventory, watch history, favorites, and protected collections. If any
+   configured source fails to answer, the pass aborts without touching a
+   file.
+2. It rebuilds the season plan: every in-scope season ranked worst-kept first,
+   with protected and favorited shows, shows outside your monitored paths, and
+   a continuing show's newest season held back entirely.
+3. It merges that plan with the movie deletion queue into one worst-first
+   order and walks it until the pool's deficit (how far the disk is over the
+   Headroom target, or the library over the cap — whichever is larger) is
+   covered. The seasons inside that stretch are **marked**; the movies in it
+   stay the movie cleanup's job — the two sides split the one deficit, never
+   double-covering it. A mark waits out the same deletion delay as a marked
+   movie, and shows alongside the marked movies in the deletion history window
+   and the Cache contents debug (Configuration → Advanced).
+4. In **Automatic Cleanup**, a later pass deletes marked seasons whose delay
+   has elapsed **and that the fresh plan still takes**: when Sonarr is
+   connected the season is unmonitored there first (so it isn't
+   re-downloaded), then its episode files — freshly listed by the media
+   server — are removed and recorded in `deleted.log`, and Sonarr is asked
+   to rescan. **Monitor Only** marks but never deletes. (**Sonarr cleanup**
+   on the Configuration page turns the unmonitor step off if you'd rather
+   manage monitoring yourself; with no Sonarr at all, seasons simply delete
+   without it.)
+
+A season leaves the marked list the moment the plan stops taking it — the cap
+was raised, the show got protected or favorited, someone started watching it,
+or enough space came back. Redline stays a movie-only emergency: a breach
+frees space immediately from the movie order and never deletes TV.
+
 ### 5. Notifications
 
 Optional outbound alerts. See [Notifications](#notifications) below.
@@ -321,30 +371,33 @@ This tab holds every rule that decides *what* can be deleted and *in what
 order*, and previews all of it against your full library. Changes show in the
 preview as you make them; **Save** keeps them.
 
-### Eligibility filters
+The card is organized into four groups: what cleanup may touch, how
+everything scores, what steps aside, and the TV curve.
 
-- **Minimum age (grace period)** — movies added within this many days are
-  skipped.
-- **Don't delete unplayed movies** — optional. Skips anything with no play
-  history.
-- **Maximum IMDb rating** — optional. Movies rated above the cutoff are never
-  deleted.
-- **Jellyfin favorites** — optional. Skips movies any user favorited.
-- **No IMDb data** — always on. Without a rating or votes there isn't enough to
-  judge a movie on, so it is left alone.
+### Cleanup scope
 
-Protected collections also affect eligibility, and are set on the Configuration
-tab.
+Two per-type switches, both on by default:
 
-### Scoring & Ordering
+- **Movies** — off means no movie is ever eligible: scans still run and score
+  everything (this page stays live), but the deletion queue empties and
+  cleanup runs delete nothing.
+- **TV shows** — the master switch for [TV cleanup](#tv-cleanup). Off means
+  TV is never marked or deleted and the season plan proposes nothing; on, TV
+  joins the pool and seasons are marked whenever the shared space triggers
+  (Headroom / Library Size Cap) have a deficit to cover.
 
-Every eligible movie scores from 0 to 100. Higher means keep, and the lowest
-scores delete first. The score blends two things:
+### Scoring & ordering
+
+One retention scale for the whole pool: every eligible movie and TV season
+scores from 0 to 100, higher means keep, and the lowest scores delete first.
+The score blends two things:
 
 - **Watch history** — how often it's been played, how recently, and by how many
-  people. A never-watched movie still gets credit for being recently added, and
+  people. A never-watched title still gets credit for being recently added, and
   **Max staleness** sets how long until it counts as fully stale.
-- **IMDb rating** — the rating, weighted by how many votes back it up.
+- **IMDb rating** — the rating, weighted by how many votes back it up. A season
+  reads its show's rating (the show's IMDb id comes from the media server, the
+  rating from the ratings dataset).
 
 The dial starts at an even split. If your library has little play history, lean
 on IMDb; if it has a lot, lean on watch history.
@@ -352,6 +405,50 @@ on IMDb; if it has a lot, lean on watch history.
 Deletions go in score order, lowest first. **File size optimization** (on by
 default) breaks near-ties by deleting bigger files first, so you lose the fewest
 movies, and picks the lower-quality copy when a movie is duplicated.
+
+### Eligibility filters
+
+Applied before scoring — movies per title, TV per season, judged on the
+show's facts where noted:
+
+- **Minimum age (grace period)** — movies added within this many days are
+  skipped; a show added within it holds back all its seasons.
+- **Don't delete unplayed titles** — optional. Skips movies with no play
+  history and a show's never-watched seasons.
+- **Maximum IMDb rating** — optional. Movies rated above the cutoff are never
+  deleted, and neither is any season of a show rated above it.
+- **Jellyfin favorites** — optional. Skips movies any Jellyfin user favorited;
+  a favorited show holds back all its seasons. Jellyfin only — Plex has no
+  favorites.
+- **No IMDb data** — always on while IMDb has weight. Without a rating or
+  votes there isn't enough to judge on, so the title is left alone.
+
+Protected collections also affect eligibility, and are set on the Configuration
+tab.
+
+### TV show settings curve
+
+Two sliders that translate season watch history onto the shared scale, both
+previewing live in the library table:
+
+- **TV show watch weight** (100–200%) — a season's plays convert to
+  movie-watch equivalents: plays ÷ episodes × this weight, run through the
+  same play curve a movie's watch count uses. At 100%, playing all 12
+  episodes of a season once counts like ONE movie watch, and 6 plays of it
+  count like half a watch; at 200% a fully-played season counts like two
+  watches. Distinct season watchers count exactly what a movie's distinct
+  watchers do.
+- **All-season watch boost** (0–25 points) — every watched episode of a show
+  lifts EVERY one of its seasons a little: watching season 5 boosts seasons
+  1–4 too. One watched episode is a subtle nudge (it signals interest in the
+  show); the lift grows toward the full points as more of the show is
+  watched. A watched season protects itself on its own — the boost is what
+  lifts the show's UNTOUCHED seasons above the seasons of shows nobody
+  watches. 0 turns the lift off.
+
+Each TV season is its own row in the library table below, scored on the same
+0–100 retention scale as the movies — the same balance dial, staleness window,
+and IMDb weighting, plus the season recipe above.
 
 ### Library table
 

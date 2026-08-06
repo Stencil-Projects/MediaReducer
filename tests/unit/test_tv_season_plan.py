@@ -1,0 +1,163 @@
+"""The TV season plan: every in-scope season scored on the movie 0-100 scale
+(season_retention_score) and ordered worst-first — the order that intersplices
+with the movie deletion order.
+
+Pinned here: who steps aside entirely (protected, favorited, off-path, the
+latest season of a continuing show, and now the SHARED eligibility filters at
+season grain — grace period, IMDb cutoff, no-IMDb-data, skip-unplayed); and
+that the order is ascending by the unified score with ties going to the larger
+season. Sizing the take prefix against the pool deficit belongs to
+_merged_pool_takes and is pinned in test_pool_split.py.
+"""
+import atexit
+import json
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+_OUT = tempfile.mkdtemp(prefix="mr-tv-plan.")
+atexit.register(shutil.rmtree, _OUT, True)
+os.environ["MEDIAREDUCER_CONFIG"] = str(Path(_OUT) / "config.json")
+os.environ.setdefault("MEDIAREDUCER_LIBRARY", _OUT)
+Path(_OUT, "config.json").write_text(json.dumps({"OUTPUT_DIR": _OUT}))
+import app as A  # noqa: E402
+
+ok = True
+def check(name, cond, extra=""):
+    global ok
+    print(("PASS " if cond else "FAIL ") + name + ("" if cond else f"   {extra}"))
+    ok = ok and cond
+
+
+NOW = 1_700_000_000
+DAY = 86400
+GB = 1_000_000_000
+
+# 100% watch history: the scores are the pure season recipe, no IMDb terms,
+# and the no-IMDb-data / cutoff filters are off (mirroring the movie rules).
+CFG = {"SCORE_BALANCE": 0, "GRACE_PERIOD_DAYS": 0, "MAX_IMDB_RATING": None,
+       "MAX_STALENESS_MONTHS": 36, "TV_SERIES_WATCH_BUMP": 10,
+       "TV_WATCH_WEIGHT": 100, "SKIP_UNPLAYED_MOVIES": False,
+       # Favorites shield TV under the SAME eligibility toggle movies use.
+       "PROTECT_JELLYFIN_FAVORITES": True}
+
+def series(title, seasons, *, status="ended", in_scope=1, protected=False,
+           favorite=False, users=0, last=0, added=NOW - 800 * DAY,
+           rating=None, votes=0, s_eps=None, s_watched=None):
+    eps = s_eps if s_eps is not None else sum(s.get("eps") or 0 for s in seasons)
+    watched = s_watched if s_watched is not None else sum(s.get("eps_watched") or 0 for s in seasons)
+    return {"media_type": "tv", "title": title, "tv_status": status,
+            "tv_in_scope": in_scope, "protected": protected, "favorite": favorite,
+            "users": users, "last_played": last, "added_at": added,
+            "rating": rating, "votes": votes, "tv_episodes": eps,
+            "tv_episodes_watched": watched, "tv_seasons": seasons}
+
+def season(n, *, eps=10, watched=0, size=10 * GB, last=0):
+    return {"n": n, "eps": eps, "eps_watched": watched, "size_bytes": size,
+            "last_played": last}
+
+ROWS = [
+    # Half-consumed dead show: S1 fully watched 100 days ago, S2 untouched.
+    series("Dead Show", [season(1, watched=10, last=NOW - 100 * DAY),
+                         season(2, watched=0)], users=1),
+    # Alive continuing show: S3 current (excluded), S1 watched long ago, S2 untouched.
+    series("Alive Show", [season(1, watched=10, last=NOW - 400 * DAY),
+                          season(2, watched=0),
+                          season(3, watched=1, last=NOW - 1 * DAY)],
+           status="continuing", users=2, last=NOW - 1 * DAY),
+    # Whole-series exclusions.
+    series("Protected Show", [season(1), season(2)], protected=True),
+    series("Favorite Show", [season(1)], favorite=True),
+    series("Off Path Show", [season(1), season(2), season(3)], in_scope=0),
+    # Two shows nobody has ever touched, added long past the staleness cliff:
+    # both score 0 — the tie goes to the LARGER season.
+    series("Tiny Dead", [season(1, size=1 * GB)], added=NOW - 3000 * DAY),
+    series("Huge Dead", [season(1, size=60 * GB)], added=NOW - 3000 * DAY),
+]
+
+plan = A._tv_season_plan(ROWS, CFG, now=NOW)
+order, ex = plan["order"], plan["excluded"]
+key = [(e["title"], e["season"]) for e in order]
+
+# ── Who steps aside ─────────────────────────────────────────────────────────
+check("a protected series contributes no seasons",
+      all(t != "Protected Show" for t, _ in key) and ex["protected"] == 2)
+check("a favorited series contributes no seasons",
+      all(t != "Favorite Show" for t, _ in key) and ex["favorite"] == 1)
+check("an off-path series contributes no seasons",
+      all(t != "Off Path Show" for t, _ in key) and ex["off_path"] == 3)
+check("a continuing show's latest season is never in the order",
+      ("Alive Show", 3) not in key and ex["latest_of_continuing"] == 1)
+check("...but its OLD seasons are", ("Alive Show", 1) in key)
+check("an ENDED show's latest season has no such shield", ("Dead Show", 2) in key)
+unfav = A._tv_season_plan(ROWS, dict(CFG, PROTECT_JELLYFIN_FAVORITES=False), now=NOW)
+check("with the favorites toggle off a favorited series is fair game",
+      any(e["title"] == "Favorite Show" for e in unfav["order"]),
+      [e["title"] for e in unfav["order"]])
+# Plex states no continuing/ended status; unknown gets the shield too.
+nostatus = A._tv_season_plan(
+    [series("Mystery Status", [season(1), season(2)], status=None)], CFG, now=NOW)
+check("a show with UNKNOWN status shields its latest season like a continuing one",
+      [(e["title"], e["season"]) for e in nostatus["order"]] == [("Mystery Status", 1)]
+      and nostatus["excluded"]["latest_of_continuing"] == 1, nostatus["excluded"])
+
+# ── The shared filters, at season grain ─────────────────────────────────────
+graced = A._tv_season_plan(
+    [series("New Show", [season(1)], added=NOW - 5 * DAY)],
+    dict(CFG, GRACE_PERIOD_DAYS=30), now=NOW)
+check("the grace period holds back a freshly-added show",
+      not graced["order"] and graced["excluded"]["recently_added"] == 1, graced["excluded"])
+
+imdb_cfg = dict(CFG, SCORE_BALANCE=70, MAX_IMDB_RATING=7.5)
+cut = A._tv_season_plan(
+    [series("Prestige", [season(1)], rating=8.4, votes=100_000),
+     series("Mystery", [season(1)]),                         # no rating at all
+     series("Junk", [season(2)], rating=4.1, votes=50_000)],
+    imdb_cfg, now=NOW)
+check("the IMDb cutoff protects a high-rated show's seasons",
+      ("Prestige", 1) not in [(e["title"], e["season"]) for e in cut["order"]]
+      and cut["excluded"]["high_rated"] == 1, cut["excluded"])
+check("no IMDb data means not enough to judge — held back when IMDb is in use",
+      cut["excluded"]["no_imdb_data"] == 1
+      and [(e["title"], e["season"]) for e in cut["order"]] == [("Junk", 2)],
+      cut["excluded"])
+
+unplayed = A._tv_season_plan(
+    [series("Half", [season(1, watched=3, last=NOW - 50 * DAY), season(2)], users=1)],
+    dict(CFG, SKIP_UNPLAYED_MOVIES=True), now=NOW)
+check("skip-unplayed holds back the untouched season but not the watched one",
+      [(e["title"], e["season"]) for e in unplayed["order"]] == [("Half", 1)]
+      and unplayed["excluded"]["unplayed"] == 1, unplayed["excluded"])
+
+# ── The order among the rest ────────────────────────────────────────────────
+pos = {k: i for i, k in enumerate(key)}
+check("a recently-watched season sorts far above an untouched one of the same show",
+      pos[("Dead Show", 2)] < pos[("Dead Show", 1)], key)
+check("the untouched shows' seasons go first of all",
+      {key[0], key[1]} == {("Huge Dead", 1), ("Tiny Dead", 1)}, key)
+check("a zero-score tie goes to the LARGER season",
+      pos[("Huge Dead", 1)] < pos[("Tiny Dead", 1)], key)
+check("scores are ascending through the whole order",
+      all(order[i]["score"] <= order[i + 1]["score"] for i in range(len(order) - 1)),
+      [e["score"] for e in order])
+check("every entry carries what the views show: size, eps, watched, score",
+      all(e["size_bytes"] > 0 and "eps" in e and "eps_watched" in e
+          and isinstance(e["score"], float) for e in order))
+
+# The series watch bump, end to end: the untouched season of the watched show
+# outscores the untouched seasons of the never-watched shows, and turning the
+# knob to 0 shrinks exactly that lift.
+d2 = next(e for e in order if (e["title"], e["season"]) == ("Dead Show", 2))
+huge = next(e for e in order if e["title"] == "Huge Dead")
+check("an untouched season of a WATCHED show outscores one of an unwatched show",
+      d2["score"] > huge["score"], (d2["score"], huge["score"]))
+nobump = A._tv_season_plan(ROWS, dict(CFG, TV_SERIES_WATCH_BUMP=0), now=NOW)
+d2_nb = next(e for e in nobump["order"] if (e["title"], e["season"]) == ("Dead Show", 2))
+check("the bump knob at 0 removes the series lift", d2_nb["score"] < d2["score"],
+      (d2_nb["score"], d2["score"]))
+
+print("RESULT:", "PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)

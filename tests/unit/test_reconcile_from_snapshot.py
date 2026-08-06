@@ -364,5 +364,54 @@ _m = _re.search(r"MOVIE_EXTENSIONS = \{([^}]+)\}", _src)
 _engine_dflt = set(_re.findall(r'"(\.[a-z0-9]+)"', _m.group(1))) if _m else set()
 check("engine default MOVIE_EXTENSIONS matches default_config.json", _engine_dflt == _dflt)
 
+# ══ A TV row in the snapshot never reaches the movie plan ══════════════════
+# The pin for every TV slice that follows: rows carry media_type, the movie
+# reconcile takes only 'movie' rows, and a row that PREDATES the column (no
+# media_type key at all) still counts as a movie rather than vanishing from
+# the plan of every existing install.
+# The cap section above pointed E.DB_FILE into a since-deleted tempdir; put it
+# back on the harness store, and force re-init in case an earlier section
+# removed the file while db's per-path init memo still lists it.
+E.DB_FILE = E.OUTPUT_DIR / "mediareducer.db"
+db.forget_initialized(E.DB_FILE)
+# ...and restore the globals earlier sections mutated. MOVIE_EXTENSIONS matters
+# most: left excluding .mkv, every row here is ineligible and "the tv row is
+# not in the plan" passes without testing anything.
+E.MOVIE_EXTENSIONS = {".mkv"}
+E.HEADROOM_GB = 506
+E.MAX_LIBRARY_GB = None
+# The movie() helper writes no media_type at all — that IS the predates-the-
+# column case, exercised by movies[0] and movies[2].
+movies = [movie(P[n], plays=n) for n in range(3)]
+movies[1]["media_type"] = "tv"                      # a future TV row
+seed(movies)
+E.reconcile_from_snapshot(trigger="test")
+q = queue_now()
+check("a tv row is NOT swept into the movie plan", P[1] not in q)
+check("movie rows still reach the plan around it", P[0] in q and P[2] in q)
+with db.connect(E.DB_FILE) as _c:
+    _rows = {r["path"]: r for r in (db.read_snapshot(_c) or {}).get("movies", [])}
+check("the store round-trips media_type", _rows.get(P[1], {}).get("media_type") == "tv")
+check("a row written without the key reads back as a movie",
+      _rows.get(P[0], {}).get("media_type") == "movie")
+
+# ── The per-type master switch ──────────────────────────────────────────────
+# MOVIE_CLEANUP_ENABLED=False outranks every other rule: the same snapshot
+# that just produced a plan reconciles to an EMPTY queue, and flipping it back
+# re-admits everything — both directions through the same shared predicate
+# (_hard_filter_reason), so a full scan and a reconcile can never disagree.
+E.MOVIE_CLEANUP_ENABLED = False
+E.reconcile_from_snapshot(trigger="test")
+check("movie cleanup off reconciles to an empty queue", queue_now() == {})
+check("the shared predicate names the switch as the reason",
+      E._hard_filter_reason(protected=False, favorite=False, imdb_rating=5.0,
+                            imdb_votes=100, added_at=NOW - 400 * 86400,
+                            play_count=3, last_played=NOW - 86400,
+                            now=NOW) == "movie_cleanup_off")
+E.MOVIE_CLEANUP_ENABLED = True
+E.reconcile_from_snapshot(trigger="test")
+check("turning movie cleanup back on re-admits the movies",
+      P[0] in queue_now() and P[2] in queue_now())
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

@@ -89,7 +89,23 @@ CREATE TABLE IF NOT EXISTS movies (
     -- a queue the reconcile rebuilds from the snapshot keeps it. Untyped = BLOB
     -- affinity to round-trip the exact int-or-str the media API returned.
     tmdb_id,
-    section_id
+    section_id,
+    -- 'movie' or 'tv'. Every deletion path filters on it, so a TV row in the
+    -- snapshot can never be swept into a movie plan.
+    media_type TEXT NOT NULL DEFAULT 'movie',
+    -- Sonarr's series status ('continuing'/'ended'/'upcoming'); NULL for movies.
+    tv_status  TEXT,
+    -- Episode files on disk (Sonarr) and distinct episodes watched (max across
+    -- servers): the completion fraction TV scoring reads. NULL for movies.
+    tv_episodes         INTEGER,
+    tv_episodes_watched INTEGER,
+    -- Per-season facts as JSON: [{n, eps, size_bytes, eps_watched, last_played}].
+    -- The season is TV's deletion unit, so this is what a TV plan reads.
+    tv_seasons          TEXT,
+    -- 1 when the series folder sits under a monitored directory. Monitored
+    -- paths are the deletion allow-list for TV exactly as for movies: Sonarr
+    -- supplies the inventory, monitored paths decide what cleanup MAY touch.
+    tv_in_scope         INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_movies_path ON movies(path);
 CREATE TABLE IF NOT EXISTS queue (
@@ -380,6 +396,12 @@ def _movie_row_to_dict(r) -> dict:
         "excluded": bool(r["excluded"]),
         "tmdb_id": r["tmdb_id"],
         "section_id": r["section_id"],
+        "media_type": r["media_type"] or "movie",
+        "tv_status": r["tv_status"],
+        "tv_episodes": r["tv_episodes"],
+        "tv_episodes_watched": r["tv_episodes_watched"],
+        "tv_seasons": json.loads(r["tv_seasons"]) if r["tv_seasons"] else None,
+        "tv_in_scope": r["tv_in_scope"],
     }
 
 
@@ -404,7 +426,7 @@ def _queue_row_to_entry(r) -> dict:
 _MOVIE_COLUMNS = ("ord", "path", "title", "year", "rating", "votes", "plays",
                   "users", "last_played", "size_gb", "size_bytes", "added_at",
                   "protected", "favorite", "excluded", "source_id",
-                  "jf_source_id", "tmdb_id", "section_id")
+                  "jf_source_id", "tmdb_id", "section_id", "media_type", "tv_status", "tv_episodes", "tv_episodes_watched", "tv_seasons", "tv_in_scope")
 _QUEUE_COLUMNS = ("path", "ord", "title", "score", "size_bytes", "marked_at",
                   "delay_days", "tmdb_id", "section_id")
 
@@ -429,20 +451,41 @@ def replace_metadata_cache(conn, movies: dict) -> None:
     )
 
 
-def replace_movies(conn, movies_list) -> None:
-    """Replace the library snapshot from an ordered list of _snapshot_entry dicts.
-    ord preserves list order; path is indexed but not unique."""
-    conn.execute("DELETE FROM movies")
+def _replace_type_rows(conn, media_type: str, rows_list) -> None:
+    """Replace one media type's snapshot rows, leaving the other type's alone.
+    Each scan owns its type: a movie Simulate must not wipe the TV inventory,
+    and a TV refresh must not wipe the movie snapshot. New rows take ords above
+    everything remaining (ord is a PRIMARY KEY; order only matters WITHIN a
+    type, and each type's list order is preserved)."""
+    conn.execute("DELETE FROM movies WHERE media_type=?", (media_type,))
+    base = conn.execute("SELECT COALESCE(MAX(ord)+1, 0) FROM movies").fetchone()[0]
     conn.executemany(
         _insert_sql("movies", _MOVIE_COLUMNS),
-        [(i, m.get("path"), m.get("title") or "", m.get("year"), m.get("rating"),
+        [(base + i, m.get("path"), m.get("title") or "", m.get("year"), m.get("rating"),
           m.get("votes"), m.get("plays"), m.get("users"), m.get("last_played"),
           m.get("size_gb"), m.get("size_bytes"), m.get("added_at"),
           1 if m.get("protected") else 0, 1 if m.get("favorite") else 0,
           1 if m.get("excluded") else 0,
-          m.get("source_id"), m.get("jf_source_id"), m.get("tmdb_id"), m.get("section_id"))
-         for i, m in enumerate(movies_list or []) if isinstance(m, dict)],
+          m.get("source_id"), m.get("jf_source_id"), m.get("tmdb_id"), m.get("section_id"),
+          m.get("media_type") or media_type, m.get("tv_status"),
+          m.get("tv_episodes"), m.get("tv_episodes_watched"),
+          json.dumps(m["tv_seasons"]) if m.get("tv_seasons") else None,
+          m.get("tv_in_scope"))
+         for i, m in enumerate(rows_list or []) if isinstance(m, dict)],
     )
+
+
+def replace_movies(conn, movies_list) -> None:
+    """Replace the MOVIE half of the library snapshot from an ordered list of
+    _snapshot_entry dicts. TV rows survive: they are refreshed on their own
+    cadence by replace_tv_series. A row in the list that stamps its own
+    media_type keeps it (the seeding helpers rely on that)."""
+    _replace_type_rows(conn, "movie", movies_list)
+
+
+def replace_tv_series(conn, series_list) -> None:
+    """Replace the TV half of the snapshot from Sonarr's series inventory."""
+    _replace_type_rows(conn, "tv", series_list)
 
 
 def delete_movies(conn, paths) -> None:

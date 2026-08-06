@@ -369,56 +369,34 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
 
 <div class="card" id="filter-score-card">
   <div class="slbl">Filtering &amp; Scoring</div>
-  <div class="paneldesc" style="margin:.2rem 0 .6rem">The rules every scan uses to decide what can be deleted and in what order. Changes preview here instantly; Save applies them to the deletion queue right away — no Simulate needed.</div>
+  <div class="paneldesc" style="margin:.2rem 0 .6rem">What can be deleted, and in what order. Changes preview instantly; Save applies them right away.</div>
 
   <div class="filter-score-group">
-    <div class="filter-score-heading">Eligibility filters</div>
-    <div class="filter-score-subhead">Movies must pass these filters before scoring — filtered movies show why in the library table below.</div>
+    <div class="filter-score-heading">Cleanup scope</div>
+    <div class="filter-score-subhead">What cleanup may touch. Movies score per title, TV per season, on one shared scale.</div>
     <div class="filter-score-grid">
       <div class="filter-score-card">
-        <label class="input-label" for="c-grace">Minimum age (grace period)</label>
-        <div class="filter-score-control-row">
-          <input type="number" class="form-control" id="c-grace" value="0" min="0" oninput="onExpFilterInput()">
-        </div>
-        <div class="filter-score-help">Movies added within this many days are never deleted.</div>
+        <label class="input-label" for="c-movies-on">Movies</label>
+        <label class="filter-score-toggle-row" for="c-movies-on">
+          <input class="form-check-input" type="checkbox" id="c-movies-on" onchange="onExpFilterInput()">
+          <span class="form-check-label">Allow movie cleanup</span>
+        </label>
+        <div class="filter-score-help">Off = movies are never deleted. Scans and this page stay live.</div>
       </div>
       <div class="filter-score-card">
-        <label class="input-label" for="c-unplayed">Unplayed movies</label>
-        <label class="filter-score-toggle-row" for="c-unplayed">
-          <input class="form-check-input" type="checkbox" id="c-unplayed" onchange="onExpFilterInput()">
-          <span class="form-check-label">Don't delete unplayed movies</span>
+        <label class="input-label" for="c-tv-on">TV shows</label>
+        <label class="filter-score-toggle-row" for="c-tv-on">
+          <input class="form-check-input" type="checkbox" id="c-tv-on" onchange="onExpFilterInput()">
+          <span class="form-check-label">Allow TV show cleanup</span>
         </label>
-        <div class="filter-score-help">Movies with no play history are skipped.</div>
-      </div>
-      <div class="filter-score-card">
-        <label class="input-label" for="c-cutoff">Maximum IMDb rating</label>
-        <div class="input-group">
-          <div class="input-group-text">
-            <input class="form-check-input mt-0" type="checkbox" id="c-cutoff-on"
-                   onchange="onExpCutoffToggle()" aria-label="Enable maximum IMDb rating cutoff">
-          </div>
-          <input type="number" class="form-control" id="c-cutoff" value="7.5"
-                 min="0.1" max="10" step="0.1" disabled oninput="onExpFilterInput()"
-                 onblur="_expValidateField('c-cutoff')" aria-describedby="c-cutoff-error">
-        </div>
-        <div id="c-cutoff-error" class="field-error">Must be above 0, up to 10 — uncheck to turn off.</div>
-        <div class="filter-score-help">When enabled, movies rated above this on IMDb are never deleted. Unrated movies are unaffected.</div>
-      </div>
-      <div class="filter-score-card{{ '' if jellyfin_connected else ' connection-ghost' }}">
-        <label class="input-label" for="c-jf-fav">Jellyfin favorites</label>
-        <label class="filter-score-toggle-row" for="c-jf-fav">
-          <input class="form-check-input" type="checkbox" id="c-jf-fav" onchange="onExpFilterInput()" {{ '' if jellyfin_connected else 'disabled' }}>
-          <span class="form-check-label">Don't delete favorited movies</span>
-        </label>
-        <div class="filter-score-help">Movies any Jellyfin user marked favorite are skipped.</div>
-        <div class="filter-score-help connection-unlock-note" {{ 'hidden' if jellyfin_connected else '' }}>Connect Jellyfin to unlock this.</div>
+        <div class="filter-score-help">On = seasons join the movies in one deletion order: a daily pass marks the worst-kept seasons and Automatic Cleanup deletes them after the deletion delay. Protected, favorited, watched-lately, and current seasons are held back. Off = TV is never deleted.</div>
       </div>
     </div>
   </div>
 
   <div class="filter-score-group">
-    <div class="filter-score-heading">Scoring &amp; Ordering</div>
-    <div class="filter-score-subhead">Movies with the lowest retention score delete first.</div>
+    <div class="filter-score-heading">Scoring &amp; ordering</div>
+    <div class="filter-score-subhead">Lowest retention score deletes first — movies and seasons alike.</div>
 
     <div class="score-order-grid">
       <div class="filter-score-card score-balance-card">
@@ -429,7 +407,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
         <div class="score-balance-track" title="Center = balanced 50% / 50%">
           <input type="range" class="form-range" id="c-bal" min="0" max="100" step="10" value="50" oninput="onExpBalanceInput()">
         </div>
-        <div class="filter-score-help"><strong>Left (watch history):</strong> keeps what your household actually watches — more effective when your library has plenty of play history. <strong>Right (IMDb):</strong> keeps what's critically rated — more effective when watch history is thin or most of the library is unwatched, since movies still sort by quality. Same-movie copies: lowest quality deletes first.</div>
+        <div class="filter-score-help"><strong>Left:</strong> keeps what your household watches — best with plenty of play history. <strong>Right:</strong> keeps what IMDb rates well — best when much of the library is unwatched. A season reads its show's rating; duplicate movies lose their lowest-quality copy first.</div>
       </div>
 
       <div class="filter-score-card">
@@ -443,7 +421,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <span class="input-group-text">months</span>
         </div>
         <div id="c-stale-error" class="field-error">Must be 1–120 months.</div>
-        <div class="filter-score-help">How long after the last watch (or added date, if never watched) a movie counts as fully stale. Recency points fade to zero over this window.</div>
+        <div class="filter-score-help">How long after the last watch (or added date) a title counts as fully stale. Recency points fade to zero over this window.</div>
       </div>
 
       <div class="filter-score-card">
@@ -459,7 +437,77 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <span class="input-group-text">pts</span>
         </div>
         <div id="c-tie-error" class="field-error">Must be 0.5–25 points — uncheck to turn off.</div>
-        <div class="filter-score-help">Movies scored within this many points count as tied. Where the space target lands in a tied group, larger files go first — or one movie that covers what's left — so the target costs the fewest deletions. Off = strict score order.</div>
+        <div class="filter-score-help">Scores within this many points count as tied; larger files go first inside a tie, so a space target costs the fewest movies. Off = strict score order.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="filter-score-group">
+    <div class="filter-score-heading">Eligibility filters</div>
+    <div class="filter-score-subhead">Applied before scoring, to movies and seasons alike. Filtered rows say why in the table below.</div>
+    <div class="filter-score-grid">
+      <div class="filter-score-card">
+        <label class="input-label" for="c-grace">Minimum age (grace period)</label>
+        <div class="filter-score-control-row">
+          <input type="number" class="form-control" id="c-grace" value="0" min="0" oninput="onExpFilterInput()">
+        </div>
+        <div class="filter-score-help">Nothing added within this many days is deleted; a new show holds back all its seasons.</div>
+      </div>
+      <div class="filter-score-card">
+        <label class="input-label" for="c-unplayed">Unplayed</label>
+        <label class="filter-score-toggle-row" for="c-unplayed">
+          <input class="form-check-input" type="checkbox" id="c-unplayed" onchange="onExpFilterInput()">
+          <span class="form-check-label">Don't delete unplayed titles</span>
+        </label>
+        <div class="filter-score-help">Skips unplayed movies and a show's never-watched seasons.</div>
+      </div>
+      <div class="filter-score-card">
+        <label class="input-label" for="c-cutoff">Maximum IMDb rating</label>
+        <div class="input-group">
+          <div class="input-group-text">
+            <input class="form-check-input mt-0" type="checkbox" id="c-cutoff-on"
+                   onchange="onExpCutoffToggle()" aria-label="Enable maximum IMDb rating cutoff">
+          </div>
+          <input type="number" class="form-control" id="c-cutoff" value="7.5"
+                 min="0.1" max="10" step="0.1" disabled oninput="onExpFilterInput()"
+                 onblur="_expValidateField('c-cutoff')" aria-describedby="c-cutoff-error">
+        </div>
+        <div id="c-cutoff-error" class="field-error">Must be above 0, up to 10 — uncheck to turn off.</div>
+        <div class="filter-score-help">Anything rated above this is never deleted — a season uses its show's rating. Unrated titles are unaffected.</div>
+      </div>
+      <div class="filter-score-card{{ '' if jellyfin_connected else ' connection-ghost' }}">
+        <label class="input-label" for="c-jf-fav">Jellyfin favorites</label>
+        <label class="filter-score-toggle-row" for="c-jf-fav">
+          <input class="form-check-input" type="checkbox" id="c-jf-fav" onchange="onExpFilterInput()" {{ '' if jellyfin_connected else 'disabled' }}>
+          <span class="form-check-label">Don't delete Jellyfin favorites</span>
+        </label>
+        <div class="filter-score-help">Skips anything a Jellyfin user favorited; a favorited show shields all its seasons.</div>
+        <div class="filter-score-help connection-unlock-note" {{ 'hidden' if jellyfin_connected else '' }}>Connect Jellyfin to unlock this.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="filter-score-group">
+    <div class="filter-score-heading">TV show settings curve</div>
+    <div class="filter-score-subhead">How season watches translate onto the shared scale. Both preview live below.</div>
+    <div class="filter-score-grid">
+      <div class="filter-score-card">
+        <label class="input-label" for="c-tv-weight">TV show watch weight</label>
+        <div class="score-balance-labels">
+          <span>Plays = episodes counts as</span>
+          <span id="v-tv-weight">1.0 watches</span>
+        </div>
+        <input type="range" class="form-range" id="c-tv-weight" min="100" max="200" step="5" value="100" oninput="onExpTvKnobInput()">
+        <div class="filter-score-help">Converts season plays to movie watches: plays &divide; episodes &times; this weight. At 100%, playing a full season once = one movie watch; at 200%, two.</div>
+      </div>
+      <div class="filter-score-card">
+        <label class="input-label" for="c-tv-bump">All-season watch boost</label>
+        <div class="score-balance-labels">
+          <span>Points at a fully-watched show</span>
+          <span id="v-tv-bump">10 pts</span>
+        </div>
+        <input type="range" class="form-range" id="c-tv-bump" min="0" max="25" step="0.5" value="10" oninput="onExpTvKnobInput()">
+        <div class="filter-score-help">Every watched episode lifts ALL of a show's seasons — one episode a little, more as more is watched — so a watched show's untouched seasons outrank those of shows nobody watches. 0 turns the lift off.</div>
       </div>
     </div>
   </div>
@@ -565,6 +613,12 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <input class="form-check-input" type="checkbox" id="stack-eligible" checked onchange="renderT()">
           <span>Eligible first</span>
         </label>
+        <select class="form-select form-select-sm" id="type-filter" onchange="renderT()"
+                title="Show only one library type" style="width:auto">
+          <option value="all">All types</option>
+          <option value="movie">Movies</option>
+          <option value="tv">TV shows</option>
+        </select>
         {% if debug_mode %}
         <button type="button" class="btn btn-sm btn-outline-warning pr-debug-btn" id="btn-debug-snapshot"
                 onclick="prRunDebug('/api/debug/library-snapshot', 'Library snapshot state', this)"
@@ -580,6 +634,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
       <thead><tr>
         <th id="th-o" onclick="sb('order')" class="sc" title="Deletion order — a run deletes eligible movies in this order; with an Over headroom target the bracket marks where the pick matters"># ↑</th>
         <th id="th-t" onclick="sb('title')">Title</th>
+        <th id="th-m" onclick="sb('type')">Type</th>
         <th id="th-y" onclick="sb('year')">Year</th>
         <th id="th-r" onclick="sb('rating')">IMDB</th>
         <th id="th-v" onclick="sb('votes')">Votes</th>
@@ -678,7 +733,8 @@ function num(id,fallback){
   // MAX_IMDB_RATING: 0 to the server. Garbage takes the fallback too.
   return prBlankNumber(id,fallback)??fallback;
 }
-// The full Filtering & Scoring config, one field per rule: BAL (score
+// The full Filtering & Scoring config, one field per rule: MOVIES_ON / TV_ON
+// (the per-type cleanup scope; absent = on, the shipped behavior), BAL (score
 // balance), CUTOFF (max IMDb rating or null), UNPLAYED (skip unplayed),
 // GRACE (grace period days), JF_FAV (protect Jellyfin favorites), TIE
 // (near-tie window width in points, or null = file size optimization off).
@@ -696,6 +752,8 @@ function canonCfg(c){
     if(Number.isFinite(n))tie=clamp(Math.round(n*10)/10,0.5,25);
   }
   return{
+    MOVIES_ON:c.MOVIES_ON===undefined?true:!!c.MOVIES_ON,
+    TV_ON:c.TV_ON===undefined?true:!!c.TV_ON,
     BAL:clamp(Math.round(Number(c.BAL ?? 50)||0),0,100),
     CUTOFF:cutoff,
     UNPLAYED:!!c.UNPLAYED,
@@ -703,6 +761,8 @@ function canonCfg(c){
     JF_FAV:!!c.JF_FAV,
     TIE:tie,
     STALE:clamp(Math.round(Number(c.STALE ?? 36)||36),1,120),
+    TVBUMP:clamp(Math.round((Number(c.TVBUMP ?? 10)||0)*10)/10,0,25),
+    TVWEIGHT:clamp(Math.round(Number(c.TVWEIGHT ?? 100)||100),100,200),
   };
 }
 function readCfg(){
@@ -710,6 +770,8 @@ function readCfg(){
   const tieOn=!!document.getElementById('c-tie-on')?.checked;
   const jfEl=document.getElementById('c-jf-fav'); // disabled (not absent) when Jellyfin is off
   return canonCfg({
+    MOVIES_ON:!!document.getElementById('c-movies-on')?.checked,
+    TV_ON:!!document.getElementById('c-tv-on')?.checked,
     BAL:num('c-bal',50),
     CUTOFF:cutoffOn?num('c-cutoff',7.5):null,
     UNPLAYED:!!document.getElementById('c-unplayed')?.checked,
@@ -717,10 +779,14 @@ function readCfg(){
     JF_FAV:jfEl?jfEl.checked:!!(savedCfg&&savedCfg.JF_FAV),
     TIE:tieOn?num('c-tie',2):null,
     STALE:num('c-stale',36),
+    TVBUMP:num('c-tv-bump',10),
+    TVWEIGHT:num('c-tv-weight',100),
   });
 }
 function cfgFromServer(cfg){
   return canonCfg({
+    MOVIES_ON:cfg.MOVIE_CLEANUP_ENABLED,
+    TV_ON:cfg.TV_CLEANUP_ENABLED,
     BAL:cfg.SCORE_BALANCE ?? 50,
     CUTOFF:cfg.MAX_IMDB_RATING ?? null,
     UNPLAYED:cfg.SKIP_UNPLAYED_MOVIES,
@@ -728,11 +794,15 @@ function cfgFromServer(cfg){
     JF_FAV:cfg.PROTECT_JELLYFIN_FAVORITES,
     TIE:cfg.NEAR_TIE_PTS===undefined?2:cfg.NEAR_TIE_PTS,
     STALE:cfg.MAX_STALENESS_MONTHS===undefined?36:cfg.MAX_STALENESS_MONTHS,
+    TVBUMP:cfg.TV_SERIES_WATCH_BUMP===undefined?10:cfg.TV_SERIES_WATCH_BUMP,
+    TVWEIGHT:cfg.TV_WATCH_WEIGHT===undefined?100:cfg.TV_WATCH_WEIGHT,
   });
 }
 function cfgPayload(c){
   c=canonCfg(c);
   return{
+    MOVIE_CLEANUP_ENABLED:c.MOVIES_ON,
+    TV_CLEANUP_ENABLED:c.TV_ON,
     SCORE_BALANCE:c.BAL,
     MAX_IMDB_RATING:c.CUTOFF,
     SKIP_UNPLAYED_MOVIES:c.UNPLAYED,
@@ -740,16 +810,22 @@ function cfgPayload(c){
     PROTECT_JELLYFIN_FAVORITES:c.JF_FAV,
     NEAR_TIE_PTS:c.TIE,
     MAX_STALENESS_MONTHS:c.STALE,
+    TV_SERIES_WATCH_BUMP:c.TVBUMP,
+    TV_WATCH_WEIGHT:c.TVWEIGHT,
   };
 }
 function cfgEq(a,b){
   a=canonCfg(a);b=canonCfg(b);
-  return a.BAL===b.BAL&&a.CUTOFF===b.CUTOFF&&a.UNPLAYED===b.UNPLAYED
-    &&a.GRACE===b.GRACE&&a.JF_FAV===b.JF_FAV&&a.TIE===b.TIE&&a.STALE===b.STALE;
+  return a.MOVIES_ON===b.MOVIES_ON&&a.TV_ON===b.TV_ON
+    &&a.BAL===b.BAL&&a.CUTOFF===b.CUTOFF&&a.UNPLAYED===b.UNPLAYED
+    &&a.GRACE===b.GRACE&&a.JF_FAV===b.JF_FAV&&a.TIE===b.TIE&&a.STALE===b.STALE
+    &&a.TVBUMP===b.TVBUMP&&a.TVWEIGHT===b.TVWEIGHT;
 }
 function setFormFromCfg(c){
   c=canonCfg(c);
   const set=(id,fn)=>{const el=document.getElementById(id);if(el)fn(el);};
+  set('c-movies-on',el=>el.checked=c.MOVIES_ON);
+  set('c-tv-on',el=>el.checked=c.TV_ON);
   set('c-bal',el=>el.value=c.BAL);
   set('c-cutoff-on',el=>el.checked=c.CUTOFF!=null);
   // Disabled optional fields keep their last entered value visible. The
@@ -762,8 +838,20 @@ function setFormFromCfg(c){
   set('c-tie-on',el=>el.checked=c.TIE!=null);
   set('c-tie',el=>{if(c.TIE!=null)el.value=c.TIE;else if(expLastTie!=null)el.value=expLastTie;el.disabled=c.TIE==null||expRunActive;});
   set('c-stale',el=>el.value=c.STALE);
+  set('c-tv-bump',el=>el.value=c.TVBUMP);
+  set('c-tv-weight',el=>el.value=c.TVWEIGHT);
+  _syncTvKnobBadges();
   _expValidateAll();
 }
+// The TV sliders carry live value badges (a range input shows no number).
+function _syncTvKnobBadges(){
+  const w=num('c-tv-weight',100), b=num('c-tv-bump',10);
+  const we=document.getElementById('v-tv-weight');
+  if(we)we.textContent=(w/100).toFixed(2).replace(/\.?0+$/,'')+(w===100?' watch':' watches');
+  const be=document.getElementById('v-tv-bump');
+  if(be)be.textContent=b+' pts';
+}
+function onExpTvKnobInput(){_syncTvKnobBadges();onExpFilterInput();}
 // ── Field validation: red flag on blur with a blank or out-of-range value ──
 // An enabled field needs a real value — blank is invalid, not a silent
 // default, so a cleared cutoff can never save as 7.5. A disabled field is
@@ -1019,10 +1107,12 @@ function tieWindow(){
 function scoreOne(m,cfg){
   // Score AND eligibility both follow the preview config, so the table shows
   // exactly what a run with these settings would skip. Checks mirror the
-  // engine's skip order: protected collection → Jellyfin favorite → no IMDb
-  // data → IMDb rating cutoff → grace period → unplayed.
+  // engine's skip order: movie cleanup switch → protected collection →
+  // Jellyfin favorite → no IMDb data → IMDb rating cutoff → grace period →
+  // unplayed.
   const sc={...m,...retentionBreakdown(m,cfg)};
-  if(m.protected)sc.status='protected';
+  if(!cfg.MOVIES_ON)sc.status='mov_off';
+  else if(m.protected)sc.status='protected';
   else if(cfg.JF_FAV&&m.favorite)sc.status='favorite';
   else if(imdbInUse(cfg)&&(m.rating==null||!(m.votes>0)))sc.status='nodata';
   else if(cfg.CUTOFF!=null&&m.rating>cfg.CUTOFF)sc.status='cutoff';
@@ -1031,14 +1121,79 @@ function scoreOne(m,cfg){
   else sc.status='ok';
   return sc;
 }
-const FILTER_LABELS={protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed'};
+const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed',tv_off:'TV cleanup off',tv_oos:'off monitored paths',tv_latest:'latest season'};
+// One TV SEASON's eligibility, mirroring _tv_season_plan's exclusion ladder:
+// seasons are IN the pool, so an unfiltered season is eligible and ranks in
+// the same deletion order as the movies. Whole-series shields first (scope,
+// protected, favorite, grace, IMDb), then the per-season rules (the latest
+// season of a not-known-ended show, skip-unplayed).
+function seasonStatus(m,cfg){
+  if(!cfg.TV_ON)return 'tv_off';
+  if(!m.tvInScope)return 'tv_oos';
+  if(m.protected)return 'protected';
+  if(cfg.JF_FAV&&m.favorite)return 'favorite';
+  if(cfg.GRACE>0&&m.addedDays!=null&&m.addedDays<cfg.GRACE)return 'grace';
+  if(imdbInUse(cfg)&&m.rating==null)return 'nodata';
+  if(cfg.CUTOFF!=null&&m.rating!=null&&m.rating>cfg.CUTOFF)return 'cutoff';
+  if(m.latestOfContinuing)return 'tv_latest';
+  if(cfg.UNPLAYED&&!(m.seasonEpsWatched>0)&&m.seasonLastPlayedDays==null)return 'unplayed';
+  return 'ok';
+}
+// One TV SEASON's retention score (0-100, higher = keep) — the mirror of
+// season_retention_score (scoring_constants.py), the same curve family as
+// retentionBreakdown at season grain: usage runs the MOVIE play curve on the
+// season's plays expressed as movie-watch equivalents (plays ÷ episodes ×
+// the TVWEIGHT knob — playing a whole season once = one movie watch at
+// 100%), recency reads the season's last watch (falling back to the series'
+// added date), multi-user and the decay stretch read THIS SEASON's watchers
+// exactly as a movie reads its own, the all-season watch boost lifts EVERY
+// season of a watched show (knob: TVBUMP, points at a fully-watched series),
+// and the IMDb side reads the series rating. The history side clamps at 100
+// before weighting so the boost enriches the blend without pushing seasons
+// onto a different scale than movies.
+function seasonScore(m,cfg){
+  cfg=cfg||gcfg();
+  const w=balanceWeights(cfg.BAL);
+  const eps=m.seasonEps||0, wa=m.seasonEpsWatched||0;
+  const plays=(m.seasonPlays!=null)?m.seasonPlays:wa;
+  const weight=Math.max(1,Math.min(2,(Number(cfg.TVWEIGHT)||100)/100));
+  const effPlays=eps>0?(plays/eps)*weight:0;
+  const usage=SCORING.USAGE_MAX_PTS*Math.min(1,Math.log1p(effPlays)/Math.log1p(SCORING.USAGE_FULL_PLAYS));
+  const users=Math.max(0,Math.floor(((m.seasonUsers!=null)?m.seasonUsers:m.users)||0));
+  const staleScale=(Number(cfg.STALE)||SCORING.RECENCY_DEFAULT_MONTHS)/SCORING.RECENCY_DEFAULT_MONTHS;
+  const effScale=staleScale*Math.min(SCORING.USER_DECAY_MAX_MULT,1+SCORING.USER_DECAY_PER_USER*users);
+  const recDays=(m.seasonLastPlayedDays!=null)?m.seasonLastPlayedDays:((m.addedDays!=null)?m.addedDays:null);
+  let rec=0,shelfPts=0;
+  if(recDays!=null){
+    for(const [maxDays,pts] of SCORING.RECENCY_TIERS){ if(recDays<=maxDays*effScale){rec=pts;break;} }
+    const cliff=SCORING.RECENCY_TIERS[SCORING.RECENCY_TIERS.length-1][0]*effScale;
+    const span=cliff*SCORING.SHELF_SPAN_MULT;
+    if(recDays>cliff&&span>0)shelfPts=SCORING.SHELF_MAX_PTS*Math.max(0,Math.min(1,1-(recDays-cliff)/span));
+  }
+  const mu=Math.min(SCORING.MULTI_USER_PTS*users,SCORING.MULTI_USER_MAX_PTS);
+  // Log curve, not a linear fraction: one watched episode of a big show is a
+  // visible nudge to every season, growing toward 1.0 as the show is consumed.
+  const sWatched=m.tvEpisodesWatched||0;
+  const sf=(m.tvEpisodes>1)?Math.min(1,Math.log1p(sWatched)/Math.log1p(m.tvEpisodes))
+          :(m.tvEpisodes>0&&sWatched>0?1:0);
+  const bump=Math.max(0,Number(cfg.TVBUMP)||0)*sf;
+  const hist=Math.min(100,usage+rec+mu+bump)*w.h;
+  const imdb=(Number.isFinite(m.rating)&&m.rating>0)
+    ?Math.min(m.rating*10*voteConfidence(m.votes>0?m.votes:0),100)*w.q:0;
+  const ramp=SCORING.SHELF_RAMP_FULL_Q>0?Math.min(1,w.q/SCORING.SHELF_RAMP_FULL_Q):1;
+  return hist+imdb+shelfPts*w.h*ramp;
+}
 const FILTER_REASONS={
+  mov_off:'Movie cleanup is turned off in Cleanup scope — no movie is eligible',
   protected:'In a protected collection — never deleted',
   favorite:'A Jellyfin user favorited this movie',
   nodata:'No IMDb rating or votes found — not enough data to judge it',
   cutoff:'Above the IMDb rating cutoff',
   grace:'Within the grace period',
   unplayed:'Unplayed movies are skipped',
+  tv_off:'TV cleanup is turned off in Cleanup scope — no season is eligible',
+  tv_oos:'This series folder is not under a monitored directory, so cleanup will never touch it',
+  tv_latest:'The latest season of a show not known to be ended — the household may be keeping up with it',
 };
 function fmtV(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':n.toLocaleString();}
 function fmtE(m){return m<1?'< 1 mo':m<2?'1 mo ago':m<12?Math.round(m)+' mo ago':m<24?'1 yr ago':Math.floor(m/12)+'+ yr ago';}
@@ -1153,8 +1308,10 @@ function statusSortText(m,plan){
   if(m.status==='ok')return '1-eligible';
   return '2-filtered-'+m.status;
 }
+function typeLabel(m){return m.mediaType==='tv'?'TV Show · S'+m.seasonN:'Movie';}
 function columnCompare(a,b,col,plan,rank){
   if(col==='title')return a.title.localeCompare(b.title);
+  if(col==='type')return typeLabel(a).localeCompare(typeLabel(b))||a.title.localeCompare(b.title);
   // '#' = the real deletion order (strict score order plus the target-aware
   // pick where the over-headroom target lands in a near-tie group);
   // 'Retention' = the raw score alone.
@@ -1190,7 +1347,7 @@ function renderT(){
     const wrapW=Math.max(0,(tbody.closest('.twrap')?.clientWidth||0)-2);
     const inner=poolState.scanning?`<span class="pending-ellipsis">${msg}</span>`:msg;
     tbody.innerHTML=
-      `<tr><td colspan="12" style="text-align:left;padding:1.1rem 0"><span class="tbl-msg" style="width:${wrapW}px">${inner}</span></td></tr>`;
+      `<tr><td colspan="13" style="text-align:left;padding:1.1rem 0"><span class="tbl-msg" style="width:${wrapW}px">${inner}</span></td></tr>`;
     document.getElementById('tstat').textContent='';
     const pg0=document.getElementById('tbl-pager');
     if(pg0)pg0.hidden=true;
@@ -1198,9 +1355,37 @@ function renderT(){
     if(ps0){ps0.textContent='';ps0.className='prunestat';}
     return;
   }
-  // Score the ENTIRE snapshot — ranking, prune plan, and stats always span
-  // the full library; only the on-screen rows are paginated below.
-  let rows=raw.map(m=>scoreOne(m,cfg));
+  // The type filter narrows what is scored AND ranked: a Movies-only view
+  // shows the deletion order a movie run would use, not a mixed ranking with
+  // gaps where the other type sat.
+  const typeFilter=document.getElementById('type-filter')?.value||'all';
+  const source=typeFilter==='all'?raw:raw.filter(m=>m.mediaType===typeFilter);
+  if(!source.length){
+    const tbody=document.getElementById('mtbody');
+    const wrapW=Math.max(0,(tbody.closest('.twrap')?.clientWidth||0)-2);
+    const emptyMsg=typeFilter==='tv'
+      ?'No TV seasons in the library database.'
+      :'No movies in the library database.';
+    tbody.innerHTML=
+      `<tr><td colspan="13" style="text-align:left;padding:1.1rem 0"><span class="tbl-msg" style="width:${wrapW}px">${htmlEsc(emptyMsg)}</span></td></tr>`;
+    document.getElementById('tstat').textContent='';
+    const pgE=document.getElementById('tbl-pager');
+    if(pgE)pgE.hidden=true;
+    const psE=document.getElementById('prunestat');
+    if(psE){psE.textContent='';psE.className='prunestat';}
+    return;
+  }
+  // Score the whole filtered set — ranking, prune plan, and stats span it;
+  // only the on-screen rows are paginated below.
+  let rows=source.map(m=>{
+    const r=scoreOne(m,cfg);
+    // TV rows are seasons IN the pool: scored on the unified scale and run
+    // through the season eligibility ladder, so an unfiltered season ranks
+    // in the SAME deletion order (and prune plan) as the movies — the merged
+    // order the daily passes split between the two executors.
+    if(m.mediaType==='tv'){r.retention=seasonScore(m,cfg);r.status=seasonStatus(m,cfg);}
+    return r;
+  });
   // # rank = the exact order a run with the current over-headroom target
   // would delete in.
   const seq=deletionSequence(rows,appliedPruneGb);
@@ -1216,7 +1401,8 @@ function renderT(){
   const elig=rows.filter(m=>m.status==='ok').length;
   const filtered=rows.length-elig;
   const tstat=document.getElementById('tstat');
-  tstat.textContent=rows.length+' movies · '+elig+' eligible · '+filtered+' filtered';
+  const noun=typeFilter==='tv'?'seasons':typeFilter==='movie'?'movies':'titles';
+  tstat.textContent=rows.length+' '+noun+' · '+elig+' eligible · '+filtered+' filtered';
   // An unrated snapshot previewed against IMDb-weighted scoring filters every
   // row as "no IMDb data" — explain that the next run annotates ratings (it
   // downloads the dataset itself when scoring needs it).
@@ -1282,6 +1468,7 @@ function renderT(){
     return`<tr class="movie-row ${selectedMovieId===m.id?'selected ':''}${m.status!=='ok'?'fx ':''}${pruned?'prune ':''}${tieMarks[i]}" data-mid="${htmlEsc(m.id)}" tabindex="0" role="button" aria-label="Load movie facts for ${htmlEsc(m.title)}" onclick="selectMovieById(this.dataset.mid)" onkeydown="selectMovieOnKey(event,this.dataset.mid)">
 <td class="ordcell">${m.status==='ok'?rank.get(m.id):'—'}</td>
 <td style="max-width:175px;overflow:hidden;text-overflow:ellipsis">${htmlEsc(m.title)}</td>
+<td style="color:var(--text-secondary);white-space:nowrap">${typeLabel(m)}</td>
 <td style="color:var(--text-secondary)">${m.year}</td>
 <td>${Number.isFinite(m.rating)?m.rating.toFixed(1):'—'}</td>
 <td style="color:var(--text-secondary)">${m.votes>0?fmtV(m.votes):'—'}</td>
@@ -1457,20 +1644,54 @@ async function loadPool(){
       return;
     }
     const now=Date.now()/1000;
-    raw=(d.movies||[]).map((m,i)=>({
-      id:'m'+i+'-'+String(m.title||''),
-      title:m.title||'—',
-      year:m.year||'—',
-      rating:(Number.isFinite(m.rating)&&m.rating>0)?m.rating:null,
-      votes:m.votes||0,
-      playCount:m.plays||0,
-      users:m.users||0,
-      lastPlayedDays:(m.last_played>0)?Math.max(0,(now-m.last_played)/86400):null,
-      addedDays:(m.added_at>0)?Math.max(0,(now-m.added_at)/86400):null,
-      sizeGb:+(m.size_gb||0),
-      protected:!!m.protected,
-      favorite:!!m.favorite,
-    }));
+    raw=(d.movies||[]).flatMap((m,i)=>{
+      const base={
+        id:'m'+i+'-'+String(m.title||''),
+        title:m.title||'—',
+        year:m.year||'—',
+        rating:(Number.isFinite(m.rating)&&m.rating>0)?m.rating:null,
+        votes:m.votes||0,
+        playCount:m.plays||0,
+        users:m.users||0,
+        lastPlayedDays:(m.last_played>0)?Math.max(0,(now-m.last_played)/86400):null,
+        addedDays:(m.added_at>0)?Math.max(0,(now-m.added_at)/86400):null,
+        sizeGb:+(m.size_gb||0),
+        protected:!!m.protected,
+        favorite:!!m.favorite,
+        // Anything not explicitly 'tv' is a movie, matching the store's default.
+        mediaType:(m.media_type==='tv')?'tv':'movie',
+        tvStatus:m.tv_status||null,
+        tvEpisodes:m.tv_episodes||0,
+        tvEpisodesWatched:m.tv_episodes_watched||0,
+        tvInScope:m.tv_in_scope!==0,
+      };
+      if(base.mediaType!=='tv')return[base];
+      // The season is the TV unit: one row per season on disk, each scored on
+      // the movie 0-100 scale, so seasons and movies read as ONE pool. A
+      // series row with no per-season facts contributes nothing (there is no
+      // season to delete).
+      const seasons=(m.tv_seasons||[]).filter(s=>s&&typeof s==='object');
+      if(!seasons.length)return[];
+      const latestN=Math.max(...seasons.map(s=>s.n||0));
+      return seasons.map(s=>({
+        ...base,
+        id:base.id+'-s'+s.n,
+        // The Type column names the season ("TV Show · S2"); the title stays
+        // the show's plain name.
+        sizeGb:+(((s.size_bytes||0))/1e9),
+        seasonN:s.n,
+        seasonEps:s.eps||0,
+        seasonEpsWatched:s.eps_watched||0,
+        // Rows stored before seasons carried plays/users fall back to the
+        // nearest older fact, matching season_retention_score.
+        seasonPlays:(s.plays!=null)?s.plays:(s.eps_watched||0),
+        seasonUsers:(s.users!=null)?s.users:(m.users||0),
+        seasonLastPlayedDays:(s.last_played>0)?Math.max(0,(now-s.last_played)/86400):null,
+        // The latest season is shielded unless the show is KNOWN ended —
+        // Plex states no status, and unknown gets the benefit of the doubt.
+        latestOfContinuing:(m.tv_status!=='ended')&&((s.n||0)===latestN),
+      }));
+    });
     poolImdbOnDisk=!!d.imdb_dataset_on_disk;
     poolState={loaded:true,message:''};
   }catch(e){

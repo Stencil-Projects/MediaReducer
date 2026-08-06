@@ -10,6 +10,8 @@ services:
       - ${PLEX_LIBRARY_PATH}:/library:rw             # shared movie library mount (file deletion)
       - ${TAUTULLI_APPDATA}:/tautulli:ro             # optional: lets Auto Detect read the Tautulli API key + Plex token
       - ${RADARR_APPDATA}:/radarr:ro                 # optional: lets Auto Detect read the Radarr API key
+      # Defaulted so an .env without SONARR_APPDATA still composes.
+      - ${SONARR_APPDATA:-/mnt/user/appdata/sonarr}:/sonarr:ro   # optional: lets Auto Detect read the Sonarr API key
       # The fallback below is an UNRAID default — set the var in .env on any
       # other host, or Docker will create /mnt/user/appdata/... for you.
       - ${MEDIAREDUCER_DATA:-/mnt/user/appdata/mediareducer/config}:/config  # persistent config/logs/cache
