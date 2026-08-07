@@ -439,33 +439,7 @@
     overflow-y: auto;
   }
 
-  #cfg-accordion .accordion-button .cfg-section-issue-indicator {
-    display: none;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    width: 1.15rem;
-    height: 1.15rem;
-    margin-left: auto;
-    margin-right: .55rem;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--text-danger) 78%, transparent);
-    background: var(--bg-danger);
-    color: var(--text-danger);
-    font-size: .72rem;
-    line-height: 1;
-    font-weight: 800;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg-danger) 65%, transparent);
-  }
-  #cfg-accordion .accordion-button.section-has-issue .cfg-section-issue-indicator {
-    display: inline-flex;
-  }
-  #cfg-accordion .accordion-button.section-has-issue::after {
-    margin-left: 0;
-  }
-  #cfg-accordion .accordion-button.section-has-issue {
-    box-shadow: inset 3px 0 0 var(--text-danger);
-  }
+  /* The section-issue marker is in base.html, shared with Filtering & Scoring. */
   /* Scroll targets must clear both sticky layers: the site header and the
      page-title bar (heights kept in sync by the shared bar JS). */
   #automatic-run-mode,
@@ -534,7 +508,7 @@
   {% endif %}
 </div>
 
-<div class="accordion" id="cfg-accordion">
+<div class="accordion pr-accordion" id="cfg-accordion">
 
   <!-- ── Run mode ── -->
   <div class="accordion-item" id="automatic-run-mode">
@@ -1923,69 +1897,18 @@ document.querySelectorAll('.secret-toggle').forEach(btn => {
 
 // ── Collapsed-section issue markers ──────────────────────────────────────────
 // Validation and connection warnings can live inside collapsed accordion tabs.
-// Add a subtle marker to the section header whenever that section contains a
-// visible red field/card so the user knows where to open next.
-const CONFIG_SECTION_ISSUE_SELECTOR = [
-  '.field-invalid',
-  '.connection-highlight',
-  '.mount-card-problem',
-  '.config-status-box.status-error'
-].join(',');
-let _sectionIssueUpdateQueued = false;
+// The section header marker that says so is in base.html, shared with the
+// Filtering & Scoring accordion; this page only names what counts as an issue.
+// A deselected server's fields dim and carry .connection-disabled — that is a
+// state, not a fault, so only the highlighted ones flag the section.
+const _cfgSectionIssues = prSectionIssues('cfg-accordion', {
+  selector: ['.field-invalid', '.connection-highlight', '.mount-card-problem',
+             '.config-status-box.status-error'].join(','),
+  isIssue: el => !(el.classList.contains('connection-disabled')
+                   && !el.classList.contains('connection-highlight')),
+});
 
-function _ensureSectionIssueIndicators() {
-  document.querySelectorAll('#cfg-accordion .accordion-button').forEach(btn => {
-    if (btn.querySelector('.cfg-section-issue-indicator')) return;
-    const marker = document.createElement('span');
-    marker.className = 'cfg-section-issue-indicator';
-    marker.textContent = '!';
-    marker.setAttribute('aria-hidden', 'true');
-    marker.title = 'This section has a field that needs attention.';
-    btn.appendChild(marker);
-  });
-}
-
-function _elementIsEffectivelyHidden(el) {
-  if (!el) return true;
-  if (el.hidden || el.getAttribute('aria-hidden') === 'true') return true;
-  if (el.classList?.contains('d-none')) return true;
-  const style = window.getComputedStyle(el);
-  return style.display === 'none' || style.visibility === 'hidden';
-}
-
-function _sectionHasVisibleIssue(sectionEl) {
-  if (!sectionEl) return false;
-  return [...sectionEl.querySelectorAll(CONFIG_SECTION_ISSUE_SELECTOR)].some(el => {
-    if (_elementIsEffectivelyHidden(el)) return false;
-    if (el.classList.contains('connection-disabled') && !el.classList.contains('connection-highlight')) return false;
-    return true;
-  });
-}
-
-function _updateSectionIssueIndicators() {
-  _ensureSectionIssueIndicators();
-  document.querySelectorAll('#cfg-accordion .accordion-item').forEach(item => {
-    const button = item.querySelector(':scope > .accordion-header .accordion-button');
-    const section = item.querySelector(':scope > .accordion-collapse');
-    const hasIssue = _sectionHasVisibleIssue(section);
-    button?.classList.toggle('section-has-issue', hasIssue);
-    if (button) {
-      const sectionName = button.textContent.replace('!', '').trim();
-      button.title = hasIssue
-        ? `${sectionName} has a field that needs attention.`
-        : '';
-    }
-  });
-}
-
-function _scheduleSectionIssueUpdate() {
-  if (_sectionIssueUpdateQueued) return;
-  _sectionIssueUpdateQueued = true;
-  window.requestAnimationFrame(() => {
-    _sectionIssueUpdateQueued = false;
-    _updateSectionIssueIndicators();
-  });
-}
+function _scheduleSectionIssueUpdate() { _cfgSectionIssues.schedule(); }
 
 function _connectionOnboardingForceConnections() {
   try {

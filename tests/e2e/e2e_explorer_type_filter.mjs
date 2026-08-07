@@ -130,9 +130,11 @@ check('the weight badge translates the slider into watches', weightBadge === '2 
 await p.evaluate(() => { const el = document.getElementById('c-tv-weight'); el.value = '100'; onExpTvKnobInput(); });
 await p.waitForTimeout(200);
 
-// The four setting groups, in the order the page promises them.
+// The four setting groups, in the order the page promises them — collapsible
+// categories now, the same stack the Configuration page uses.
 const headings = await p.evaluate(() =>
-  [...document.querySelectorAll('#filter-score-card .filter-score-heading')].map(h => h.textContent.trim()));
+  [...document.querySelectorAll('#filter-score-card .accordion-button')]
+    .map(h => h.textContent.replace('!', '').trim()));
 check('the card is organized into the four setting groups',
       JSON.stringify(headings) === JSON.stringify(
         ['Cleanup scope', 'Scoring & ordering', 'Eligibility filters', 'TV show scoring']),

@@ -168,6 +168,33 @@ cands, stats, total = E.build_candidates()
 check("Both: a provider-id conflict on a shared file is skipped, not deleted",
       len(cands) == 0 and stats["identity_mismatch"] >= 1)
 
+# IMDb decides identity when both sides carry it. Two servers routinely hold
+# DIFFERENT TMDb records for the same film — remakes, re-releases and alternate
+# cuts are separate entries there — so a TMDb disagreement under a MATCHING
+# IMDb id is a catalogue quirk, not two different movies. (Real case: Aftermath
+# tt4581576 filed as tmdb 390051 on one server and 523098 on the other.) The
+# IMDb id is also what fetches the rating this is scored on, so agreement there
+# is agreement about the thing that matters.
+_PLEX = [plex_row("310", f_shared)]
+_PLEX_META = {"310": {"protected": False, "tmdb_id": "390051", "imdb_id": "tt4581576"}}
+_JELLY = [jf_row("I", f_shared, tmdb_id="523098", imdb_id="tt4581576")]
+_reset(True, True)
+E._JELLYFIN_IDS_BY_MATCH_KEY = {k: {"imdb": "tt4581576", "tmdb": "523098", "title": "shared"}
+                                for k in E._match_keys(str(f_shared))}
+cands, stats, total = E.build_candidates()
+check("Both: a matching IMDb id settles identity — differing TMDb is not a conflict",
+      stats["identity_mismatch"] == 0 and len(cands) == 1)
+
+# With NO IMDb id to decide, TMDb arbitrates — that is the only time it does.
+_PLEX_META = {"310": {"protected": False, "tmdb_id": "390051", "imdb_id": ""}}
+_JELLY = [jf_row("I", f_shared, tmdb_id="523098", imdb_id="")]
+_reset(True, True)
+E._JELLYFIN_IDS_BY_MATCH_KEY = {k: {"imdb": "", "tmdb": "523098", "title": "shared"}
+                                for k in E._match_keys(str(f_shared))}
+cands, stats, total = E.build_candidates()
+check("Both: with no IMDb on either side, a TMDb conflict still skips",
+      stats["identity_mismatch"] >= 1 and len(cands) == 0)
+
 # Same fingerprint (folder + file name) under diverging deeper paths, SAME
 # provider ids: that is ONE movie the two servers index at different spots.
 # It merges — identity is the fingerprint, arbitrated by the ids — into one

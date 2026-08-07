@@ -99,6 +99,56 @@ for (const [from, link] of [['/config', 'Filtering & Scoring'],
   check(`${from} -> ${link}: no cross-document view transition`, r.vt === false, r);
   check(`${from} -> ${link}: the arriving page still eases in`,
         r.entrance === 'pr-page-enter', r);
+
+  // The entrance fades AND rises, and it does both to the whole of the page
+  // below the header rather than to a few chosen pieces. Replayed from the
+  // settled page, since by now this navigation's own animation has finished.
+  const enter = await p.evaluate(async () => {
+    const m = document.getElementById('main');
+    // What is riding the animation: everything under the header.
+    const covers = { title: !!m.querySelector('.page-title'),
+                     cards: m.querySelectorAll('.card, .accordion-item').length,
+                     outside: [...document.querySelectorAll('.card')]
+                                .filter(c => !m.contains(c)).length };
+    m.style.animation = 'none';
+    void m.offsetWidth;                       // replay it
+    m.style.animation = '';
+    // The effect's own easing reads 'linear' — a CSS animation's timing
+    // function lives on the keyframes, so it has to come off the style.
+    const cs0 = getComputedStyle(m);
+    const timing = { duration: (document.getAnimations()
+                       .filter(a => a.effect && a.effect.target === m)
+                       .map(a => a.effect.getTiming().duration)[0]),
+                     easing: cs0.animationTimingFunction };
+    const seen = [];
+    for (let i = 0; i < 30; i++) {
+      const s = getComputedStyle(m);
+      seen.push([Number(s.opacity), s.transform]);
+      await new Promise(r2 => requestAnimationFrame(r2));
+    }
+    return { covers, timing: { dur: timing.duration, easing: timing.easing },
+             first: seen[0], opacities: seen.map(s => s[0]),
+             moved: seen.some(s => s[1] !== 'none' && s[1] !== seen.at(-1)[1]) };
+  });
+  check(`${from} -> ${link}: the page's whole contents ride the entrance`,
+        enter.covers.title && enter.covers.cards >= 1 && enter.covers.outside === 0,
+        enter.covers);
+  check(`${from} -> ${link}: it fades in — from transparent to solid`,
+        enter.first[0] < 0.1 && enter.opacities.at(-1) === 1
+        && enter.opacities.some(o => o > 0.1 && o < 0.99), enter.opacities.slice(0, 6));
+  check(`${from} -> ${link}: ...while sliding up`, enter.moved === true, enter.first[1]);
+  // The fade must stay front-loaded. While the content is transparent the
+  // arriving page paints DARKER than it settles (the backdrop is dark), and a
+  // browser may put one blank frame ahead of it — a plain ease-out held the
+  // page dim past 150ms, which is what reads as a flash. The duration is a
+  // taste call and may move; the curve is not, and the two are linked, so a
+  // longer entrance has to stay on an explicit steep bezier rather than
+  // sliding back to a keyword ease. Pinned as the shape of the curve rather
+  // than sampled brightness, which no headless run can measure the way a
+  // screen recording did.
+  check(`${from} -> ${link}: ...on a front-loaded curve, not a slow ease`,
+        enter.timing.dur <= 450 && /cubic-bezier/.test(String(enter.timing.easing)),
+        enter.timing);
 }
 
 check('no JS errors', errs.length === 0, errs);

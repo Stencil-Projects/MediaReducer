@@ -396,8 +396,11 @@ This tab holds every rule that decides *what* can be deleted and *in what
 order*, and previews all of it against your full library. Changes show in the
 preview as you make them; **Save** keeps them.
 
-The card is organized into four groups: what cleanup may touch, how
-everything scores, what steps aside, and the TV curve.
+The settings are four collapsible categories, the same stack the Configuration
+tab uses: what cleanup may touch, how everything scores, what steps aside, and
+the TV curve. Cleanup scope opens on arrival; open as many of the others as you
+need. A category holding a field that needs attention shows a red **!** on its
+header, so a fault inside a closed one still says where it is.
 
 ### Cleanup scope
 

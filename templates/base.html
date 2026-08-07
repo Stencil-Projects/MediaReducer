@@ -264,20 +264,33 @@
       *, *::before, *::after { transition: none !important; animation: none !important; }
     }
 
-    /* Page entrance, and the whole of what a navigation looks like: the
-       content area fades in with a slight rise, once per load, so switching
-       between pages eases in instead of popping. The header is identical on
-       every page and is simply painted, not animated, so it reads as one
-       continuous surface across navigations — see the note below on why it is
-       NOT a view-transition group. Only a `from` keyframe + backwards fill: the
-       animation eases INTO the element's natural style and leaves no animated
-       transform behind once it ends (a lingering identity transform would make
-       #main the containing block for any fixed-position descendant).
-       (Reduced-motion users get none of this via the kill switch above.) */
+    /* Page entrance, and the whole of what a navigation looks like: everything
+       below the header — title bar, actions and every card — fades in as it
+       rises, once per load, so switching between pages eases in instead of
+       popping. The header itself is identical on every page and is simply
+       painted, not animated, so it reads as one continuous surface across
+       navigations — see the note below on why it is NOT a view-transition
+       group. Only a `from` keyframe + backwards fill: the animation eases INTO
+       the element's natural style and leaves no animated transform behind once
+       it ends (a lingering identity transform would make #main the containing
+       block for any fixed-position descendant).
+       (Reduced-motion users get none of this via the kill switch above.)
+
+       The curve is front-loaded on purpose, and that is what buys the duration
+       room to be this long. The page behind #main is dark, so while the
+       content is transparent the arriving page paints DARKER than it settles —
+       28.9 of 255 against 38.5 — and a browser may put one blank frame between
+       two documents (Chromium holds the old pixels and shows none; other
+       Chromium builds paint their own canvas color), so landing dim right
+       after a pale frame is what reads as a flash. Measured through a real
+       navigation, the time to reach 92% of settled brightness: a plain
+       ease-out over .28s never did inside 150ms; this curve takes 43ms at .24s
+       and 85ms at .38s. A slower fade costs dim time in proportion, so if this
+       gets longer again the curve has to get steeper to match. */
     @keyframes pr-page-enter {
-      from { opacity: 0; transform: translateY(6px); }
+      from { opacity: 15; transform: translateY(8px); }
     }
-    #main { animation: pr-page-enter .28s ease-out backwards; }
+    #main { animation: pr-page-enter .70s cubic-bezier(.16,.9,.3,1) backwards; }
 
     /* Navigation deliberately does NOT use a cross-document view transition.
        One was tried, to hold the header still while the pages changed, and it
@@ -690,8 +703,10 @@
     }
     .accordion-body  { padding-top: 20px; }
 
-    /* Config accordion: one connected tab stack instead of separate rounded pills. */
-    #cfg-accordion {
+    /* One connected tab stack instead of separate rounded pills. Configuration
+       and Filtering & Scoring both use it, so a category reads the same on
+       either page. */
+    .pr-accordion {
       border: 1px solid var(--border);
       border-radius: 16px;
       overflow: hidden;
@@ -701,7 +716,7 @@
       -webkit-backdrop-filter: var(--glass-blur);
       isolation: isolate;
     }
-    #cfg-accordion .accordion-item {
+    .pr-accordion .accordion-item {
       border: 0;
       border-bottom: 1px solid var(--border);
       border-radius: 0 !important;
@@ -711,29 +726,56 @@
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
     }
-    #cfg-accordion .accordion-item:last-child { border-bottom: 0; }
-    #cfg-accordion .accordion-header,
-    #cfg-accordion .accordion-button,
-    #cfg-accordion .accordion-collapse,
-    #cfg-accordion .accordion-body {
+    .pr-accordion .accordion-item:last-child { border-bottom: 0; }
+    .pr-accordion .accordion-header,
+    .pr-accordion .accordion-button,
+    .pr-accordion .accordion-collapse,
+    .pr-accordion .accordion-body {
       border-radius: 0 !important;
     }
-    #cfg-accordion .accordion-button {
+    .pr-accordion .accordion-button {
       margin: 0;
       border: 0;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
     }
-    #cfg-accordion .accordion-item:first-child .accordion-button {
+    .pr-accordion .accordion-item:first-child .accordion-button {
       box-shadow: none;
     }
-    #cfg-accordion .accordion-button:not(.collapsed) {
+    .pr-accordion .accordion-button:not(.collapsed) {
       border-bottom: 1px solid var(--border);
     }
-    #cfg-accordion .accordion-body {
+    .pr-accordion .accordion-body {
       background: color-mix(in srgb, var(--surface-1) 82%, var(--surface-0) 18%);
     }
-    :root[data-theme="light"] #cfg-accordion .accordion-body {
+    :root[data-theme="light"] .pr-accordion .accordion-body {
       background: color-mix(in srgb, var(--surface-1) 84%, white 5%);
+    }
+    /* Marker for a section holding a field that needs attention (see
+       prSectionIssues): visible only on a flagged header. */
+    .pr-accordion .accordion-button .pr-section-issue {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      width: 1.15rem;
+      height: 1.15rem;
+      margin-left: auto;
+      margin-right: .55rem;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--text-danger) 78%, transparent);
+      background: var(--bg-danger);
+      color: var(--text-danger);
+      font-size: .72rem;
+      line-height: 1;
+      font-weight: 800;
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg-danger) 65%, transparent);
+    }
+    .pr-accordion .accordion-button.section-has-issue .pr-section-issue {
+      display: inline-flex;
+    }
+    .pr-accordion .accordion-button.section-has-issue::after { margin-left: 0; }
+    .pr-accordion .accordion-button.section-has-issue {
+      box-shadow: inset 3px 0 0 var(--text-danger);
     }
 
     /* ═══════ Form controls ═══════ */
@@ -1281,24 +1323,6 @@
     /* ═══════ Misc ═══════ */
     .section-desc { font-size: .83rem; color: var(--text-muted); margin-bottom: 18px; }
     .input-label  { font-size: .81rem; color: var(--text-secondary); margin-bottom: 4px; display: block; }
-    .filter-score-group {
-      margin-top: 18px;
-    }
-    .filter-score-group:first-child {
-      margin-top: 0;
-    }
-    .filter-score-heading {
-      font-size: .9rem;
-      font-weight: 700;
-      color: var(--text-primary);
-      margin-bottom: 4px;
-    }
-    .filter-score-subhead {
-      font-size: .8rem;
-      color: var(--text-muted);
-      margin-bottom: 10px;
-      max-width: 780px;
-    }
     .filter-score-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -1933,6 +1957,60 @@
       errEl?.classList.toggle('show', !!visible);
       inputEl?.setAttribute('aria-invalid', visible ? 'true' : 'false');
     }
+
+    /* A field that needs attention can be sitting inside a CLOSED section,
+       where the only symptom is a Save button that refuses to work. So the
+       section's header carries a marker while that is true, saying where to
+       open next. Shared by both accordions; each page supplies the selector
+       for what counts as an issue, and may refine it with isIssue().
+
+       Resolved by id on every pass rather than held as an element, so this can
+       be wired up before the markup it watches exists. */
+    window.prSectionIssues = function (accordionId, { selector, isIssue } = {}) {
+      let queued = false;
+      const root = () => document.getElementById(accordionId);
+
+      function hidden(el) {
+        if (!el) return true;
+        if (el.hidden || el.getAttribute('aria-hidden') === 'true') return true;
+        if (el.classList?.contains('d-none')) return true;
+        const s = getComputedStyle(el);
+        return s.display === 'none' || s.visibility === 'hidden';
+      }
+
+      function update() {
+        const acc = root();
+        if (!acc) return;
+        acc.querySelectorAll('.accordion-button').forEach((btn) => {
+          if (btn.querySelector('.pr-section-issue')) return;
+          const marker = document.createElement('span');
+          marker.className = 'pr-section-issue';
+          marker.textContent = '!';
+          marker.setAttribute('aria-hidden', 'true');
+          marker.title = 'This section has a field that needs attention.';
+          btn.appendChild(marker);
+        });
+        acc.querySelectorAll('.accordion-item').forEach((item) => {
+          const btn = item.querySelector(':scope > .accordion-header .accordion-button');
+          const body = item.querySelector(':scope > .accordion-collapse');
+          const flagged = !!body && [...body.querySelectorAll(selector)]
+            .some(el => !hidden(el) && (!isIssue || isIssue(el)));
+          btn?.classList.toggle('section-has-issue', flagged);
+          if (btn) {
+            const name = btn.textContent.replace('!', '').trim();
+            btn.title = flagged ? `${name} has a field that needs attention.` : '';
+          }
+        });
+      }
+
+      function schedule() {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => { queued = false; update(); });
+      }
+
+      return { update, schedule };
+    };
 
     /* Escape text for interpolation into HTML (element text or a
        double/single-quoted attribute). */

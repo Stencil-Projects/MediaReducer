@@ -98,6 +98,17 @@ check("Content-Length matches the compressed body",
       int(r.headers["Content-Length"]) == len(r.get_data()))
 check("compression is worth doing (at least 2x)", len(body) > 2 * len(r.get_data()))
 
+# All three pages, not just the one. The compression hook is route-agnostic,
+# which is exactly why a route that sets its own headers can fall out of it
+# without anything noticing: only the dashboard was ever checked.
+for path, name in (("/config", "Configuration"), ("/explorer", "Filtering & Scoring")):
+    pr = client.get(path, headers=GZIP)
+    pbody = gzip.decompress(pr.get_data()) if pr.headers.get("Content-Encoding") == "gzip" else b""
+    check(f"{name} is gzipped too", pr.headers.get("Content-Encoding") == "gzip")
+    check(f"...and decompresses to the real page",
+          pbody.startswith(b"<!doctype html>") and b"</html>" in pbody)
+    check(f"...at better than 2x", len(pbody) > 2 * len(pr.get_data()))
+
 plain = client.get("/")
 check("a client that didn't ask for gzip gets the page uncompressed",
       "Content-Encoding" not in plain.headers

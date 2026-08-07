@@ -414,7 +414,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.9"
+APP_VERSION = "1.0.0-alpha.10"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -4324,17 +4324,27 @@ def _tv_mark_key(entry: dict) -> str:
     return f"{entry.get('sid')}|S{entry.get('season')}"
 
 
-def _tv_cleanup_armed(cfg: dict) -> bool:
-    """TV cleanup exists at all: the switch is on, a media server can supply
-    the inventory, and a DAILY pool trigger is armed — the Headroom target or
-    the Library Size Cap, the same thresholds that size the movie marks (one
-    pool, one cap; Redline is a movie-only emergency). Sonarr is NOT required
-    — it is optional and cleanup-only. Whether a pass may DELETE is decided by
-    RUN_MODE at pass time (Automatic Cleanup deletes, Monitor Only marks)."""
-    return (bool(cfg.get("TV_CLEANUP_ENABLED", True))
-            and _tv_inventory_configured(cfg)
+def _tv_in_scope(cfg: dict) -> bool:
+    """Seasons take part in the run at all: a media server can supply the
+    inventory and a DAILY pool trigger is armed — the Headroom target or the
+    Library Size Cap, the same thresholds that size the movie marks (one pool,
+    one cap; Redline is a movie-only emergency). Sonarr is NOT required — it
+    is optional and cleanup-only.
+
+    Deliberately NOT gated on the TV switch. Off means seasons are ineligible,
+    not invisible: the run still plans them and reports how many the switch
+    held back, exactly as the movie side reports movie_cleanup_off. Whether a
+    run may DELETE is decided by RUN_MODE at run time (Automatic Cleanup
+    deletes, Monitor Only marks)."""
+    return (_tv_inventory_configured(cfg)
             and (_threshold_gb_or_none(cfg.get("MAX_LIBRARY_GB")) is not None
                  or (_config_num(cfg.get("HEADROOM_GB")) or 0) > 0))
+
+
+def _tv_cleanup_armed(cfg: dict) -> bool:
+    """Seasons may actually be marked and deleted: in scope AND the switch is
+    on. _tv_in_scope is the wider question of whether they are planned at all."""
+    return bool(cfg.get("TV_CLEANUP_ENABLED", True)) and _tv_in_scope(cfg)
 
 
 def _tv_cleanup_state() -> dict:
@@ -4462,14 +4472,23 @@ def _tv_marked_count() -> int:
 
 
 def _tv_eligible_count(cfg: dict) -> int:
-    """Seasons in the last computed plan order — the TV rows of the standing
-    eligible deletion order the dashboard counts. The run stores the number
-    (it computes the plan anyway); disarmed TV contributes nothing, however
-    stale the stored state."""
+    """How many seasons the standing eligible order holds — the number the
+    dashboard's Marked & Eligible button adds to the movie count.
+
+    Counted from the SAME place the window lists them: the library snapshot,
+    through the same plan. Reading a number the run stored instead looked
+    cheaper and was wrong — the two sources part company whenever the run has
+    planned seasons the snapshot does not carry yet, which is exactly what a
+    rebuild after a wiped store does (the season side plans first, the
+    inventory lands when the run finishes). The button then advertised
+    seasons the window could not show, and opening it corrected the count
+    only until the next poll put the stored number back.
+
+    The snapshot read is memoized, and the plan is arithmetic over rows
+    already in memory, so this stays cheap enough for the status poll."""
     if not _tv_cleanup_armed(cfg):
         return 0
-    lp = _tv_cleanup_state().get("last_pass")
-    return int(lp.get("eligible_seasons") or 0) if isinstance(lp, dict) else 0
+    return len(_tv_eligible_entries(cfg, set(_tv_cleanup_state().get("marked") or {})))
 
 
 def _tv_pass_plan_for_run(cfg: dict, effective_mode: str | None):
@@ -4481,7 +4500,7 @@ def _tv_pass_plan_for_run(cfg: dict, effective_mode: str | None):
     Monitor Only's maintenance run); True = a real Cleanup, which also
     deletes due marks. Seasons ride every non-emergency engine run — same
     gesture as the movies, no schedule of their own."""
-    if not _tv_cleanup_armed(cfg):
+    if not _tv_in_scope(cfg):
         return None
     if _redline_breached_now(cfg):
         return None
@@ -4500,6 +4519,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
               "marked_new": 0, "unmarked": 0, "held_by_delay": 0,
               "deleted_seasons": [], "skipped": [], "aborted": None,
               "blocked_by_safety": False, "eligible_seasons": 0,
+              "seasons_seen": 0, "cleanup_off": 0, "excluded": {},
               "deleted_files": 0, "freed_bytes": 0}
     st = _tv_cleanup_state()
 
@@ -4532,7 +4552,24 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
               "marking nothing this run", flush=True)
         return _finish()
 
+    # The plan is built whether or not TV cleanup is on. Off means seasons are
+    # INELIGIBLE, not invisible — the same shape as the movie side, which keeps
+    # scanning and scoring and reports movie_cleanup_off as the reason nothing
+    # is eligible. Building it first is what gives the run a number to report.
     plan = _tv_season_plan(rows, cfg)
+    report["excluded"] = dict(plan.get("excluded") or {})
+    report["seasons_seen"] = sum(len(r.get("tv_seasons") or [])
+                                 for r in rows if isinstance(r, dict))
+    if not bool(cfg.get("TV_CLEANUP_ENABLED", True)):
+        # Held back by the switch. Marks go too: an ineligible season must not
+        # keep a delay clock running, exactly as a raised cap unmarks.
+        report["cleanup_off"] = len(plan["order"])
+        report["unmarked"] = len(st["marked"])
+        st["marked"] = {}
+        _stamp_tv_share(0)
+        print(f"TV cleanup is off — {report['cleanup_off']} season(s) planned "
+              f"but not eligible", flush=True)
+        return _finish()
     takes, pool = _merged_pool_takes(plan["order"], cfg)
     report["eligible_seasons"] = len(plan["order"])
     report["pool_target_gb"] = round(pool["target_bytes"] / 1e9, 1)

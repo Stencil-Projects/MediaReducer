@@ -5177,7 +5177,19 @@ def build_candidates():
                 if jf_id:
                     p_imdb, j_imdb = _norm_id(meta.get("imdb_id")), _norm_id(jf_id.get("imdb"))
                     p_tmdb, j_tmdb = _norm_id(meta.get("tmdb_id")), _norm_id(jf_id.get("tmdb"))
-                    if (p_imdb and j_imdb and p_imdb != j_imdb) or (p_tmdb and j_tmdb and p_tmdb != j_tmdb):
+                    # IMDb decides when both sides have it. Two servers can
+                    # hold DIFFERENT TMDb records for the same film — remakes,
+                    # re-releases and alternate cuts are split entries there —
+                    # so a TMDb disagreement under a matching IMDb id is a
+                    # catalogue quirk, not two different movies. It is also
+                    # the IMDb id that fetches the rating this is scored on,
+                    # so agreement there is agreement about the thing that
+                    # matters. TMDb only arbitrates when IMDb cannot.
+                    if p_imdb and j_imdb:
+                        _conflict = p_imdb != j_imdb
+                    else:
+                        _conflict = bool(p_tmdb and j_tmdb and p_tmdb != j_tmdb)
+                    if _conflict:
                         stats["identity_mismatch"] += 1
                         _mismatch_skip_paths.add(resolved_path)
                         try:
@@ -5666,6 +5678,25 @@ def _tv_share_bytes() -> int:
     except Exception:
         pass
     return 0
+
+
+def _season_side_report() -> dict:
+    """What the run's season side did, from the store it persists to. The app
+    plans and deletes seasons in-process just before launching this engine, so
+    by the time the summary is written its numbers are this run's — and the
+    summary is the one place the whole run is reported, so it has to carry
+    them or the log describes half of it. A missing or stale report reads as
+    empty: a run that could not do the season half must not print counts from
+    a previous one."""
+    try:
+        with db.connect(DB_FILE) as conn:
+            st = db.get_meta(conn, "tv_cleanup")
+        lp = (st or {}).get("last_pass")
+        if isinstance(lp, dict) and time.time() - float(lp.get("at") or 0) <= 3600:
+            return lp
+    except Exception:
+        pass
+    return {}
 
 
 def _daily_deficit_bytes(used_gb, max_gb, library_gb) -> int:
@@ -6838,11 +6869,21 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
         if is_sim:
             row("Library after (est.):", f"{effective_library_gb - bytes_to_gb(freed_bytes):.1f} GB")
     log_raw("-" * 34)
+    # Out-of-scope is NOT an issue. A film under a directory you chose not to
+    # monitor is working exactly as configured, and folding those into the
+    # issue count made a tidy library read as hundreds of faults.
     path_issues = (build_stats["no_file_path"] + build_stats["bad_extension"]
-                   + build_stats["missing_on_disk"] + build_stats["outside_monitored_dirs"])
+                   + build_stats["missing_on_disk"])
+    # One run, one report: the season half runs in-process just before this
+    # engine, so its numbers belong beside the movie ones rather than nowhere.
+    seasons = _season_side_report()
     row("Movies scanned:", total_scanned)
+    if seasons.get("seasons_seen"):
+        row("Seasons scanned:", seasons["seasons_seen"])
     if build_stats.get("movie_cleanup_off"):
         row("Cleanup off:", f"{build_stats['movie_cleanup_off']} (movie cleanup is turned off in Filtering & Scoring)")
+    if seasons.get("cleanup_off"):
+        row("Cleanup off:", f"{seasons['cleanup_off']} season(s) (TV cleanup is turned off in Filtering & Scoring)")
     row("Protected:", f"{build_stats['protected']} (in Protected collection)")
     if build_stats.get("jellyfin_favorite"):
         row("JF favorites:", f"{build_stats['jellyfin_favorite']} (favorited by a Jellyfin user — protected)")
@@ -6855,18 +6896,40 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
         row("High-rated:", f"{build_stats.get('high_rated', 0)} (IMDb above {float(MAX_IMDB_RATING):.1f} cutoff — protected)" if MAX_IMDB_RATING is not None else f"{build_stats.get('high_rated', 0)}")
     if build_stats.get("no_imdb_data"):
         row("No IMDb data:", f"{build_stats.get('no_imdb_data', 0)} (no rating/votes found — not enough data to judge, skipped)")
-    row("Path/disk issues:", f"{path_issues} (missing, bad extension, unmapped path)")
+    if path_issues or not build_stats.get("outside_monitored_dirs"):
+        row("Path/disk issues:", f"{path_issues} (missing, bad extension, unmapped path)")
+    if build_stats.get("outside_monitored_dirs"):
+        row("Outside monitored paths:",
+            f"{build_stats['outside_monitored_dirs']} (in the library but under a "
+            f"directory you don't monitor — not a fault)")
     row("Duplicates merged:", build_stats.get('duplicates_merged', 0))
-    row("Eligible:", build_stats['eligible'])
+    _elig_seasons = int(seasons.get("eligible_seasons") or 0)
+    row("Eligible:", f"{build_stats['eligible']} movie(s) + {_elig_seasons} season(s) "
+                     f"= {build_stats['eligible'] + _elig_seasons}"
+                     if _elig_seasons else build_stats['eligible'])
     log_raw("-" * 34)
-    row("Would delete:" if is_sim else "Deleted:", removed_count)
+    _del_seasons = len(seasons.get("deleted_seasons") or [])
+    row("Would delete:" if is_sim else "Deleted:",
+        f"{removed_count} movie(s) + {_del_seasons} season(s)"
+        if _del_seasons else removed_count)
+    if seasons.get("marked_new"):
+        row("Seasons marked:", f"{seasons['marked_new']} new "
+                               f"(deletable after the same delay as a marked movie)")
+    if seasons.get("held_by_delay"):
+        row("Seasons waiting:", f"{seasons['held_by_delay']} (delay not elapsed)")
+    if seasons.get("aborted"):
+        row("Seasons skipped:", f"{seasons['aborted']} — the movie side covered the target")
     # "Would delete" above counts only what the current targets require right
     # now; the standing eligible queue is a separate fact.
     if queued_count is not None:
+        # The standing order the Marked & Eligible window shows is merged, so
+        # this count has to be too, or the log and the window disagree about
+        # the same list. Redline is a movie-only emergency: no seasons there.
+        _q = queued_count if _redline_only_mode() else queued_count + _elig_seasons
         if _redline_only_mode():
-            row("Eligible queue:", f"{queued_count} (~{bytes_to_gb(queued_bytes):.1f} GB — deletes worst-scored first when free space hits the Redline floor)")
+            row("Eligible queue:", f"{_q} (~{bytes_to_gb(queued_bytes):.1f} GB — deletes worst-scored first when free space hits the Redline floor)")
         else:
-            row("Eligible queue:", f"{queued_count} (~{bytes_to_gb(queued_bytes):.1f} GB — full deletion order; only the marked prefix is scheduled)")
+            row("Eligible queue:", f"{_q} (~{bytes_to_gb(queued_bytes):.1f} GB of movies — full deletion order; only the marked prefix is scheduled)")
     # The "limit reached" note only applies when candidates were actually left
     # untouched because the target was met first. When every candidate is acted
     # on (e.g. the cap is far below the library and can't be reached), the count

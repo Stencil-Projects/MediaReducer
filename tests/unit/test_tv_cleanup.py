@@ -378,8 +378,11 @@ check("no pool trigger (no cap, no headroom) → no pass",
 check("no media server to supply the inventory → no pass (Sonarr alone is "
       "NOT enough — it is cleanup-only)",
       A._tv_pass_plan_for_run(dict(CFG, USE_JELLYFIN=False), "headroom") is None)
-check("the TV switch off → no pass",
-      A._tv_pass_plan_for_run(dict(CFG, TV_CLEANUP_ENABLED=False), "headroom") is None)
+# The switch OFF still runs — seasons are ineligible, not invisible, exactly
+# as the movie side keeps scanning and reports movie_cleanup_off as the reason
+# nothing is eligible. Only "no inventory" and "no space trigger" skip it.
+check("the TV switch off still plans (ineligible, not invisible)",
+      A._tv_pass_plan_for_run(dict(CFG, TV_CLEANUP_ENABLED=False), "headroom") is not None)
 _orig_breach = A._redline_breached_now
 A._redline_breached_now = lambda cfg: True
 check("a breached Redline emergency skips the pass — the engine goes first",
@@ -434,6 +437,49 @@ r = A._run_tv_cleanup_pass(_CFG_NO_OPT, execute=True)
 check("an absent key deletes the season without touching Sonarr's monitoring",
       len(r["deleted_seasons"]) == 1 and not S1.exists()
       and not any("sonarr" in u for _, u in CALLS), (r, CALLS))
+
+# ── The button and the window count the same thing ─────────────────────────
+# The dashboard's Marked & Eligible count and the list behind it must come
+# from ONE source. Reading the number the run stored instead of counting the
+# rows parted company on a rebuild after a wiped store: the season side plans
+# first and stores its count, while the inventory that feeds the window only
+# lands when the run finishes. The button then advertised seasons the window
+# could not show, and opening it corrected the count only until the next poll
+# put the stored number back.
+_orig_snap = A._read_library_snapshot
+_state = A._tv_cleanup_state()
+_state["last_pass"] = dict(_state.get("last_pass") or {}, eligible_seasons=189)
+A._save_tv_cleanup_state(_state)
+A._read_library_snapshot = lambda: ({"movies": []}, None)     # mid-rebuild
+check("with no inventory yet the count is 0, like the window",
+      A._tv_eligible_count(CFG) == 0
+      and A._tv_eligible_entries(CFG, set()) == [],
+      A._tv_eligible_count(CFG))
+A._read_library_snapshot = _orig_snap
+check("...and with the inventory present they still agree",
+      A._tv_eligible_count(CFG) == len(A._tv_eligible_entries(
+          CFG, set(A._tv_cleanup_state().get("marked") or {}))))
+
+# ── The switch off reports itself, like the movie side ─────────────────────
+# Off must not mean silence: the run still plans the seasons and says how many
+# the switch held back, so the log can report the whole run instead of half.
+# Standing marks go with it — an ineligible season may not keep a delay clock.
+reset_files()
+reset_state()
+A._run_tv_cleanup_pass(CFG, execute=True)                    # marks S1
+check("a mark exists before the switch is turned off",
+      MARK_KEY in A._tv_cleanup_state()["marked"])
+r = A._run_tv_cleanup_pass(dict(CFG, TV_CLEANUP_ENABLED=False), execute=True)
+check("the off switch reports the seasons it held back",
+      r["cleanup_off"] >= 1 and r["eligible_seasons"] == 0, r)
+check("...counts what it saw, so the run can report seasons scanned",
+      r["seasons_seen"] == 2, r)
+check("...drops standing marks rather than leaving clocks running",
+      not A._tv_cleanup_state()["marked"] and r["unmarked"] >= 1, r)
+check("...and deletes nothing, whatever the mode",
+      not r["deleted_seasons"] and (S1 / "ep1.mkv").exists(), r)
+check("...while an ON switch still reports eligible seasons",
+      A._run_tv_cleanup_pass(CFG, execute=False)["eligible_seasons"] >= 1)
 
 # ── The nomenclature guard ──────────────────────────────────────────────────
 # "TV pass" is not a thing anywhere a user reads: one cleanup, one report.

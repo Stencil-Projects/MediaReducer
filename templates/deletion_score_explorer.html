@@ -18,14 +18,18 @@
 
 .card{background:var(--surface-1);border:1px solid var(--border);border-radius:12px;padding:1.25rem;margin-bottom:1rem}
 /* Run-lock ghosting — the same treatment the Configuration page gives its
-   locked sections: dim the content, keep the inline notice fully readable. */
-.section-run-ghost > :not(.config-inline-warning){opacity:.55}
+   locked sections: dim the content, keep the inline notice fully readable.
+   Section bodies only, so the headers stay legible and still open: a run
+   locks the settings, it does not stop you reading what they say. */
+.section-run-ghost .accordion-body > :not(.config-inline-warning){opacity:.55}
 /* .config-inline-warning + the not-allowed cursor on ghosted controls come
    from base.html (shared with Configuration). */
 .slbl{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:.75rem}
 .miniin{font-family:var(--font-mono)}
-.score-explorer-shell .filter-score-group{margin-top:14px}
-.score-explorer-shell .filter-score-subhead{margin-bottom:8px}
+/* The settings stack sits where the old card did, with the same air under it. */
+#filter-score-card{margin-bottom:1rem}
+.filter-score-intro{margin:0 0 .75rem}
+.score-explorer-shell .accordion-body .section-desc{margin-bottom:14px}
 .score-explorer-shell .filter-score-card{padding:10px}
 .score-explorer-shell .filter-score-help{font-size:11px}
 /* Invalid-field flag styling comes from base.html (shared with the
@@ -367,156 +371,192 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
   <div id="exp-run-lock-note" class="config-inline-warning mb-3" hidden>A run is active. Settings are locked until it finishes.</div>
 </div>
 
-<div class="card" id="filter-score-card">
-  <div class="slbl">Filtering &amp; Scoring</div>
-  <div class="paneldesc" style="margin:.2rem 0 .6rem">What can be deleted, and in what order. Changes preview instantly; Save applies them right away.</div>
+<p class="paneldesc filter-score-intro">What can be deleted, and in what order. Changes preview instantly; Save applies them right away.</p>
 
-  <div class="filter-score-group">
-    <div class="filter-score-heading">Cleanup scope</div>
-    <div class="filter-score-subhead">What cleanup may touch. Movies score per title, TV per season, on one shared scale.</div>
-    <div class="filter-score-grid">
-      <div class="filter-score-card">
-        <label class="input-label" for="c-movies-on">Movies</label>
-        <label class="filter-score-toggle-row" for="c-movies-on">
-          <input class="form-check-input" type="checkbox" id="c-movies-on" onchange="onExpFilterInput()">
-          <span class="form-check-label">Allow movie cleanup</span>
-        </label>
-        <div class="filter-score-help">Movies join the deletion order, scored per title; the worst-kept are marked, then deleted once the delay elapses. Off = movies are never deleted.</div>
-      </div>
-      <div class="filter-score-card">
-        <label class="input-label" for="c-tv-on">TV shows</label>
-        <label class="filter-score-toggle-row" for="c-tv-on">
-          <input class="form-check-input" type="checkbox" id="c-tv-on" onchange="onExpFilterInput()">
-          <span class="form-check-label">Allow TV show cleanup</span>
-        </label>
-        <div class="filter-score-help">Seasons join the same order, scored per season; the worst-kept are marked, then deleted once the delay elapses. Off = seasons are never deleted.</div>
-      </div>
-    </div>
-  </div>
+<!-- The four groups are the Configuration page's categories, on this page: one
+     connected stack, one open at a time. Laid flat they ran nearly a thousand
+     pixels of settings you mostly are not changing, and every group carried a
+     heading and a subhead you had to read past to reach the one you wanted. -->
+<div class="accordion pr-accordion" id="filter-score-card">
 
-  <div class="filter-score-group">
-    <div class="filter-score-heading">Scoring &amp; ordering</div>
-    <div class="filter-score-subhead">Lowest retention score deletes first — movies and seasons alike.</div>
-
-    <div class="score-order-grid">
-      <div class="filter-score-card score-balance-card">
-        <div class="score-balance-labels">
-          <span>Watch &amp; added history</span>
-          <span>IMDb rating</span>
-        </div>
-        <div class="score-balance-track" title="Center = balanced 50% / 50%">
-          <input type="range" class="form-range" id="c-bal" min="0" max="100" step="10" value="50" oninput="onExpBalanceInput()">
-        </div>
-        <div class="filter-score-help"><strong>Left:</strong> keeps what your household watches — best with plenty of play history. <strong>Right:</strong> keeps what IMDb rates well — best when much of the library is unwatched. A season reads its show's rating; duplicate movies lose their lowest-quality copy first.</div>
-      </div>
-
-      <div class="filter-score-card">
-        <label class="input-label" for="c-stale">Max staleness</label>
-        <div class="input-group">
-          <input type="number" class="form-control" id="c-stale" value="36"
-                 min="1" max="120" step="1" inputmode="numeric"
-                 onkeydown="if(['.',',','e','E'].includes(event.key))event.preventDefault()"
-                 oninput="onExpFilterInput()" onblur="_expValidateField('c-stale')"
-                 aria-describedby="c-stale-error">
-          <span class="input-group-text">months</span>
-        </div>
-        <div id="c-stale-error" class="field-error">Must be 1–120 months.</div>
-        <div class="filter-score-help">How long after the last watch (or added date) a title counts as fully stale. Recency points fade to zero over this window.</div>
-      </div>
-
-      <div class="filter-score-card">
-        <label class="input-label" for="c-tie">File size optimization</label>
-        <div class="input-group">
-          <div class="input-group-text">
-            <input class="form-check-input mt-0" type="checkbox" id="c-tie-on"
-                   onchange="onExpTieToggle()" aria-label="Enable file size optimization">
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#fs-scope">
+        Cleanup scope
+      </button>
+    </h2>
+    <div id="fs-scope" class="accordion-collapse collapse show">
+      <div class="accordion-body">
+        <p class="section-desc">What cleanup may touch. Movies score per title, TV per season, on one shared scale.</p>
+        <div class="filter-score-grid">
+          <div class="filter-score-card">
+            <label class="input-label" for="c-movies-on">Movies</label>
+            <label class="filter-score-toggle-row" for="c-movies-on">
+              <input class="form-check-input" type="checkbox" id="c-movies-on" onchange="onExpFilterInput()">
+              <span class="form-check-label">Allow movie cleanup</span>
+            </label>
+            <div class="filter-score-help">Movies join the deletion order, scored per title; the worst-kept are marked, then deleted once the delay elapses. Off = movies are never deleted.</div>
           </div>
-          <input type="number" class="form-control" id="c-tie" value="2"
-                 min="0.5" max="25" step="0.5" disabled oninput="onExpFilterInput()"
-                 onblur="_expValidateField('c-tie')" aria-describedby="c-tie-error">
-          <span class="input-group-text">pts</span>
-        </div>
-        <div id="c-tie-error" class="field-error">Must be 0.5–25 points — uncheck to turn off.</div>
-        <div class="filter-score-help">Scores within this many points count as tied, and the larger file goes first inside a tie, so a space target costs the fewest movies. Off = strict score order.</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="filter-score-group">
-    <div class="filter-score-heading">Eligibility filters</div>
-    <div class="filter-score-subhead">Applied before scoring, to movies and seasons alike. Filtered rows say why in the table below.</div>
-    <div class="filter-score-grid">
-      <div class="filter-score-card">
-        <label class="input-label" for="c-grace">Minimum age (grace period)</label>
-        <div class="filter-score-control-row">
-          <input type="number" class="form-control" id="c-grace" value="0" min="0" oninput="onExpFilterInput()">
-        </div>
-        <div class="filter-score-help">Nothing added within this many days is deleted; a new show holds back all its seasons.</div>
-      </div>
-      <div class="filter-score-card">
-        <label class="input-label" for="c-unplayed">Unplayed</label>
-        <label class="filter-score-toggle-row" for="c-unplayed">
-          <input class="form-check-input" type="checkbox" id="c-unplayed" onchange="onExpFilterInput()">
-          <span class="form-check-label">Don't delete unplayed titles</span>
-        </label>
-        <div class="filter-score-help">Unplayed movies and a show's never-watched seasons are held back. Off = they are scored like anything else.</div>
-      </div>
-      <div class="filter-score-card">
-        <label class="input-label" for="c-cutoff">Maximum IMDb rating</label>
-        <div class="input-group">
-          <div class="input-group-text">
-            <input class="form-check-input mt-0" type="checkbox" id="c-cutoff-on"
-                   onchange="onExpCutoffToggle()" aria-label="Enable maximum IMDb rating cutoff">
+          <div class="filter-score-card">
+            <label class="input-label" for="c-tv-on">TV shows</label>
+            <label class="filter-score-toggle-row" for="c-tv-on">
+              <input class="form-check-input" type="checkbox" id="c-tv-on" onchange="onExpFilterInput()">
+              <span class="form-check-label">Allow TV show cleanup</span>
+            </label>
+            <div class="filter-score-help">Seasons join the same order, scored per season; the worst-kept are marked, then deleted once the delay elapses. Off = seasons are never deleted.</div>
           </div>
-          <input type="number" class="form-control" id="c-cutoff" value="7.5"
-                 min="0.1" max="10" step="0.1" disabled oninput="onExpFilterInput()"
-                 onblur="_expValidateField('c-cutoff')" aria-describedby="c-cutoff-error">
         </div>
-        <div id="c-cutoff-error" class="field-error">Must be above 0, up to 10 — uncheck to turn off.</div>
-        <div class="filter-score-help">Anything rated above this is held back, and a season uses its show's rating. Off = a rating shields nothing; unrated titles are unaffected either way.</div>
-      </div>
-      <div class="filter-score-card{{ '' if jellyfin_connected else ' connection-ghost' }}">
-        <label class="input-label" for="c-jf-fav">Jellyfin favorites</label>
-        <label class="filter-score-toggle-row" for="c-jf-fav">
-          <input class="form-check-input" type="checkbox" id="c-jf-fav" onchange="onExpFilterInput()" {{ '' if jellyfin_connected else 'disabled' }}>
-          <span class="form-check-label">Don't delete Jellyfin favorites</span>
-        </label>
-        <div class="filter-score-help">Anything a Jellyfin user favorited is held back, and a favorited show shields all its seasons. Off = favorites are scored like anything else.</div>
-        <div class="filter-score-help connection-unlock-note" {{ 'hidden' if jellyfin_connected else '' }}>Connect Jellyfin to unlock this.</div>
       </div>
     </div>
   </div>
 
-  <div class="filter-score-group">
-    <div class="filter-score-heading">TV show scoring</div>
-    <div class="filter-score-subhead">The only TV-only rules — everything above applies to seasons too. Previews live below.</div>
-    <div class="filter-score-grid">
-      <div class="filter-score-card">
-        <label class="input-label" for="c-tv-elig">Season eligibility</label>
-        <select class="form-select form-select-sm" id="c-tv-elig" onchange="onExpFilterInput()">
-          <option value="oldest">Only the oldest season</option>
-          <option value="except_newest">Any season except the newest</option>
-          <option value="all">All seasons</option>
-        </select>
-        <div class="filter-score-help">Which of a show's seasons may delete. "Newest" = most recently added, even if it isn't the latest season. A continuing show's current season is always held back.</div>
-      </div>
-      <div class="filter-score-card">
-        <label class="input-label" for="c-tv-weight">TV show watch weight</label>
-        <div class="score-balance-labels">
-          <span>Plays = episodes counts as</span>
-          <span id="v-tv-weight">1.0 watches</span>
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#fs-scoring">
+        Scoring &amp; ordering
+      </button>
+    </h2>
+    <div id="fs-scoring" class="accordion-collapse collapse">
+      <div class="accordion-body">
+        <p class="section-desc">Lowest retention score deletes first — movies and seasons alike.</p>
+
+        <div class="score-order-grid">
+          <div class="filter-score-card score-balance-card">
+            <div class="score-balance-labels">
+              <span>Watch &amp; added history</span>
+              <span>IMDb rating</span>
+            </div>
+            <div class="score-balance-track" title="Center = balanced 50% / 50%">
+              <input type="range" class="form-range" id="c-bal" min="0" max="100" step="10" value="50" oninput="onExpBalanceInput()">
+            </div>
+            <div class="filter-score-help"><strong>Left:</strong> keeps what your household watches — best with plenty of play history. <strong>Right:</strong> keeps what IMDb rates well — best when much of the library is unwatched. A season reads its show's rating; duplicate movies lose their lowest-quality copy first.</div>
+          </div>
+
+          <div class="filter-score-card">
+            <label class="input-label" for="c-stale">Max staleness</label>
+            <div class="input-group">
+              <input type="number" class="form-control" id="c-stale" value="36"
+                     min="1" max="120" step="1" inputmode="numeric"
+                     onkeydown="if(['.',',','e','E'].includes(event.key))event.preventDefault()"
+                     oninput="onExpFilterInput()" onblur="_expValidateField('c-stale')"
+                     aria-describedby="c-stale-error">
+              <span class="input-group-text">months</span>
+            </div>
+            <div id="c-stale-error" class="field-error">Must be 1–120 months.</div>
+            <div class="filter-score-help">How long after the last watch (or added date) a title counts as fully stale. Recency points fade to zero over this window.</div>
+          </div>
+
+          <div class="filter-score-card">
+            <label class="input-label" for="c-tie">File size optimization</label>
+            <div class="input-group">
+              <div class="input-group-text">
+                <input class="form-check-input mt-0" type="checkbox" id="c-tie-on"
+                       onchange="onExpTieToggle()" aria-label="Enable file size optimization">
+              </div>
+              <input type="number" class="form-control" id="c-tie" value="2"
+                     min="0.5" max="25" step="0.5" disabled oninput="onExpFilterInput()"
+                     onblur="_expValidateField('c-tie')" aria-describedby="c-tie-error">
+              <span class="input-group-text">pts</span>
+            </div>
+            <div id="c-tie-error" class="field-error">Must be 0.5–25 points — uncheck to turn off.</div>
+            <div class="filter-score-help">Scores within this many points count as tied, and the larger file goes first inside a tie, so a space target costs the fewest movies. Off = strict score order.</div>
+          </div>
         </div>
-        <input type="range" class="form-range" id="c-tv-weight" min="100" max="200" step="5" value="100" oninput="onExpTvKnobInput()">
-        <div class="filter-score-help">Converts season plays to movie watches: plays &divide; episodes &times; this weight. At 100%, playing a full season once = one movie watch; at 200%, two.</div>
       </div>
-      <div class="filter-score-card">
-        <label class="input-label" for="c-tv-bump">All-season watch boost</label>
-        <div class="score-balance-labels">
-          <span>Points at a fully-watched show</span>
-          <span id="v-tv-bump">10 pts</span>
+    </div>
+  </div>
+
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#fs-eligibility">
+        Eligibility filters
+      </button>
+    </h2>
+    <div id="fs-eligibility" class="accordion-collapse collapse">
+      <div class="accordion-body">
+        <p class="section-desc">Applied before scoring, to movies and seasons alike. Filtered rows say why in the table below.</p>
+        <div class="filter-score-grid">
+          <div class="filter-score-card">
+            <label class="input-label" for="c-grace">Minimum age (grace period)</label>
+            <div class="filter-score-control-row">
+              <input type="number" class="form-control" id="c-grace" value="0" min="0" oninput="onExpFilterInput()">
+            </div>
+            <div class="filter-score-help">Nothing added within this many days is deleted; a new show holds back all its seasons.</div>
+          </div>
+          <div class="filter-score-card">
+            <label class="input-label" for="c-unplayed">Unplayed</label>
+            <label class="filter-score-toggle-row" for="c-unplayed">
+              <input class="form-check-input" type="checkbox" id="c-unplayed" onchange="onExpFilterInput()">
+              <span class="form-check-label">Don't delete unplayed titles</span>
+            </label>
+            <div class="filter-score-help">Unplayed movies and a show's never-watched seasons are held back. Off = they are scored like anything else.</div>
+          </div>
+          <div class="filter-score-card">
+            <label class="input-label" for="c-cutoff">Maximum IMDb rating</label>
+            <div class="input-group">
+              <div class="input-group-text">
+                <input class="form-check-input mt-0" type="checkbox" id="c-cutoff-on"
+                       onchange="onExpCutoffToggle()" aria-label="Enable maximum IMDb rating cutoff">
+              </div>
+              <input type="number" class="form-control" id="c-cutoff" value="7.5"
+                     min="0.1" max="10" step="0.1" disabled oninput="onExpFilterInput()"
+                     onblur="_expValidateField('c-cutoff')" aria-describedby="c-cutoff-error">
+            </div>
+            <div id="c-cutoff-error" class="field-error">Must be above 0, up to 10 — uncheck to turn off.</div>
+            <div class="filter-score-help">Anything rated above this is held back, and a season uses its show's rating. Off = a rating shields nothing; unrated titles are unaffected either way.</div>
+          </div>
+          <div class="filter-score-card{{ '' if jellyfin_connected else ' connection-ghost' }}">
+            <label class="input-label" for="c-jf-fav">Jellyfin favorites</label>
+            <label class="filter-score-toggle-row" for="c-jf-fav">
+              <input class="form-check-input" type="checkbox" id="c-jf-fav" onchange="onExpFilterInput()" {{ '' if jellyfin_connected else 'disabled' }}>
+              <span class="form-check-label">Don't delete Jellyfin favorites</span>
+            </label>
+            <div class="filter-score-help">Anything a Jellyfin user favorited is held back, and a favorited show shields all its seasons. Off = favorites are scored like anything else.</div>
+            <div class="filter-score-help connection-unlock-note" {{ 'hidden' if jellyfin_connected else '' }}>Connect Jellyfin to unlock this.</div>
+          </div>
         </div>
-        <input type="range" class="form-range" id="c-tv-bump" min="0" max="25" step="0.5" value="10" oninput="onExpTvKnobInput()">
-        <div class="filter-score-help">Every watched episode lifts ALL of a show's seasons, more as more is watched, so a watched show's untouched seasons outrank those of shows nobody watches. 0 = no lift.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#fs-tv">
+        TV show scoring
+      </button>
+    </h2>
+    <div id="fs-tv" class="accordion-collapse collapse">
+      <div class="accordion-body">
+        <p class="section-desc">The only TV-only rules — everything above applies to seasons too. Previews live below.</p>
+        <div class="filter-score-grid">
+          <div class="filter-score-card">
+            <label class="input-label" for="c-tv-elig">Season eligibility</label>
+            <select class="form-select form-select-sm" id="c-tv-elig" onchange="onExpFilterInput()">
+              <option value="oldest">Only the oldest season</option>
+              <option value="except_newest">Any season except the newest</option>
+              <option value="all">All seasons</option>
+            </select>
+            <div class="filter-score-help">Which of a show's seasons may delete. "Newest" = most recently added, even if it isn't the latest season. A continuing show's current season is always held back.</div>
+          </div>
+          <div class="filter-score-card">
+            <label class="input-label" for="c-tv-weight">TV show watch weight</label>
+            <div class="score-balance-labels">
+              <span>Plays = episodes counts as</span>
+              <span id="v-tv-weight">1.0 watches</span>
+            </div>
+            <input type="range" class="form-range" id="c-tv-weight" min="100" max="200" step="5" value="100" oninput="onExpTvKnobInput()">
+            <div class="filter-score-help">Converts season plays to movie watches: plays &divide; episodes &times; this weight. At 100%, playing a full season once = one movie watch; at 200%, two.</div>
+          </div>
+          <div class="filter-score-card">
+            <label class="input-label" for="c-tv-bump">All-season watch boost</label>
+            <div class="score-balance-labels">
+              <span>Points at a fully-watched show</span>
+              <span id="v-tv-bump">10 pts</span>
+            </div>
+            <input type="range" class="form-range" id="c-tv-bump" min="0" max="25" step="0.5" value="10" oninput="onExpTvKnobInput()">
+            <div class="filter-score-help">Every watched episode lifts ALL of a show's seasons, more as more is watched, so a watched show's untouched seasons outrank those of shows nobody watches. 0 = no lift.</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -705,17 +745,21 @@ function _applyExplorerFieldDeps(){
   if(el('c-jf-fav'))el('c-jf-fav').disabled=!expJfConnected;
 }
 // Same helper, same ordering as the Configuration page's sections: release,
-// let the real rules decide, then lay the run lock over the top. Sweeping the
-// card means a control added to it later is covered without being listed here.
+// let the real rules decide, then lay the run lock over the top. Sweeping each
+// section body means a control added to one later is covered without being
+// listed here — and only the bodies, so the headers still open. A run stops
+// you CHANGING a setting; it should not stop you reading what one says.
 function _applyExplorerRunLock(){
   const locked=expRunActive;
   const card=document.getElementById('filter-score-card');
   const note=document.getElementById('exp-run-lock-note');
+  const bodies=card?[...card.querySelectorAll('.accordion-body')]:[];
   if(note)note.hidden=!locked;
-  if(!locked)window.prSetRunLock(card,false);
+  if(!locked)bodies.forEach(b=>window.prSetRunLock(b,false));
   _applyExplorerFieldDeps();
   updateCfgButtons();
-  if(locked)window.prSetRunLock(card,true);
+  if(locked)bodies.forEach(b=>window.prSetRunLock(b,true));
+  card?.classList.toggle('section-run-ghost',locked);
 }
 window.prOnStatusPoll=function(d){
   const was=expRunActive;
@@ -881,6 +925,9 @@ function _expFieldInvalid(id){
   const v=prNumOrNull(prFieldRaw(id));
   return v===null||!rule.ok(v);
 }
+// A red field inside a CLOSED section is invisible, and the only symptom left
+// is a Save button that will not go. The header marker says which one to open.
+const _expSectionIssues=prSectionIssues('filter-score-card',{selector:'.field-invalid'});
 function _expValidateField(id){
   const invalid=_expFieldInvalid(id);
   const el=document.getElementById(id);
@@ -888,6 +935,7 @@ function _expValidateField(id){
   // Always armed; focus only suppresses NEW flags (see prInvalidVisible).
   const visible=prInvalidVisible(invalid,true,el,card);
   prApplyFieldFlag(card,document.getElementById(id+'-error'),el,visible);
+  _expSectionIssues.schedule();
   return !invalid;
 }
 function _expValidateAll(){
