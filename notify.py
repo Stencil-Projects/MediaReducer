@@ -744,7 +744,10 @@ def build_run_message(cfg, report):
     next_event_on, next_event_ripe, deleted_items [{title, size}],
     marked_items [{title, delete_on}] (this run's new marks),
     existing_marked_items [{title, delete_on}] (marks that predate the run,
-    attached app-side), completed_with_errors, message, and
+    attached app-side), completed_with_errors, message,
+    seasons {marked_new, held_by_delay, deleted_seasons, skipped, freed_bytes,
+    aborted, marked_total} (the run's season side, attached app-side — folded
+    into the same numbers, never its own block), and
     storage {free_gb, total_gb, used_gb, library_gb, headroom_gb, redline_gb,
     max_library_gb} for the dashboard-style storage/limits block.
     """
@@ -756,6 +759,11 @@ def build_run_message(cfg, report):
     deleted = int(report.get("deleted_count") or 0)
     eligible = report.get("eligible_count")
     marked_total = report.get("marked_total", report.get("marked_count"))
+    # Seasons ride the same cleanup, so they report inside the run's own
+    # numbers — marked totals and the removed line — not as their own block.
+    seasons = report.get("seasons") if isinstance(report.get("seasons"), dict) else None
+    if seasons and marked_total is not None:
+        marked_total = int(marked_total or 0) + int(seasons.get("marked_total") or 0)
 
     body_parts = []
     message_used = False
@@ -783,7 +791,10 @@ def build_run_message(cfg, report):
         body_parts.append(str(report["message"]).strip())
         message_used = True
 
-    # Cleanup block: only runs that could delete get one.
+    # Cleanup block: only runs that could delete get one. Movies and seasons
+    # come out as ONE removed line with the bytes summed — the run deleted
+    # things, and what kind each was is the line's detail, not its identity.
+    seasons_deleted = int(seasons.get("deleted_seasons") or 0) if seasons else 0
     if mode != "simulate":
         if debug:
             # The engine's dry-run message already reads cleanly and covers the
@@ -792,33 +803,31 @@ def build_run_message(cfg, report):
             if not message_used:
                 msg = str(report.get("message") or "").strip()
                 body_parts.append(msg or "Dry run — nothing was changed.")
-        elif deleted:
-            body_parts.append(f"Removed {deleted} movie(s) — freed "
-                              f"{_fmt_size(report.get('bytes_freed'))}.")
+        elif deleted or seasons_deleted:
+            what = []
+            if deleted:
+                what.append(f"{deleted} movie(s)")
+            if seasons_deleted:
+                what.append(f"{seasons_deleted} season(s)")
+            freed = (int(report.get("bytes_freed") or 0)
+                     + int((seasons or {}).get("freed_bytes") or 0))
+            body_parts.append(f"Removed {' and '.join(what)} — freed "
+                              f"{_fmt_size(freed)}.")
         else:
             body_parts.append("Nothing was removed.")
 
-    # TV block: the season pass that fired with this run. Absent key = TV
-    # cleanup is off or disarmed, and the block says nothing.
-    tv = report.get("tv_pass")
-    if isinstance(tv, dict):
-        if tv.get("aborted"):
-            body_parts.append(f"TV pass: aborted fail-closed — {tv['aborted']}")
-        else:
-            bits = []
-            if tv.get("deleted_seasons"):
-                bits.append(f"deleted {int(tv['deleted_seasons'])} season(s) "
-                            f"({_fmt_size(tv.get('freed_bytes'))})")
-            if tv.get("marked_new"):
-                bits.append(f"marked {int(tv['marked_new'])} new season(s)")
-            if tv.get("held_by_delay"):
-                bits.append(f"{int(tv['held_by_delay'])} waiting out the delay")
-            if tv.get("skipped"):
-                bits.append(f"{int(tv['skipped'])} SKIPPED — see the log")
-            if not bits:
-                total = int(tv.get("marked_total") or 0)
-                bits.append(f"{total} season(s) marked" if total else "nothing to do")
-            body_parts.append("TV pass: " + " · ".join(bits))
+    # Season facts the numbers above can't carry: a fail-closed season-side
+    # failure (the movie side covers the whole target) and skipped seasons
+    # pointing at the log. The run-wide space-safety refusal is NOT one of
+    # these — it reports once through the run's own message, never here.
+    if seasons:
+        if seasons.get("aborted"):
+            body_parts.append(f"Season deletions skipped this run — "
+                              f"{seasons['aborted']}; the movie side covers "
+                              f"the full target.")
+        elif seasons.get("skipped"):
+            body_parts.append(f"{int(seasons['skipped'])} season(s) skipped "
+                              f"— see the log.")
 
     # Storage block: where the library stands after the run, plus the armed
     # limits — the notification's version of the dashboard's storage card.

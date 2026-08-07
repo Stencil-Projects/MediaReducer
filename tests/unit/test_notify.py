@@ -89,19 +89,34 @@ t, b = notify.build_run_message(ALL_ON, CLEAN)
 check("cleanup title", t == "MediaReducer — cleanup")
 check("cleanup block reports removed+freed", "Removed 5 movie(s) — freed 38.0 GB." in b)
 
-# The TV pass rides the same message: seasons marked/deleted on their own
-# line, and a fail-closed abort states itself (movies covered the deficit).
-_, tvb = notify.build_run_message(ALL_ON, dict(CLEAN, tv_pass={
+# Seasons ride the SAME message inside the run's own numbers — one removed
+# line with the bytes summed, seasons folded into the marked total — never a
+# separate block, and the words "TV pass" appear nowhere.
+_, tvb = notify.build_run_message(ALL_ON, dict(CLEAN, seasons={
     "marked_new": 2, "held_by_delay": 1, "deleted_seasons": 1,
-    "freed_bytes": 12_300_000_000, "marked_total": 3}))
-check("the TV pass line reports deleted/marked/waiting seasons",
-      "TV pass: deleted 1 season(s) (12.3 GB) · marked 2 new season(s) · "
-      "1 waiting out the delay" in tvb)
-_, tva = notify.build_run_message(ALL_ON, dict(CLEAN, tv_pass={
+    "freed_bytes": 12_000_000_000, "marked_total": 3}))
+check("one removed line covers movies and seasons with the bytes summed",
+      "Removed 5 movie(s) and 1 season(s) — freed 50.0 GB." in tvb)
+check("season marks fold into the one marked total (10 movies + 3 seasons)",
+      "Marked for deletion: 13" in tvb)
+check("no TV-pass nomenclature anywhere", "TV pass" not in tvb and "tv pass" not in tvb.lower())
+_, tva = notify.build_run_message(ALL_ON, dict(CLEAN, seasons={
     "aborted": "Jellyfin's TV inventory did not answer"}))
-check("an aborted TV pass says so",
-      "TV pass: aborted fail-closed — Jellyfin's TV inventory did not answer" in tva)
-check("no tv_pass key = no TV line", "TV pass" not in b)
+check("a season-side failure states the fact without pass branding",
+      "Season deletions skipped this run — Jellyfin's TV inventory did not "
+      "answer; the movie side covers the full target." in tva
+      and "TV pass" not in tva)
+# The run-wide space-safety refusal is the thresholds module's message — a
+# safety-held season report (aborted None) must add NO season line at all.
+_, tvs = notify.build_run_message(ALL_ON, dict(CLEAN, seasons={
+    "aborted": None, "blocked_by_safety": True, "marked_total": 0}))
+check("the safety-held season side adds no season line",
+      "season" not in tvs.lower())
+_, tvsk = notify.build_run_message(ALL_ON, dict(CLEAN, seasons={
+    "skipped": 2, "marked_total": 0}))
+check("skipped seasons point at the log, factually",
+      "2 season(s) skipped — see the log." in tvsk and "TV pass" not in tvsk)
+check("no seasons key = no season wording", "season" not in b.lower())
 check("ripe marks say next daily run", "Next deletion: at the next daily run" in b)
 check("deleted list has name+size", "Deleted:" in b and "• X (8.0 GB)" in b)
 

@@ -360,7 +360,7 @@ check("...and Sonarr is never called at all",
       not any("sonarr" in u for _, u in CALLS), CALLS)
 
 # ── The per-run gate ────────────────────────────────────────────────────────
-# The pass fires WITH every engine run; _tv_pass_plan_for_run decides whether
+# Seasons ride WITH every engine run; _tv_pass_plan_for_run decides whether
 # it fires (None = no) and whether it may delete (True = a real Cleanup).
 check("a real Cleanup runs the pass deleting",
       A._tv_pass_plan_for_run(CFG, "headroom") is True)
@@ -383,13 +383,47 @@ check("a breached Redline emergency skips the pass — the engine goes first",
       A._tv_pass_plan_for_run(CFG, "headroom") is None)
 A._redline_breached_now = _orig_breach
 
-# ── The Dashboard's status line ─────────────────────────────────────────────
-st = A._tv_pass_status(CFG)
-check("the status line carries the last pass's outcome and the mark count",
-      st and st["armed"] and st.get("date") and "deleted_seasons" in st
-      and "marked" in st, st)
-check("the TV switch off silences the line",
-      A._tv_pass_status(dict(CFG, TV_CLEANUP_ENABLED=False)) is None)
+# ── One cleanup, one set of numbers ─────────────────────────────────────────
+# There is no TV-pass status of its own: seasons count inside the dashboard's
+# marked/eligible numbers. Marked = clocked marks; eligible = the season rows
+# of the last computed plan order; disarmed TV contributes nothing however
+# stale the stored state.
+_state = A._tv_cleanup_state()
+check("marked seasons count with their delay clocks running",
+      A._tv_marked_count() == sum(
+          1 for m in (_state.get("marked") or {}).values()
+          if isinstance(m, dict) and m.get("marked_at")))
+_lp = _state.get("last_pass") or {}
+check("the run stores its plan-order size for the eligible number",
+      int(_lp.get("eligible_seasons") or 0) >= 1
+      and A._tv_eligible_count(CFG) == int(_lp.get("eligible_seasons") or 0), _lp)
+check("disarmed TV contributes zero eligible seasons however stale the state",
+      A._tv_eligible_count(dict(CFG, TV_CLEANUP_ENABLED=False)) == 0)
+
+# The space-safety refusal is a RUN-WIDE fact the thresholds module reports —
+# the season report holds (marks nothing) but carries NO user-facing abort.
+_orig_sts = A._space_threshold_state
+A._space_threshold_state = lambda cfg, disk, lib: {"safety_blocked": True}
+r = A._run_tv_cleanup_pass(CFG, execute=True)
+A._space_threshold_state = _orig_sts
+check("the safety refusal holds the season side without a TV-specific abort",
+      r["blocked_by_safety"] and r["aborted"] is None
+      and not r["deleted_seasons"] and r["marked_new"] == 0, r)
+
+# ── The nomenclature guard ──────────────────────────────────────────────────
+# "TV pass" is not a thing anywhere a user reads: one cleanup, one report.
+# Seasons are part of the run, and every surface — templates, notifications,
+# logs, docs — speaks that way. A reintroduced "TV pass" fails here.
+_root = Path(__file__).resolve().parents[2]
+_offenders = []
+for _rel in ("templates", "app.py", "engine.py", "notify.py", "shared.py",
+             "README.md", "ARCHITECTURE.md"):
+    _p = _root / _rel
+    for f in ([_p] if _p.is_file() else sorted(_p.rglob("*"))):
+        if f.is_file() and f.suffix in {".py", ".html", ".md"} \
+                and "tv pass" in f.read_text(errors="replace").lower():
+            _offenders.append(str(f.relative_to(_root)))
+check("the words 'TV pass' appear nowhere users read", not _offenders, _offenders)
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

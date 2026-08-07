@@ -336,15 +336,15 @@ history comes from Jellyfin and Tautulli. **Sonarr is optional and
 cleanup-only**: it never supplies the inventory, and is only asked to
 unmonitor a season before deletion so it isn't re-downloaded. With a media
 server connected, TV cleanup enabled (Filtering & Scoring → Cleanup scope)
-and a Headroom target or Library Size Cap armed, a TV pass fires with EVERY
-run, right before the movie engine: a Simulate or Debug Cleanup marks, a
-real Cleanup also deletes due marks — the same gesture as the movies. Each
-pass:
+and a Headroom target or Library Size Cap armed, EVERY run handles seasons
+right before it handles movies: a Simulate or Debug Cleanup marks, a
+real Cleanup also deletes due marks — one cleanup, one gesture. On the
+season side, each run:
 
 1. It refreshes everything from the live servers — the media servers'
    inventory, watch history, favorites, and protected collections. If any
-   configured source fails to answer, the pass aborts without touching a
-   file. Series folders match under your monitored paths by folder name
+   configured source fails to answer, the season side aborts without touching
+   a file. Series folders match under your monitored paths by folder name
    (mount prefixes never need to line up, same as movies), and the files
    deleted are the server's own fresh listing joined under that folder. The
    disk is the size authority: a file the server describes at different
@@ -361,7 +361,7 @@ pass:
    double-covering it. A mark waits out the same deletion delay as a marked
    movie, and shows alongside the marked movies in the deletion history window
    and the Cache contents debug (Configuration → Advanced).
-4. In **Automatic Cleanup**, a later pass deletes marked seasons whose delay
+4. In **Automatic Cleanup**, a later run deletes marked seasons whose delay
    has elapsed **and that the fresh plan still takes**: when Sonarr is
    connected the season is unmonitored there first (so it isn't
    re-downloaded), then its episode files — freshly listed by the media

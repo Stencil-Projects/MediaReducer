@@ -1216,6 +1216,9 @@
       padding: 10px 14px; border-bottom: 1px solid var(--border);
     }
     .pr-debug-title { font-weight: 600; font-size: .9rem; margin-right: auto; }
+    /* The dialog itself takes focus on open (for Escape and Tab), and that
+       must not paint a focus ring on the whole panel. */
+    .pr-debug-box:focus { outline: none; }
     .pr-debug-box pre {
       margin: 0; padding: 12px 14px; overflow: auto; flex: 1 1 auto;
       font-size: .76rem; line-height: 1.5;
@@ -2545,7 +2548,7 @@ function _prDebugBox() {
     overlay.id = 'pr-debug-overlay';
     overlay.className = 'pr-debug-overlay';
     overlay.innerHTML =
-      '<div class="pr-debug-box" role="dialog" aria-modal="true" aria-label="Debug output">' +
+      '<div class="pr-debug-box" role="dialog" aria-modal="true" aria-label="Debug output" tabindex="-1">' +
         '<div class="pr-debug-head">' +
           '<span class="pr-debug-title" id="pr-debug-title"></span>' +
           '<button type="button" class="btn btn-sm btn-outline-secondary" id="pr-debug-copy" onclick="prCopyDebugBox(this)">Copy</button>' +
@@ -2672,10 +2675,13 @@ function prShowDebugBox(title, text) {
   overlay.classList.add('show');
   // The box declares role=dialog aria-modal, so actually move focus into it
   // (and back on close) — otherwise keyboard focus stays on the now-disabled
-  // trigger button and Tab wanders the page behind the overlay.
+  // trigger button and Tab wanders the page behind the overlay. Focus the
+  // dialog itself, not the Copy button: a focused .btn-outline-secondary
+  // paints the filled hover style, which made Copy open in a different color
+  // than its neighbors.
   if (!overlay.contains(document.activeElement)) {
     _prDebugReturnFocus = (document.activeElement instanceof HTMLElement) ? document.activeElement : null;
-    overlay.querySelector('#pr-debug-copy')?.focus();
+    overlay.querySelector('.pr-debug-box')?.focus();
   }
 }
 function prHideDebugBox() {
@@ -2712,12 +2718,19 @@ async function prCopyDebugBox(btn) {
   } catch (_) { /* fall through to the textarea fallback */ }
   if (!ok) {
     // http:// LAN origins have no navigator.clipboard — classic fallback.
+    // readonly + focus + an explicit selection range: iOS Safari ignores a
+    // bare select() on an unfocused textarea and silently copies nothing,
+    // which made this button the one header action that "didn't work".
     const ta = document.createElement('textarea');
     ta.value = text;
+    ta.setAttribute('readonly', '');
     ta.style.position = 'fixed';
+    ta.style.top = '0';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
+    ta.focus();
     ta.select();
+    ta.setSelectionRange(0, ta.value.length);
     try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
     ta.remove();
   }

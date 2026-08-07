@@ -414,7 +414,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.8"
+APP_VERSION = "1.0.0-alpha.9"
 
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
@@ -2236,15 +2236,16 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
                                 report.setdefault("existing_marked_items", [
                                     {"title": v.get("title"), "delete_on": v.get("delete_on")}
                                     for p, v in marked.items() if p not in new_paths])
-                            # The TV pass that fired with this run rides the
-                            # same message — seasons marked/deleted, or the
-                            # fail-closed abort that means movies covered the
+                            # The seasons this run handled ride the same
+                            # message, folded into the run's own numbers —
+                            # one cleanup, one report. A season-side
+                            # fail-closed abort means movies covered the
                             # whole deficit. Passed in per run, never read
                             # from a global the NEXT run may already have
                             # overwritten.
                             tvp = tv_pass_report
                             if isinstance(tvp, dict):
-                                report.setdefault("tv_pass", {
+                                report.setdefault("seasons", {
                                     "marked_new": tvp.get("marked_new") or 0,
                                     "held_by_delay": tvp.get("held_by_delay") or 0,
                                     "deleted_seasons": len(tvp.get("deleted_seasons") or []),
@@ -2326,14 +2327,14 @@ def run_script(mode_override: str | None = None, manual: bool = False,
             if _run_stop_requested.is_set():
                 return
 
-            # The TV pass fires WITH every run — a Simulate or Debug Cleanup
-            # marks, a real Cleanup also deletes due marks. BEFORE the engine
-            # launches: the tv_share stamp it subtracts is then fresh, and the
-            # two deleters never run concurrently. Its failures never block
-            # the movie run (and its own fetch is fail-closed anyway). When
-            # the pass does NOT fire (disarmed, Redline emergency, crash),
-            # the share is stamped 0 so the engine never subtracts bytes no
-            # executor is going to free.
+            # The run's season side fires WITH every run — a Simulate or
+            # Debug Cleanup marks, a real Cleanup also deletes due marks.
+            # BEFORE the engine launches: the tv_share stamp it subtracts is
+            # then fresh, and the two deleters never run concurrently. Its
+            # failures never block the movie run (and its own fetch is
+            # fail-closed anyway). When it does NOT fire (disarmed, Redline
+            # emergency, crash), the share is stamped 0 so the engine never
+            # subtracts bytes no executor is going to free.
             _tv_report = None
             try:
                 _tv_pass_cfg = load_config()
@@ -2344,7 +2345,7 @@ def run_script(mode_override: str | None = None, manual: bool = False,
                 else:
                     _stamp_tv_share(0)
             except Exception as e:
-                print(f"TV cleanup pass failed: {e}", flush=True)
+                print(f"TV cleanup failed: {e}", flush=True)
                 _stamp_tv_share(0)
 
             if _run_stop_requested.is_set():
@@ -4387,7 +4388,7 @@ def _merged_pool_takes(season_order: list, cfg: dict) -> tuple[dict, dict]:
     and sizes as the last plan stored them) and every eligible season
     (season_order, the same 0-100 scale) sorted together worst-first, ties to
     the larger item. The seasons inside the covering prefix get take=True —
-    those are the TV pass's to delete; the movie bytes inside it are the
+    those are the season side's to delete; the movie bytes inside it are the
     movie share. The engine learns the split via the tv_share stamp and
     subtracts the SEASON share from its own target, so the two executors
     cover the one deficit exactly once."""
@@ -4438,38 +4439,34 @@ def _stamp_tv_share(share_bytes) -> None:
         pass
 
 
-def _tv_pass_status(cfg: dict) -> dict | None:
-    """The Dashboard's one-line TV state: armed?, the last pass's outcome,
-    and the standing mark count. None when the TV switch is off — the line
-    then has nothing to say."""
-    if not bool(cfg.get("TV_CLEANUP_ENABLED", True)):
-        return None
-    st = _tv_cleanup_state()
-    lp = st.get("last_pass") if isinstance(st.get("last_pass"), dict) else None
-    out = {"armed": _tv_cleanup_armed(cfg),
-           "marked": len(st.get("marked") or {})}
-    if lp:
-        out.update({
-            "date": lp.get("date"), "mode": lp.get("mode"),
-            "marked_new": lp.get("marked_new") or 0,
-            "held_by_delay": lp.get("held_by_delay") or 0,
-            "deleted_seasons": len(lp.get("deleted_seasons") or []),
-            "skipped": len(lp.get("skipped") or []),
-            "freed_gb": round((lp.get("freed_bytes") or 0) / 1e9, 1),
-            "aborted": lp.get("aborted"),
-        })
-    return out
+def _tv_marked_count() -> int:
+    """Marked seasons with a running delay clock — counted right alongside
+    the marked movies in the dashboard's one number. One cleanup, one
+    count; nothing here is a separate TV anything."""
+    return sum(1 for m in (_tv_cleanup_state().get("marked") or {}).values()
+               if isinstance(m, dict) and m.get("marked_at"))
+
+
+def _tv_eligible_count(cfg: dict) -> int:
+    """Seasons in the last computed plan order — the TV rows of the standing
+    eligible deletion order the dashboard counts. The run stores the number
+    (it computes the plan anyway); disarmed TV contributes nothing, however
+    stale the stored state."""
+    if not _tv_cleanup_armed(cfg):
+        return 0
+    lp = _tv_cleanup_state().get("last_pass")
+    return int(lp.get("eligible_seasons") or 0) if isinstance(lp, dict) else 0
 
 
 def _tv_pass_plan_for_run(cfg: dict, effective_mode: str | None):
-    """Whether the TV pass fires for an engine run in this mode, and whether
-    it may DELETE. None = no pass (TV cleanup disarmed, or a Redline
+    """Whether the run handles seasons in this mode, and whether it may
+    DELETE them. None = no season side (TV cleanup disarmed, or a Redline
     emergency is breached RIGHT NOW — the engine must start deleting movies
-    immediately, not wait minutes behind the pass's server sweep, and Redline
+    immediately, not wait minutes behind a server sweep, and Redline
     never deletes TV anyway); False = mark only (Simulate, Debug Cleanup,
     Monitor Only's maintenance run); True = a real Cleanup, which also
-    deletes due marks. The pass rides every non-emergency engine run — same
-    gesture as the movies, no schedule of its own."""
+    deletes due marks. Seasons ride every non-emergency engine run — same
+    gesture as the movies, no schedule of their own."""
     if not _tv_cleanup_armed(cfg):
         return None
     if _redline_breached_now(cfg):
@@ -4478,7 +4475,7 @@ def _tv_pass_plan_for_run(cfg: dict, effective_mode: str | None):
 
 
 def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
-    """One TV pass — fired with every engine run: refresh facts fail-closed,
+    """The run's season side — fired with every engine run: refresh facts fail-closed,
     reconcile the marks with the fresh take prefix, and (execute=True only)
     delete the marked seasons whose delay has elapsed, worst-kept first.
     Returns the report it also persists as the state's last_pass."""
@@ -4488,6 +4485,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
               "pool_target_gb": 0, "tv_share_gb": 0, "movie_share_gb": 0,
               "marked_new": 0, "unmarked": 0, "held_by_delay": 0,
               "deleted_seasons": [], "skipped": [], "aborted": None,
+              "blocked_by_safety": False, "eligible_seasons": 0,
               "deleted_files": 0, "freed_bytes": 0}
     st = _tv_cleanup_state()
 
@@ -4505,20 +4503,24 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
         print(f"TV cleanup: aborted fail-closed — {e}", flush=True)
         return _finish()
 
-    # The same safety refusal a real Cleanup makes: thresholds so far below
+    # The same safety refusal the movie side makes: thresholds so far below
     # the pool that reaching them would delete more than the safety
     # percentage allows. Mark nothing rather than pace a config mistake.
+    # This is a RUN-WIDE fact, not a TV one — the Space Thresholds module
+    # reports it once for the whole cleanup, so nothing here surfaces to
+    # the user as a separate abort.
     state = _space_threshold_state(cfg, disk_stats(),
                                    (library_stats() or {}).get("library_gb"))
     if state.get("safety_blocked"):
-        report["aborted"] = ("Space Thresholds are outside the safety limits — "
-                             "refusing to mark or delete, like a Cleanup would")
+        report["blocked_by_safety"] = True
         _stamp_tv_share(0)
-        print(f"TV cleanup: {report['aborted']}", flush=True)
+        print("TV cleanup: space thresholds outside the safety limits — "
+              "marking nothing this run", flush=True)
         return _finish()
 
     plan = _tv_season_plan(rows, cfg)
     takes, pool = _merged_pool_takes(plan["order"], cfg)
+    report["eligible_seasons"] = len(plan["order"])
     report["pool_target_gb"] = round(pool["target_bytes"] / 1e9, 1)
     report["tv_share_gb"] = round(pool["tv_share_bytes"] / 1e9, 1)
     report["movie_share_gb"] = round(pool["movie_share_bytes"] / 1e9, 1)
@@ -4580,7 +4582,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
     _finish()
     if report["deleted_files"]:
         _refresh_tv_inventory(cfg)   # sizes changed; keep the stored inventory honest
-    print(f"TV cleanup pass ({report['mode']}): pool deficit {report['pool_target_gb']} GB "
+    print(f"TV cleanup ({report['mode']}): pool deficit {report['pool_target_gb']} GB "
           f"→ seasons {report['tv_share_gb']} GB, movies {report['movie_share_gb']} GB | "
           f"{report['marked_new']} newly marked, "
           f"{report['unmarked']} unmarked, {report['held_by_delay']} waiting out the delay, "
@@ -6037,7 +6039,7 @@ def api_debug_radarr():
 
 @app.route("/api/debug/sonarr", methods=["POST"])
 def api_debug_sonarr():
-    """Mirror the TV pass's Sonarr calls: system/status (the probe),
+    """Mirror the cleanup's Sonarr calls: system/status (the probe),
     /api/v3/series (the unmonitor lookup's source), and how each sampled
     series folder resolves under the monitored dirs — the same by-name rule
     the season deletion pass uses. Sonarr is optional and cleanup-only: the
@@ -6049,7 +6051,7 @@ def api_debug_sonarr():
         return jsonify({"ok": False, "error": "Add the Sonarr URL and API key above and Save, then debug."}), 400
     s_url, s_key = conn["sonarr_url"].rstrip("/"), conn["sonarr_key"]
 
-    lines = ["Sonarr API debug (mirrors the TV cleanup pass's calls)", ""]
+    lines = ["Sonarr API debug (mirrors the TV cleanup's calls)", ""]
     try:
         status = _json_request(f"{s_url}/api/v3/system/status",
                                headers={"X-Api-Key": s_key}, timeout=10) or {}
@@ -6310,7 +6312,7 @@ def api_debug_cache():
             tv_state = _tv_cleanup_state()
             tv_marked = tv_state.get("marked") or {}
             lines.append("")
-            lines.append(f"TV season plan (the deletion order the daily TV pass uses): "
+            lines.append(f"TV season plan (the season rows of the cleanup's deletion order): "
                          f"{len(porder)} seasons | {total_gb:,.1f} GB in the order | "
                          f"held back: {pex['protected']} protected, {pex['favorite']} favorited, "
                          f"{pex['latest_of_continuing']} latest-of-continuing, "
@@ -6318,20 +6320,23 @@ def api_debug_cache():
                          f"{pex['off_path']} off-path")
             lp = tv_state.get("last_pass") if isinstance(tv_state.get("last_pass"), dict) else None
             if lp:
-                lines.append(f"  TV cleanup last pass: {lp.get('date')} ({lp.get('mode')}) | "
+                lines.append(f"  seasons in the last run: {lp.get('date')} ({lp.get('mode')}) | "
                              f"{lp.get('marked_new')} newly marked, {lp.get('unmarked')} unmarked, "
                              f"{lp.get('held_by_delay')} waiting out the delay | "
                              f"{len(lp.get('deleted_seasons') or [])} season(s) deleted "
                              f"({(lp.get('freed_bytes') or 0) / 1e9:.1f} GB)"
-                             + (f" | ABORTED fail-closed: {lp.get('aborted')}" if lp.get("aborted") else ""))
+                             + (f" | seasons ABORTED fail-closed: {lp.get('aborted')}" if lp.get("aborted") else "")
+                             + (" | held by the space-safety refusal (run-wide)"
+                                if lp.get("blocked_by_safety") else ""))
                 for sk in (lp.get("skipped") or [])[:10]:
                     lines.append(f"    skipped {sk.get('title')} S{sk.get('season')}: {sk.get('why')}")
             else:
-                lines.append("  TV cleanup last pass: none yet — the pass runs once a day, after "
-                             "the daily run time, while Monitor Only or Automatic Cleanup is on")
+                lines.append("  seasons in the last run: none yet — seasons ride every "
+                             "Simulate and Cleanup once a media server and a space "
+                             "trigger are set")
             if tv_marked:
                 lines.append(f"  marked seasons ({len(tv_marked)} — deleted by an Automatic "
-                             f"Cleanup pass once their delete-on date arrives):")
+                             f"Cleanup once their delete-on date arrives):")
                 for m in sorted(tv_marked.values(), key=lambda x: x.get("score") or 0):
                     try:
                         _due = (datetime.fromtimestamp(m.get("marked_at") or 0)
@@ -6346,7 +6351,7 @@ def api_debug_cache():
                              "informational and nothing would be taken")
             elif _pool["target_bytes"] <= 0:
                 lines.append("  pool within its limits (Headroom / Library Size Cap) — "
-                             "a TV pass would take nothing")
+                             "the cleanup would take no seasons")
             else:
                 lines.append(f"  pool deficit {_pool['target_bytes'] / 1e9:,.1f} GB "
                              f"(Headroom / Library Size Cap, movies and TV in ONE order) → "
@@ -8339,13 +8344,16 @@ def _redline_deficit_bytes(cfg: dict) -> int:
 def _marked_imminent_count(cfg: dict) -> int:
     """The 'marked' half of the Marked & Eligible display. Redline-only: the
     queue-front entries covering the current Redline deficit. Every other
-    mode: the entries the engine actually scheduled (delay clock running)."""
+    mode: everything with a delay clock running — marked movies and marked
+    seasons in one number, the same merged list the history window shows
+    (Redline is movie-only, so seasons play no part in its branch)."""
     raw = _pending_raw()
+    if not _redline_only_mode_cfg(cfg):
+        return (sum(1 for e in raw.values()
+                    if isinstance(e, dict) and e.get("marked_at") is not None)
+                + _tv_marked_count())
     if not raw:
         return 0
-    if not _redline_only_mode_cfg(cfg):
-        return sum(1 for e in raw.values()
-                   if isinstance(e, dict) and e.get("marked_at") is not None)
     deficit = _redline_deficit_bytes(cfg)
     if not deficit:
         return 0
@@ -8423,7 +8431,7 @@ def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True
                 marked = True
         elif marked_at is not None:
             # Calendar-day aging on the shared clock (shared.delete_on_date,
-            # the same one the engine and the TV pass use): marked date + the
+            # the same one both deletion sides use): marked date + the
             # delay the mark was MADE under (stamped delay_days, or the
             # current setting when the stamp is missing or junk) is when it
             # becomes deletable at that day's daily run (or any manual
@@ -8489,7 +8497,7 @@ def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True
 
 
 def _tv_marked_entries(cfg: dict | None = None) -> list[dict]:
-    """The TV pass's marked seasons, in the movie marked-entry shape, so the
+    """The marked seasons, in the movie marked-entry shape, so the
     deletion-history window shows ONE marked list for the whole pool. Delay
     math mirrors the pass: calendar-day aging against the delay stamped on
     the mark."""
@@ -8720,7 +8728,7 @@ def dashboard():
                            deleted_count=deleted["count"],
                            deleted_reclaimed_bytes=deleted["reclaimed_bytes"],
                            deleted_reclaimed_label=deleted["reclaimed_label"],
-                           marked_count=pending_count(),
+                           marked_count=pending_count() + _tv_eligible_count(cfg),
                            marked_imminent=_marked_imminent_count(cfg),
                            delete_forecast=pending_delete_forecast(cfg),
                            delete_delay_days=_delete_delay_days(cfg),
@@ -8903,7 +8911,9 @@ def api_status():
         "deleted_count":           deleted["count"],
         "deleted_reclaimed_bytes": deleted["reclaimed_bytes"],
         "deleted_reclaimed_label": deleted["reclaimed_label"],
-        "marked_count":            _forecast["count"],
+        # Movies and seasons in one eligible order, one count — the same
+        # merged list the deletion-history window shows.
+        "marked_count":            _forecast["count"] + _tv_eligible_count(cfg),
         # Redline-only: how many queue-front entries cover the current deficit
         # — the "marked" half of the dashboard's Marked & Queued button.
         "marked_imminent_count":   _marked_imminent_count(cfg),
@@ -8914,7 +8924,6 @@ def api_status():
         "marked_event_on":         _forecast["event_on"],
         "marked_event_count":      _forecast["event_count"],
         "marked_event_bytes":      _forecast["event_bytes"],
-        "tv_pass":                 _tv_pass_status(cfg),
         "delete_delay_days":       _delay_days,
         # Redline-only mode (Headroom disabled): the marked queue is a standing
         # deletion-order preview, not a schedule; drives UI wording.
@@ -10959,7 +10968,7 @@ def _scheduled_tick_body():
     _check_marked_change_notification()
     _check_low_space_notification(cfg, disk_stats())
 
-    # The TV pass no longer rides the tick: it fires inside EVERY engine run
+    # Season handling no longer rides the tick: it fires inside EVERY engine run
     # (run_script's worker), so the daily maintenance run, manual Simulates
     # and Cleanups all carry it — same gesture as the movies.
 

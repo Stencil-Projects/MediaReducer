@@ -3,7 +3,7 @@ two executors that never double-cover it.
 
 App side (_merged_pool_takes): the engine's movie queue and the season order
 merge worst-first on the shared 0-100 score; the covering prefix decides which
-seasons the TV pass takes and how many bytes each side frees. Engine side
+seasons the season side takes and how many bytes each side frees. Engine side
 (_tv_share_bytes / _daily_deficit_bytes): the stamped season share is
 subtracted from the movie target while fresh, and a stale stamp (>26h — the TV
 pass stopped running) reads as 0 so the movie side covers everything. That
@@ -43,7 +43,7 @@ GB = 1_000_000_000
 # movie queue holds scores 5 and 20 (4 GB each); the seasons score 1 and 30
 # (5 GB each). Worst-first that merges to: season(1), movie(5), movie(20),
 # season(30) — the 10 GB prefix is season(1) + movie(5) + movie(20), so the
-# TV pass takes ONE season (5 GB) and the movies cover 8 GB.
+# The season side takes ONE season (5 GB) and the movies cover 8 GB.
 A.disk_stats = lambda: {"used_gb": 500.0, "total_gb": 10_000.0, "free_gb": 9_500.0}
 A.library_stats = lambda: {"library_gb": 110.0}
 db.read_pending_doc = lambda p: {"entries": {
@@ -122,7 +122,7 @@ check("the engine subtracts the season share from the movie target",
       E._daily_deficit_bytes(500.0, 10_000.0, 110.0) == 6 * GB,
       E._daily_deficit_bytes(500.0, 10_000.0, 110.0))
 
-# A stale stamp is a stopped TV pass — the movie side must cover everything.
+# A stale stamp is stopped season handling — the movie side must cover everything.
 with db.transaction(A.db_path()) as conn:
     db.set_meta(conn, "tv_share", {"bytes": 4 * GB, "at": time.time() - 27 * 3600})
 check("a stamp older than 26h reads as 0", E._tv_share_bytes() == 0)

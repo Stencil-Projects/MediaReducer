@@ -594,15 +594,14 @@
         <div class="dashboard-last-run metric-main">
           <span class="value" id="last-run-value" data-last-run-ts="{{ last_run_ts or '' }}">{{ last_run or '—' }}</span>
           <div class="sub" id="next-run-sub">{% if not thresholds_configured or run_mode == 'off' %}Scheduler paused{% elif run_mode == 'paused' %}Monitor Only — next check…{% else %}Next run: calculating…{% endif %}</div>
-          <div class="sub" id="tv-pass-sub" hidden></div>
         </div>
         <div class="dashboard-history-row metric-bottom">
           <button type="button" class="dashboard-history-btn dashboard-marked-btn"
                   id="btn-marked-deletions" onclick="openDeletedHistory('marked')"
-                  title="Review the movies marked for deletion and the eligible order behind them">
+                  title="Review everything marked for deletion and the eligible order behind it">
             <span class="dashboard-history-segment">
               <span class="dashboard-mini-value">
-                <span id="pruned-marked-count"><span id="pruned-marked-hot" class="{{ 'marked-hot' if marked_imminent else '' }}">{{ marked_imminent|commafy(0) }} <span class="unit">MOVIES</span></span> <span class="unit" aria-hidden="true">·</span> {{ marked_count|commafy(0) }} <span class="unit">MOVIES</span></span>
+                <span id="pruned-marked-count"><span id="pruned-marked-hot" class="{{ 'marked-hot' if marked_imminent else '' }}">{{ marked_imminent|commafy(0) }} <span class="unit">ITEMS</span></span> <span class="unit" aria-hidden="true">·</span> {{ marked_count|commafy(0) }} <span class="unit">ITEMS</span></span>
               </span>
               <span class="dashboard-mini-label"><span id="marked-label-word" class="{{ 'marked-hot' if marked_imminent else '' }}">Marked</span> &amp; Eligible Deletions</span>
             </span>
@@ -615,7 +614,7 @@
                 {# Each stat is a no-wrap chunk so a wrap lands between them and
                    the separator travels with the space figure, never dangling. #}
                 <span class="dh-stat-chunk"><span id="pruned-count-value">{{ deleted_count|commafy(0) }}</span>
-                <span class="unit" id="pruned-count-unit">{{ 'MOVIE' if deleted_count == 1 else 'MOVIES' }}</span></span>
+                <span class="unit" id="pruned-count-unit">{{ 'ITEM' if deleted_count == 1 else 'ITEMS' }}</span></span>
                 <span class="dh-stat-chunk"><span class="unit" aria-hidden="true">· </span><span id="pruned-space-value" data-reclaimed-bytes="{{ deleted_reclaimed_bytes or 0 }}"><span id="pruned-space-number">{{ reclaimed_parts[0]|group_int }}</span>
                 <span class="unit" id="pruned-space-unit">{{ reclaimed_parts[1]|default('GB', true)|upper }}</span></span></span>
               </span>
@@ -1096,7 +1095,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <div>
-          <h5 class="modal-title" id="deleted-history-title">Deleted Movie History</h5>
+          <h5 class="modal-title" id="deleted-history-title">Deletion History</h5>
           <div id="deleted-history-summary" style="font-size:.78rem;color:var(--text-muted);">Loading deleted.log…</div>
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -1963,37 +1962,6 @@ function _renderLastRunValue(el, text) {
   el.append(s.slice(0, i), colon, s.slice(i + 1));
 }
 
-// The TV pass's one-line state under Last run: what the pass riding the last
-// run did (or why it refused), and the standing mark count. Hidden when the
-// TV switch is off; a fail-closed abort shows in the warning tint because it
-// silently hands the whole deficit to the movie side.
-function _renderTvPassNote(tv) {
-  const el = document.getElementById('tv-pass-sub');
-  if (!el) return;
-  if (!tv) { el.hidden = true; return; }
-  let text;
-  if (tv.aborted) {
-    text = 'TV pass: aborted — ' + tv.aborted;
-  } else if (!tv.armed) {
-    // Disarmed outranks history: a stale "deleted 2 seasons" line would read
-    // as a pass that still runs.
-    text = 'TV pass: not armed — needs a media server and a space trigger';
-  } else if (tv.date) {
-    const bits = [];
-    if (tv.deleted_seasons) bits.push('deleted ' + tv.deleted_seasons + ' season' + (tv.deleted_seasons === 1 ? '' : 's') + ' (' + tv.freed_gb + ' GB)');
-    if (tv.marked_new) bits.push('marked ' + tv.marked_new + ' new');
-    if (tv.held_by_delay) bits.push(tv.held_by_delay + ' waiting out the delay');
-    if (tv.skipped) bits.push(tv.skipped + ' skipped — see the log');
-    if (!bits.length) bits.push(tv.marked ? tv.marked + ' season' + (tv.marked === 1 ? '' : 's') + ' marked' : 'nothing to do');
-    text = 'TV pass (' + tv.date + '): ' + bits.join(' · ');
-  } else {
-    text = 'TV pass: fires with the next Simulate or Cleanup';
-  }
-  el.textContent = text;
-  el.style.color = (tv.aborted || tv.skipped) ? 'var(--text-warning)' : '';
-  el.hidden = false;
-}
-
 function _updateLastRunDisplay(ts, fallback) {
   const el = document.getElementById('last-run-value');
   if (!el) return;
@@ -2038,7 +2006,7 @@ function _updateDeletedCounter(count, reclaimedBytes = 0, reclaimedLabel = '', m
   const spaceNumber = document.getElementById('pruned-space-number');
   const spaceUnit = document.getElementById('pruned-space-unit');
   if (value) value.textContent = prCommaNum(safe, 0);
-  if (unit) unit.textContent = safe === 1 ? 'MOVIE' : 'MOVIES';
+  if (unit) unit.textContent = safe === 1 ? 'ITEM' : 'ITEMS';
   if (markedCount !== null) {
     const countEl = document.getElementById('pruned-marked-count');
     const m = Math.max(0, Math.trunc(Number(markedCount) || 0));
@@ -2048,8 +2016,8 @@ function _updateDeletedCounter(count, reclaimedBytes = 0, reclaimedLabel = '', m
     // the word "Marked" in the label go red the moment anything is marked.
     if (countEl) {
       countEl.innerHTML =
-        `<span id="pruned-marked-hot" class="${imm > 0 ? 'marked-hot' : ''}">${prCommaNum(imm, 0)} <span class="unit">MOVIES</span></span> ` +
-        `<span class="unit" aria-hidden="true">·</span> ${prCommaNum(m, 0)} <span class="unit">MOVIES</span>`;
+        `<span id="pruned-marked-hot" class="${imm > 0 ? 'marked-hot' : ''}">${prCommaNum(imm, 0)} <span class="unit">ITEMS</span></span> ` +
+        `<span class="unit" aria-hidden="true">·</span> ${prCommaNum(m, 0)} <span class="unit">ITEMS</span>`;
     }
     document.getElementById('marked-label-word')?.classList.toggle('marked-hot', imm > 0);
   }
@@ -2301,7 +2269,7 @@ function openDeletedHistory(view) {
   const title = document.getElementById('deleted-history-title');
   if (title) title.textContent = _dhView === 'marked'
     ? 'Marked & Eligible Deletions'
-    : 'Deleted Movie History';
+    : 'Deletion History';
   // The date column means different things per view — label it so a marked
   // row's date is unambiguously WHEN IT DELETES (the marked-at timestamp
   // lives in Details), and a deleted row's date is when it was deleted.
@@ -2859,7 +2827,6 @@ async function syncStatus({refreshLog = true} = {}) {
       _markedEvent = { on: d.marked_event_on, count: d.marked_event_count, bytes: d.marked_event_bytes };
     }
     _updateStorageCard(d.disk, d.library_gb);
-    _renderTvPassNote(d.tv_pass);
     _renderTargetRows(d);
     _applyButtonStates();
     // Progress only changes while a run is active — skip the second fetch on

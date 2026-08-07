@@ -2288,7 +2288,7 @@ def _mark_age_days(marked_at, now_ts) -> int:
 
 def _mark_delete_on(marked_at, delay_days=None) -> str:
     """The calendar date a mark becomes deletable (marked date + the delay the
-    mark was made under) — shared.delete_on_str, the same clock the TV pass
+    mark was made under) — shared.delete_on_str, the same clock the season side
     ages its season marks against. Pass the entry's stamped delay_days for an
     existing mark; omitted/empty falls back to the current setting (new marks,
     and marks that predate the stamp)."""
@@ -5637,11 +5637,11 @@ def _snapshot_by_store_key(store) -> dict:
 
 
 def _tv_share_bytes() -> int:
-    """Bytes of the current pool deficit the app's daily TV pass has claimed
-    for SEASONS, from the merged movie+season deletion order it computes (one
-    pool, one score scale). The movie side frees the remainder, so the two
-    executors cover the one deficit exactly once. A stamp older than 26 hours
-    reads as 0 — the TV pass stopped running (disarmed, aborted, or the app is
+    """Bytes of the current pool deficit the app's season side has claimed,
+    from the merged movie+season deletion order it computes (one pool, one
+    score scale). The movie side frees the remainder, so the two executors
+    cover the one deficit exactly once. A stamp older than 26 hours reads as
+    0 — the season side stopped running (disarmed, aborted, or the app is
     down), and the fail direction is the movie side covering everything."""
     try:
         with db.connect(DB_FILE) as conn:
@@ -5658,13 +5658,13 @@ def _daily_deficit_bytes(used_gb, max_gb, library_gb) -> int:
     """Bytes the daily headroom/cap run must free right now FROM MOVIES — the
     larger of the headroom deficit (used over its limit) and the Library Size
     Cap deficit (the cap measures every monitored directory, TV included),
-    minus the share the TV pass covers with season deletions. This is what
+    minus the share the run's season deletions cover. This is what
     sizes the delay-clocked marked set. Redline is an emergency (immediate,
     no delay clock), so it never sizes the marks and is excluded here.
 
-    The deficit itself is shared.pool_deficit_gb — the SAME arithmetic the TV
-    pass sizes the pool with — so the two executors can never disagree on how
-    far over the thresholds the disk is; only the share split differs."""
+    The deficit itself is shared.pool_deficit_gb — the SAME arithmetic the
+    season side sizes the pool with — so the two executors can never disagree
+    on how far over the thresholds the disk is; only the share split differs."""
     total = int(shared.pool_deficit_gb(used_gb, max_gb, library_gb, MAX_LIBRARY_GB)
                 * 1_000_000_000)
     return max(0, total - _tv_share_bytes()) if total > 0 else 0
@@ -7262,8 +7262,8 @@ def main():
     # library cap is a daily target that also honors the deletion delay, so
     # its deficit never rides along on an emergency run. Simulate previews
     # the full combined plan.
-    # The daily (delay-clocked) share of the deficit, minus what the TV pass
-    # covers with season deletions from the merged pool order. Redline stays a
+    # The daily (delay-clocked) share of the deficit, minus what the run's
+    # season deletions cover from the merged pool order. Redline stays a
     # whole, movie-immediate emergency — season deletion needs Sonarr and the
     # full fail-closed protection fetch, which an emergency can't wait on.
     _daily_gb = max(_headroom_deficit_gb, _library_deficit_gb)
@@ -7271,11 +7271,11 @@ def main():
     # and the seasons behind the share are merely MARKED — they wait out the
     # deletion delay, so counting them would leave the breach standing for
     # days after a run that reported done. The movies cover everything; the
-    # next TV pass sees the smaller deficit and unmarks what is no longer
-    # needed.
+    # next run's season side sees the smaller deficit and unmarks what is no
+    # longer needed.
     _tv_share_gb = bytes_to_gb(_tv_share_bytes())
     if _tv_share_gb > 0 and _daily_gb > 0 and not _manual_cleanup:
-        log(f"TV pass share: season deletions cover {min(_tv_share_gb, _daily_gb):.1f} GB "
+        log(f"Season deletions cover {min(_tv_share_gb, _daily_gb):.1f} GB "
             f"of the {_daily_gb:.1f} GB daily deficit — movies target the remainder.")
         _daily_gb = max(0.0, _daily_gb - _tv_share_gb)
     if _is_sim or _manual_cleanup:
