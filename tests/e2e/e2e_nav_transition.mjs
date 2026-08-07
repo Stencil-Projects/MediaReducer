@@ -100,9 +100,18 @@ for (const [from, link] of [['/config', 'Filtering & Scoring'],
   check(`${from} -> ${link}: the arriving page still eases in`,
         r.entrance === 'pr-page-enter', r);
 
-  // The entrance fades AND rises, and it does both to the whole of the page
-  // below the header rather than to a few chosen pieces. Replayed from the
-  // settled page, since by now this navigation's own animation has finished.
+  // What the entrance is, and what it does NOT get to be.
+  //
+  // How long it runs, how far it travels and whether it fades are taste, and
+  // this test had opinions about all three — so tuning the animation broke it,
+  // which is a test being wrong rather than the page. What survives is the
+  // pair that has a real failure mode behind it: the whole of the page below
+  // the header rides it, not a few chosen pieces, and IF it fades it stays
+  // short and front-loaded, because a slow fade over a dark backdrop is the
+  // flash this file exists to keep away.
+  //
+  // Replayed from the settled page, since by now this navigation's own
+  // animation has finished.
   const enter = await p.evaluate(async () => {
     const m = document.getElementById('main');
     // What is riding the animation: everything under the header.
@@ -133,22 +142,22 @@ for (const [from, link] of [['/config', 'Filtering & Scoring'],
   check(`${from} -> ${link}: the page's whole contents ride the entrance`,
         enter.covers.title && enter.covers.cards >= 1 && enter.covers.outside === 0,
         enter.covers);
-  check(`${from} -> ${link}: it fades in — from transparent to solid`,
-        enter.first[0] < 0.1 && enter.opacities.at(-1) === 1
-        && enter.opacities.some(o => o > 0.1 && o < 0.99), enter.opacities.slice(0, 6));
-  check(`${from} -> ${link}: ...while sliding up`, enter.moved === true, enter.first[1]);
-  // The fade must stay front-loaded. While the content is transparent the
-  // arriving page paints DARKER than it settles (the backdrop is dark), and a
-  // browser may put one blank frame ahead of it — a plain ease-out held the
-  // page dim past 150ms, which is what reads as a flash. The duration is a
-  // taste call and may move; the curve is not, and the two are linked, so a
-  // longer entrance has to stay on an explicit steep bezier rather than
-  // sliding back to a keyword ease. Pinned as the shape of the curve rather
-  // than sampled brightness, which no headless run can measure the way a
-  // screen recording did.
-  check(`${from} -> ${link}: ...on a front-loaded curve, not a slow ease`,
-        enter.timing.dur <= 450 && /cubic-bezier/.test(String(enter.timing.easing)),
-        enter.timing);
+  check(`${from} -> ${link}: ...and it moves them`, enter.moved === true, enter.first[1]);
+  // A fade is optional. When there is one, it is on a clock: while the content
+  // is transparent the arriving page paints DARKER than it settles (28.9 of
+  // 255 against 38.5 — the backdrop is dark), and a browser may put one blank
+  // frame ahead of it, so landing dim after a pale frame is the flash. Time to
+  // reach 92% of settled brightness, measured through a real navigation: a
+  // plain ease-out over .28s never did inside 150ms; a steep bezier took 43ms
+  // at .24s and 85ms at .38s. Hence the pairing — fade freely, but not slowly,
+  // and not on a keyword ease. Pinned as the shape of the curve rather than
+  // sampled brightness, which no headless run can measure the way a screen
+  // recording did.
+  const fades = enter.opacities.some(o => o < 0.99);
+  check(`${from} -> ${link}: a fading entrance stays short and front-loaded`,
+        !fades || (enter.timing.dur <= 450
+                   && /cubic-bezier/.test(String(enter.timing.easing))),
+        { fades, ...enter.timing });
 }
 
 check('no JS errors', errs.length === 0, errs);

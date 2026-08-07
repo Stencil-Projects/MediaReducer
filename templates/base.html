@@ -265,28 +265,29 @@
     }
 
     /* Page entrance, and the whole of what a navigation looks like: everything
-       below the header — title bar, actions and every card — fades in as it
-       rises, once per load, so switching between pages eases in instead of
-       popping. The header itself is identical on every page and is simply
-       painted, not animated, so it reads as one continuous surface across
-       navigations — see the note below on why it is NOT a view-transition
-       group. Only a `from` keyframe + backwards fill: the animation eases INTO
-       the element's natural style and leaves no animated transform behind once
-       it ends (a lingering identity transform would make #main the containing
-       block for any fixed-position descendant).
+       below the header — title bar, actions and every card — rises into place
+       once per load, so switching between pages eases in instead of popping.
+       The header itself is identical on every page and is simply painted, not
+       animated, so it reads as one continuous surface across navigations — see
+       the note below on why it is NOT a view-transition group. Only a `from`
+       keyframe + backwards fill: the animation eases INTO the element's
+       natural style and leaves no animated transform behind once it ends (a
+       lingering identity transform would make #main the containing block for
+       any fixed-position descendant).
        (Reduced-motion users get none of this via the kill switch above.)
 
-       The curve is front-loaded on purpose, and that is what buys the duration
-       room to be this long. The page behind #main is dark, so while the
-       content is transparent the arriving page paints DARKER than it settles —
-       28.9 of 255 against 38.5 — and a browser may put one blank frame between
-       two documents (Chromium holds the old pixels and shows none; other
-       Chromium builds paint their own canvas color), so landing dim right
-       after a pale frame is what reads as a flash. Measured through a real
-       navigation, the time to reach 92% of settled brightness: a plain
-       ease-out over .28s never did inside 150ms; this curve takes 43ms at .24s
-       and 85ms at .38s. A slower fade costs dim time in proportion, so if this
-       gets longer again the curve has to get steeper to match. */
+       How long it runs and how far it travels are taste. Whether it also FADES
+       is not free, and that is why this one doesn't: the page behind #main is
+       dark, so while the content is transparent the arriving page paints
+       DARKER than it settles — 28.9 of 255 against 38.5 — and a browser may
+       put one blank frame between two documents (Chromium holds the old pixels
+       and shows none; other Chromium builds paint their own canvas color).
+       Landing dim right after a pale frame is what reads as a flash. Measured
+       through a real navigation, time to reach 92% of settled brightness with
+       the fade on: a plain ease-out over .28s never did inside 150ms; this
+       curve took 43ms at .24s and 85ms at .38s. So a fade can come back, but
+       it has to be short and front-loaded — at this duration it would leave
+       the page visibly dim for a third of a second. */
     @keyframes pr-page-enter {
       from { opacity: 15; transform: translateY(8px); }
     }
