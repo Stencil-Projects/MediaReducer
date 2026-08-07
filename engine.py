@@ -1003,10 +1003,16 @@ def verify_media_path_compatibility():
         # Only movie FILE entries are judged: servers also report FOLDER paths
         # (section locations, folder-shaped items), and a folder is neither a
         # deletable file nor something with a byte count — the check is about
-        # the media a run would act on, never about path layouts.
+        # the media a run would act on, never about path layouts. Each file
+        # counts ONCE: the samplers surface the same file through several
+        # metadata shapes (row + media_info + parts; item + MediaSources),
+        # and a duplicate would let two stale entries about one file trip the
+        # wrong-library threshold's "at least 3 files" floor.
+        _seen_samples = set()
         raw_paths = [(r, w) for r, w in raw_paths
                      if PurePosixPath(str(r).replace("\\", "/")).suffix.lower()
-                     in MOVIE_EXTENSIONS]
+                     in MOVIE_EXTENSIONS
+                     and not (r in _seen_samples or _seen_samples.add(r))]
         if not raw_paths:
             log(f"WARN {label} path compatibility: API returned no movie file paths to validate against {LIBRARY_ROOT}.")
             continue
@@ -1037,7 +1043,12 @@ def verify_media_path_compatibility():
                 except OSError:
                     pass
         matched_n = len(raw_paths) - len(unmatched)
-        if unmatched:
+        # A FEW unmatched samples are stale server entries (a file renamed,
+        # upgraded, or removed since the server's last scan): they scan as
+        # missing and are never deleted, so they warn below rather than block.
+        # MOST samples unmatched is a different animal — the wrong library, or
+        # no library — and fails the run before anything is scored.
+        if shared.wrong_library_problem(len(raw_paths), len(unmatched)):
             examples = "; ".join(raw for raw, _ in raw_paths[:3])
             # One example path stays in the message: the whole fix is comparing the
             # path the server reports against what is mounted, so it is the fact
@@ -1048,7 +1059,7 @@ def verify_media_path_compatibility():
                 detail=f"sampled: {examples} | unmatched: {'; '.join(unmatched[:3])}",
                 names=(unmatched[0],), phase="checking",
             )
-        if shared.size_mismatch_problem(verified + size_mismatch, size_mismatch):
+        if shared.wrong_library_problem(verified + size_mismatch, size_mismatch):
             _abort_api_failure(
                 f"{size_mismatch} of {verified + size_mismatch} size-reporting sampled "
                 f"file(s) differ in size from what {label} reports. That is what the "
@@ -1065,6 +1076,12 @@ def verify_media_path_compatibility():
         if verified:
             line += f" | {verified} size-verified"
         log(line + ".")
+        if unmatched:
+            log(f"WARN {label} path compatibility: {len(unmatched)} of {len(raw_paths)} "
+                f"sampled file(s) match nothing under {LIBRARY_ROOT} — stale {label} "
+                f"entries whose files were moved, renamed, or removed since its last "
+                f"scan. They scan as missing and are never deleted; a rescan on "
+                f"{label} clears this. Example: {unmatched[0]}")
         if size_mismatch:
             log(f"WARN {label} path compatibility: {size_mismatch} sampled file(s) "
                 f"differ in size from what {label} reports — its library metadata "
@@ -1484,12 +1501,18 @@ def _item_raw_paths(item):
 
 
 def _item_resolved_paths(item):
-    """Resolved /library path strings from Plex or Jellyfin item payloads."""
+    """/library path strings from Plex or Jellyfin item payloads — resolved
+    where the fingerprint resolves, the RAW server path otherwise. Every
+    consumer is a PROTECTION set (collections, BoxSets, favorites) matched
+    through _match_keys, whose fp: key still matches same-named copies when
+    the path itself can't be resolved (two copies and no size to pick
+    between, say). Dropping an unresolvable path here silently un-protected
+    the movie it named; keeping the raw path only ever widens protection,
+    which errs toward NOT deleting."""
     paths = set()
     for raw in _item_raw_paths(item):
         resolved = resolve_under_library(raw)
-        if resolved:
-            paths.add(str(resolved))
+        paths.add(str(resolved) if resolved else str(raw))
     return paths
 
 
@@ -1579,6 +1602,12 @@ def _radarr_movie_matches_deleted_path(radarr_movie, deleted_path):
 
 
 _LIB_FILE_INDEX = None   # per-run fingerprint index of the monitored dirs; built lazily
+# How the LAST resolve_under_library call matched: "prefix" (a /library path),
+# "pair" (folder + file name — a movie folder anchored the identity), or
+# "name_size" (file name + byte size only — a FLAT server layout, where the
+# size is load-bearing identity). The scan reads this right after resolving a
+# row; the engine resolves sequentially, so a plain module global suffices.
+_LAST_RESOLVE_RUNG = None
 
 
 def _reset_library_file_index():
@@ -1603,8 +1632,28 @@ def _library_file_index() -> dict:
     global _LIB_FILE_INDEX
     if _LIB_FILE_INDEX is None:
         by_dir_name, by_name_size = {}, {}
+        # FOLLOW directory symlinks — a library assembled from symlinked
+        # subtrees is a layout the old exists()-based resolver supported, and
+        # skipping the links would read every file behind them as unmatched
+        # (a false wrong-library abort). A visited-realpath guard keeps a
+        # link cycle from looping. Unreadable directories are COUNTED, not
+        # silently skipped: a partial walk means partial resolution, and the
+        # run log must say so rather than resolving around the gap.
+        _walk_errors = [0]
+        _visited = set()
         try:
-            for dirpath, _dirs, files in _os.walk(LIBRARY_ROOT):
+            for dirpath, dirnames, files in _os.walk(
+                    LIBRARY_ROOT, onerror=lambda _e: _walk_errors.__setitem__(0, _walk_errors[0] + 1),
+                    followlinks=True):
+                try:
+                    _rp = _os.path.realpath(dirpath)
+                except OSError:
+                    dirnames[:] = []
+                    continue
+                if _rp in _visited:
+                    dirnames[:] = []
+                    continue
+                _visited.add(_rp)
                 parent = Path(dirpath).name.lower()
                 for fn in files:
                     p = Path(dirpath) / fn
@@ -1615,6 +1664,10 @@ def _library_file_index() -> dict:
                         continue
         except Exception:
             by_dir_name, by_name_size = {}, {}
+        if _walk_errors[0]:
+            log(f"WARN library walk: {_walk_errors[0]} directory(ies) under "
+                f"{LIBRARY_ROOT} could not be read — path resolution may be "
+                f"partial. Check permissions and mounts.")
         _LIB_FILE_INDEX = {"dir_name": by_dir_name, "name_size": by_name_size}
     return _LIB_FILE_INDEX
 
@@ -1657,6 +1710,8 @@ def resolve_under_library(path_str, expected_size=None):
     Paths already under /library shortcut to an existence check (a server
     pointed at the same mount needs no fingerprinting).
     """
+    global _LAST_RESOLVE_RUNG
+    _LAST_RESOLVE_RUNG = None
     if not path_str:
         return None
     raw = str(path_str).strip().replace("\\", "/")
@@ -1667,11 +1722,16 @@ def resolve_under_library(path_str, expected_size=None):
     except (TypeError, ValueError):
         expected = 0
 
-    # Already a real /library path (e.g. Plex itself points at /library).
+    # Already a real /library path (e.g. Plex itself points at /library) —
+    # and when nothing exists at the stated nesting, fall THROUGH to the
+    # fingerprint ladder like any other prefix: a server sharing our mount
+    # doesn't exempt its stale layout from folder+name matching.
     if raw == str(LIBRARY_ROOT) or raw.startswith(str(LIBRARY_ROOT) + "/"):
         rel = raw[len(str(LIBRARY_ROOT)):].lstrip("/")
         p = LIBRARY_ROOT / rel if rel else LIBRARY_ROOT
-        return p if p.exists() else None
+        if p.exists():
+            _LAST_RESOLVE_RUNG = "prefix"
+            return p
 
     parts = [seg for seg in raw.split("/") if seg]
     if len(parts) < 2:
@@ -1680,6 +1740,22 @@ def resolve_under_library(path_str, expected_size=None):
     idx = _library_file_index()
     hits = idx["dir_name"].get((parts[-2].lower(), parts[-1].lower())) or []
     if len(hits) == 1:
+        # The size never REJECTS a folder+name match — but it can point at a
+        # BETTER one. With a flat server layout the "folder" here is the
+        # server's mount-root name (weak identity: "movies" is a common
+        # folder name), so a same-named file under a look-alike folder must
+        # not outrank the file whose bytes are exactly what the server
+        # describes.
+        if expected > 0:
+            try:
+                if hits[0].stat().st_size != expected:
+                    exact = _library_index_lookup(parts[-1], expected)
+                    if exact is not None and exact != hits[0]:
+                        _LAST_RESOLVE_RUNG = "name_size"
+                        return exact
+            except OSError:
+                pass
+        _LAST_RESOLVE_RUNG = "pair"
         return hits[0]
     if len(hits) > 1 and expected > 0:
         sized = []
@@ -1690,9 +1766,13 @@ def resolve_under_library(path_str, expected_size=None):
             except OSError:
                 continue
         if len(sized) == 1:
+            _LAST_RESOLVE_RUNG = "pair"
             return sized[0]
     if not hits and expected > 0:
-        return _library_index_lookup(parts[-1], expected)
+        rescued = _library_index_lookup(parts[-1], expected)
+        if rescued is not None:
+            _LAST_RESOLVE_RUNG = "name_size"
+        return rescued
     return None
 
 
@@ -3806,22 +3886,31 @@ def get_all_movies_from_jellyfin():
 # is merged (oldest added, most-recent play, summed plays, protection unioned).
 # Monitored paths still govern what can actually be deleted.
 
-def _match_keys(raw_path):
+def _match_keys(raw_path, size=0):
     """All keys a source path can match on across servers.
 
-    Plex and Jellyfin often mount the same library through different in-container
-    paths, symlinks or Unraid user-shares, so a single fully-resolved key can
-    differ for the SAME physical file. We therefore match on a SET of keys — the
-    /library path, its symlink-resolved form, and a lowercased trailing-segment
-    suffix — and treat two rows as the same file when ANY key is shared. Matching
-    only ever unions protection and enables the identity check, so an over-match
-    errs toward NOT deleting.
+    The identity is the FINGERPRINT, never the path shape: the fp: key is the
+    reported path's last two segments (the movie's folder + file name) and is
+    always present, so the same movie matches across servers whatever their
+    mount prefixes look like — and whichever same-named copy each server
+    happens to index. The resolved-path keys (the /library path, its
+    symlink-resolved form, a lowercased relative form) make the join exact
+    when the path does resolve; `size` sharpens that resolution when the
+    caller knows the server's byte count.
+
+    Matching only ever unions protection, merges watch history, and enables
+    the provider-id identity check — the ids arbitrate whether two
+    same-fingerprint rows really are one movie — so an over-match errs toward
+    NOT deleting.
     """
     keys = set()
     if not raw_path:
         return keys
+    parts = [s for s in str(raw_path).replace("\\", "/").split("/") if s]
+    if len(parts) >= 2:
+        keys.add("fp:" + "/".join(parts[-2:]).lower())     # folder + file identity
     try:
-        p = resolve_under_library(raw_path)
+        p = resolve_under_library(raw_path, expected_size=size)
     except Exception:
         p = None
     if p is not None:
@@ -3834,12 +3923,6 @@ def _match_keys(raw_path):
             keys.add("lib:" + str(p.relative_to(LIBRARY_ROOT)).lower())  # case-insensitive rel
         except Exception:
             pass
-    else:
-        # Nothing exists under /library for this path; fall back to the trailing
-        # segments so a diagnostic near-miss can still be detected.
-        parts = [s for s in str(raw_path).replace("\\", "/").split("/") if s]
-        if parts:
-            keys.add("suffix:" + "/".join(parts[-3:]).lower())
     return keys
 
 
@@ -4007,11 +4090,12 @@ def get_all_movies():
         log(f"Merge: {_unresolved} Plex row(s) had no resolvable path yet — "
             f"the scan resolves and reports those individually.")
 
-    # Index every Jellyfin row under all of its possible match keys.
+    # Index every Jellyfin row under all of its possible match keys — the
+    # row's own byte count sharpens resolution between same-named copies.
     jelly_keyed = []            # [(row, keyset)]
     jelly_index = {}            # match key -> jf row (first wins)
     for r in jelly_rows:
-        ks = _match_keys(r.get("file"))
+        ks = _match_keys(r.get("file"), parse_int(r.get("file_size"), 0))
         jelly_keyed.append((r, ks))
         for k in ks:
             jelly_index.setdefault(k, r)
@@ -4019,8 +4103,21 @@ def get_all_movies():
     merged = []
     matched_jf = set()          # id() of Jellyfin rows that matched a Plex row
     for prow in plex_rows:
-        pks = _match_keys(prow.get("file"))
-        jrow = next((jelly_index[k] for k in pks if k in jelly_index), None)
+        # The Plex row's own byte count too — without it, same-named copies
+        # are unresolvable on this side and every copy would carry only the
+        # shared fp key, pairing them all with the same Jellyfin row.
+        pks = _match_keys(prow.get("file"), parse_int(prow.get("file_size"), 0))
+        # EXACT (resolved-file) pairings first, the fp fingerprint second:
+        # when the same movie exists as same-named copies on both servers,
+        # exact keys pair each server's row with ITS copy — deterministic,
+        # per-copy watch stats — and fp only bridges rows whose paths never
+        # resolved to the same file (different mounts indexing one physical
+        # copy, or one side unresolvable).
+        jrow = next((jelly_index[k] for k in pks
+                     if not k.startswith("fp:") and k in jelly_index), None)
+        if jrow is None:
+            jrow = next((jelly_index[k] for k in pks
+                         if k.startswith("fp:") and k in jelly_index), None)
         if jrow is not None:
             matched_jf.add(id(jrow))
             # Each source's OWN distinct-user count, captured before play stats
@@ -4039,52 +4136,18 @@ def get_all_movies():
             prow["_jf_tmdb_id"]   = jrow.get("tmdb_id")
             prow["_jf_imdb_id"]   = jrow.get("imdb_id")
             prow["_jf_source_id"] = jrow.get("rating_key")  # the "jf:<id>"; lets the re-verify re-fetch this movie's Jellyfin plays too
+            prow["_jf_file_size"] = parse_int(jrow.get("file_size"), 0)
         merged.append(prow)
 
     jf_only_rows = [r for (r, ks) in jelly_keyed if id(r) not in matched_jf]
     merged.extend(_tag_jellyfin_metadata(r) for r in jf_only_rows)
     log(f"Merged sources: {len(plex_rows)} Plex + {len(jelly_rows)} Jellyfin "
         f"→ {len(matched_jf)} matched, {len(jf_only_rows)} Jellyfin-only, {len(merged)} total.")
-
-    # ── Merge diagnostics ────────────────────────────────────────────────────
-    # A Jellyfin-only movie that shares a filename with a Plex movie SHOULD have
-    # matched. Logging both rows' raw paths and key sets makes any remaining path
-    # divergence (mount, symlink, casing, wrong metadata) obvious in one run.
-    # A Jellyfin-only movie that shares its folder + filename with a Plex movie
-    # SHOULD have matched (the same file has the same folder/name on both servers;
-    # only the mount root differs). Keying on parent-folder + filename avoids
-    # false positives from two different films that merely share a filename.
-    def _twin_key(f):
-        p = Path(str(f or ""))
-        return (p.parent.name.lower(), p.name.lower()) if p.name else None
-    plex_by_twin = {}
-    for prow in plex_rows:
-        tk = _twin_key(prow.get("file"))
-        if tk:
-            plex_by_twin.setdefault(tk, prow)
-    for r in jf_only_rows:
-        prow = plex_by_twin.get(_twin_key(r.get("file")))
-        if prow is not None:
-            # Same physical file, present on both servers, but it failed to merge —
-            # so its Plex vs Jellyfin identity was never reconciled. Tag it so the
-            # scan skips it (never delete on an unreconciled identity) and flags the
-            # run completed-with-errors, mirroring the merged-row identity check.
-            # BOTH rows, not just this one. They point at one film, and the Plex
-            # side carries no _jf_favorite or _jf_protected (those are written
-            # only onto rows that merged, above) — so tagging the Jellyfin copy
-            # alone left the Plex copy a full deletion candidate stripped of its
-            # Jellyfin protection, deleted while the summary said "skipped, not
-            # deleted". Whichever row the scan reaches first, it stops.
-            r["_unmerged_plex_twin"] = {"title": prow.get("title"), "file": prow.get("file")}
-            prow["_unmerged_jf_twin"] = {"title": r.get("title"), "file": r.get("file")}
-            log("WARN merge near-miss: same filename identified on both servers but "
-                "paths did not match — this movie will be SKIPPED (not deleted) and the "
-                "run flagged with errors.")
-            log(f"Jellyfin: title={r.get('title')!r} | imdb={r.get('imdb_id')} "
-                f"tmdb={r.get('tmdb_id')} | file={r.get('file')!r} | "
-                f"keys={sorted(_match_keys(r.get('file')))}")
-            log(f"Plex: title={prow.get('title')!r} | file={prow.get('file')!r} | "
-                f"keys={sorted(_match_keys(prow.get('file')))}")
+    # No path-shape diagnostics here: identity is the fp: fingerprint key
+    # (folder + file name), which matches whatever the two servers' mount
+    # prefixes look like, and the scan's provider-id check arbitrates whether
+    # two same-fingerprint rows really are one movie. A Jellyfin-only row is
+    # therefore just that — a movie only Jellyfin indexes.
     return merged
 
 
@@ -4748,6 +4811,7 @@ def build_candidates():
     _reset_library_file_index()
     stats = {
         "no_file_path": 0,
+        "size_disagreement": 0,
         "bad_extension": 0,
         "missing_on_disk": 0,
         "symlink": 0,
@@ -4915,6 +4979,16 @@ def build_candidates():
     total_movies = len(movies)
     emit_progress(phase="scanning", scanned=0, total=total_movies, eligible=0,
                   message="Scanning and scoring movies…")
+    # Every Jellyfin row's (basename, byte count), for the flat-layout
+    # agreement gate below: a Jellyfin twin that failed to MERGE (different
+    # mount-root names and a stale size leave it nothing to pair on) still
+    # counts as Jellyfin's view of that file name.
+    _jf_sizes_by_name = {}
+    if USE_JELLYFIN:
+        for _r in movies:
+            if str(_r.get("rating_key") or "").startswith("jf:") and _r.get("file"):
+                _nm = str(_r["file"]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+                _jf_sizes_by_name.setdefault(_nm, set()).add(parse_int(_r.get("file_size"), 0))
     for movie_idx, item in enumerate(movies, 1):
         title = item.get("title", "UNKNOWN_TITLE")
         rating_key = item.get("rating_key")
@@ -4926,6 +5000,32 @@ def build_candidates():
             stats["no_file_path"] += 1
             log(f"SKIP no_file_path | title={title} | keys={list(item.keys())}")
             continue
+
+        # A row that attached by NAME + SIZE alone (a FLAT server layout — no
+        # movie folder anchors the identity) is deletable only when every
+        # source agrees on the bytes. Tautulli's number is force-refreshed at
+        # every scan and this rung means it already equals the disk; Jellyfin
+        # exposes no way to refresh a single item's size, so while Jellyfin
+        # also carries this movie its number must line up too — until its
+        # library scan catches up, SKIP rather than delete a file one source
+        # may be describing differently. Movie-folder layouts never hit this:
+        # the folder anchors identity and sizes are not load-bearing there.
+        if _LAST_RESOLVE_RUNG == "name_size" and USE_JELLYFIN:
+            try:
+                _disk_size = file_path.stat().st_size
+            except OSError:
+                _disk_size = -1
+            _jf_size = parse_int(item.get("_jf_file_size"), 0)
+            _jf_views = _jf_sizes_by_name.get(file_path.name.lower(), set())
+            if ((item.get("_jf_matched") and _jf_size and _jf_size != _disk_size)
+                    or (not item.get("_jf_matched") and _jf_views
+                        and _disk_size not in _jf_views)):
+                stats["size_disagreement"] += 1
+                log(f"SKIP size_disagreement | title={title} | flat-layout file: "
+                    f"disk={_disk_size} bytes, Jellyfin sees "
+                    f"{_jf_size or sorted(_jf_views)} — waiting for every source "
+                    f"to agree before it is deletable | path={file_path}")
+                continue
 
         if file_path.suffix.lower() not in MOVIE_EXTENSIONS:
             stats["bad_extension"] += 1
@@ -4997,7 +5097,7 @@ def build_candidates():
         protected = plex_protected or jf_protected
 
         if movie_idx % 100 == 0 or movie_idx == total_movies:
-            _skipped = stats['no_file_path'] + stats['bad_extension'] + stats['missing_on_disk'] + stats['outside_monitored_dirs'] + stats['symlink']
+            _skipped = stats['no_file_path'] + stats['bad_extension'] + stats['missing_on_disk'] + stats['outside_monitored_dirs'] + stats['symlink'] + stats['size_disagreement']
             log(f"Progress: {movie_idx}/{total_movies} movies scanned | eligible={stats['eligible']} | protected={stats['protected']} | skipped={_skipped}")
             emit_progress(phase="scanning", scanned=movie_idx, total=total_movies,
                           eligible=stats['eligible'], protected=stats['protected'],
@@ -5039,43 +5139,24 @@ def build_candidates():
             log(f"SKIP protected_collection | title={title} | via={'+'.join(why) or 'cache'} | path={file_path}")
             continue
 
-        # A Jellyfin row that shares folder+filename with a Plex movie but did
-        # not merge has an unreconciled Plex↔Jellyfin identity. Never delete on
-        # one: count it with the identity mismatches so the run completes with
-        # errors and the summary names the file.
-        _twin_on_plex = item.get("_unmerged_plex_twin")    # this row is the Jellyfin one
-        _twin_on_jf   = item.get("_unmerged_jf_twin")      # this row is the Plex one
-        twin = _twin_on_plex or _twin_on_jf
-        if twin:
-            here, there = ("Jellyfin", "Plex") if _twin_on_plex else ("Plex", "Jellyfin")
-            _ids = {"plex_imdb": "—", "jellyfin_imdb": "—",
-                    "plex_tmdb": "—", "jellyfin_tmdb": "—"}
-            _ids[f"{here.lower()}_imdb"] = _norm_id(imdb_id) or "—"
-            _ids[f"{here.lower()}_tmdb"] = str(tmdb_id or "").strip() or "—"
-            stats["identity_mismatch"] += 1
-            identity_mismatches.append({
-                "title":         f"{title} ({here}) ↔ {twin.get('title')} ({there}, unmerged paths)",
-                "path":          resolved_path,
-                **_ids,
-            })
-            _snapshot_by_path[_snap_key]["excluded"] = True  # not recomputable; keep the reconcile from re-admitting it
-            log(f"SKIP identity_mismatch (unmerged twin) | {here.lower()}_title={title!r} | "
-                f"{there.lower()}_title={twin.get('title')!r} | path={file_path}")
-            continue
-
-        # ── Cross-server identity check (path-based) ──────────────────────────
-        # Tautulli movie rows carry no file path at merge time, so Plex↔Jellyfin
-        # reconciliation happens HERE, per row, once the real /library path is
-        # resolved. When a file is present on BOTH servers but they disagree on
-        # its provider IDs, its identity, and the IMDb rating we'd score it on —
-        # can't be trusted, so we skip it and flag the run completed-with-errors.
-        # A missing id on either side is NOT a conflict (can't compare). Plex rows
-        # are processed before Jellyfin rows, so a conflicting Plex row flags the
-        # shared path and its Jellyfin twin is skipped when reached.
+        # ── Cross-server identity check ──────────────────────────────────────
+        # Identity is the fingerprint (the fp:/resolved match keys); provider
+        # IDs arbitrate it. When both servers claim the same file/fingerprint
+        # but disagree on its IDs, its identity — and the IMDb rating we'd
+        # score it on — can't be trusted, so we skip it and flag the run
+        # completed-with-errors. A missing id on either side is NOT a conflict
+        # (can't compare). Plex rows are processed before Jellyfin rows, so a
+        # conflicting Plex row flags the shared path and its Jellyfin twin is
+        # skipped when reached.
         if USE_PLEX and USE_JELLYFIN:
             if is_plex_row:
+                # Exact (resolved-file) key first, fp second — same preference
+                # as the merge, so with same-named copies the identity lookup
+                # reads what Jellyfin says about THIS copy before falling back
+                # to what it says about the shared fingerprint.
                 jf_id = None
-                for k in _match_keys(resolved_path):
+                _iks = _match_keys(resolved_path)
+                for k in sorted(_iks, key=lambda s: s.startswith("fp:")):
                     if k in _JELLYFIN_IDS_BY_MATCH_KEY:
                         jf_id = _JELLYFIN_IDS_BY_MATCH_KEY[k]
                         break
@@ -5272,6 +5353,7 @@ def build_candidates():
         f"no_imdb_data={stats['no_imdb_data']} | "
         f"duplicates_merged={duplicates_removed} | "
         f"no_file_path={stats['no_file_path']} | "
+        f"size_disagreement={stats['size_disagreement']} | "
         f"bad_extension={stats['bad_extension']} | "
         f"missing_on_disk={stats['missing_on_disk']} | "
         f"outside_monitored_dirs={stats['outside_monitored_dirs']}"
@@ -5482,15 +5564,18 @@ def delete_candidate(candidate) -> bool:
         remove_empty_movie_folder(path)
         return False
 
-    delete_size = candidate.get("file_size")
+    # The bytes actually freed: a fresh stat, because the file may have been
+    # replaced since the scan measured it (the local disk is the size
+    # authority); the scan-time figure is only the fallback when the stat
+    # itself fails.
     try:
-        delete_size = int(delete_size)
-    except (TypeError, ValueError):
-        delete_size = None
-    if delete_size is None or delete_size < 0:
+        delete_size = path.stat().st_size
+    except OSError:
         try:
-            delete_size = path.stat().st_size
-        except OSError:
+            delete_size = int(candidate.get("file_size"))
+        except (TypeError, ValueError):
+            delete_size = None
+        if delete_size is not None and delete_size < 0:
             delete_size = None
 
     # Critical section: a Stop (SIGTERM) arriving between unlink() and the

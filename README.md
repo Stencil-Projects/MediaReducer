@@ -89,7 +89,12 @@ could be a different film.
 The file on disk is the size authority. A file whose bytes differ from the
 server's count (typically a quality upgrade the server hasn't rescanned yet)
 still matches by folder + name, and plans, deletions, and history all carry
-the on-disk bytes. But when **most** sampled files disagree in size, that
+the on-disk bytes. Files stored FLAT (no movie folder) lean on name + size
+instead: Tautulli's sizes are force-refreshed every scan so those self-heal,
+while Jellyfin's can't be refreshed per item — so a flat file is deletable
+only once every enabled server and the disk agree on its bytes.
+
+When **most** sampled files disagree in size, that
 looks like the wrong library — a stale backup or copy mounted at `/library`
 — and MediaReducer treats it as an error: the configuration check fails, and
 a run's pre-check aborts before anything is scored or deleted.

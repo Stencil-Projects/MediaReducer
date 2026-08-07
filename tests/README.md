@@ -45,7 +45,7 @@ log path named in the failure line is actually there to read.
 | `test_mode_roundtrip` | Scheduler mode through the real save handler. The flag derivation, forced-off cascade and auto-enable are decided in one request, so a regression in their ORDER only shows up here |
 | `test_service_port` | The listening port: 7474 by default, `MEDIAREDUCER_PORT` when set, refused rather than ignored when it is not a usable port. The CLI default and the Docker healthcheck follow the same variable |
 | `test_library_mount_state` | A missing or empty `/library` says so, instead of blaming Plex path alignment for a mount that is not there. Both states still block |
-| `test_media_path_check` | The configuration check's media-path layer: the app-side fingerprint resolver mirroring the engine's, sampled sizes verified against the disk, a stale size or two passing, a mismatch MAJORITY failing the check as the wrong library with the byte evidence attached, folder-shaped samples excluded from the check, and the explained variant's reasons (what the debug buttons print) |
+| `test_media_path_check` | The configuration check's media-path layer: the app-side fingerprint resolver mirroring the engine's, sampled sizes verified against the disk, a stale size or two passing, a MAJORITY of size mismatches or unmatched samples failing the check as the wrong library (a lone stale size or ghost entry warning instead), folder-shaped samples excluded from the check, and the explained variant's reasons (what the debug buttons print) |
 | `test_appdata_mounts` | What the `/tautulli` and `/radarr` mounts contribute. Ports are never read from appdata; a mounted config with no key in it is not "verified" |
 
 **Deletion safety**
@@ -68,15 +68,15 @@ log path named in the failure line is actually there to read.
 
 | Test | Guards |
 |---|---|
-| `test_source_merge` | Plex + Jellyfin merge: one candidate, summed plays, oldest added, unioned protection, distinct users = the higher of the two. A path divergence is skipped, not double-counted |
-| `test_candidate_sources` | `build_candidates` under all three server configurations, driving the real filter and protection branches |
+| `test_source_merge` | Plex + Jellyfin merge by FINGERPRINT (folder + file name identity key): one candidate, summed plays, oldest added, unioned protection, distinct users = the higher of the two — and a same-fingerprint pair under diverging deeper paths MERGES (favorite/protection landing on the deletable row) instead of being skipped as a twin |
+| `test_candidate_sources` | `build_candidates` under all three server configurations, driving the real filter and protection branches; provider ids arbitrate identity — agreeing ids on a same-fingerprint pair merge to one candidate, conflicting ids skip it, same-named copies on both servers pair per-copy (exact resolved keys before the fingerprint), and a FLAT-layout file (name+size identity) with Jellyfin enabled skips until Tautulli, Jellyfin, and the disk all agree on the bytes |
 | `test_jellyfin_fetch` | Jellyfin's shapes normalize to Tautulli-shaped rows; BoxSet protection applies by movie, IMDb and TMDb id; a missing BoxSet fails closed |
 | `test_tautulli_refresh` | The scan forces a Tautulli media-info refresh, so a recently added but already watched movie isn't seen as a 0-play deletion candidate |
 | `test_media_server_integration` | The Plex / Jellyfin / Radarr integrations over their real HTTP functions against a localhost mock: the URL, auth and parse layer the stubbed tests skip |
 | `test_engine_helpers` | Engine internals no scenario reaches: Tautulli dedup, config coercion, and the IMDb pipeline including decompression-bomb caps |
 | `test_library_snapshot` | The snapshot survives cache clears and interrupted runs; completed scans replace it |
 | `test_fresh_watch_batching` | The delete-time Jellyfin re-verify batches its ids (one giant URL was an HTTP 414), and a partially-answered user is discarded whole rather than undercounting plays |
-| `test_path_resolution` | Fingerprint-only resolution: folder+filename matching from any mount prefix (a stale size never rejects it — the disk is the size authority), sizes disambiguating same-named copies, the (filename, size) rescue with identical twins never guessed between, the whole-mount index, the per-run reset, folder-shaped server paths (section locations) excluded from the check entirely, and the wrong-library tripwire (a mismatch MAJORITY aborts the pre-check; a lone stale size only warns) |
+| `test_path_resolution` | Fingerprint-only resolution: folder+filename matching from any mount prefix (a stale size never rejects it — the disk is the size authority), sizes disambiguating same-named copies, the (filename, size) rescue with identical twins never guessed between, the whole-mount index, the per-run reset, folder-shaped server paths (section locations) excluded from the check entirely, the wrong-library tripwire for BOTH failure shapes (a MAJORITY of size mismatches or of unmatched samples aborts the pre-check; a lone stale size or ghost entry only warns), duplicate samples of one file counting once, and protection paths SURVIVING ambiguity (an unresolvable favorite path stays in the set raw and still protects every same-named copy through the fp key) |
 
 **TV and the one pool**
 
@@ -128,8 +128,8 @@ log path named in the failure line is actually there to read.
 | `test_library_browse` | The library browser answers in the `/library` namespace even when the root is a symlink or bind mount |
 | `test_abort_name_disclosure` | Abort sentences that name a film on the dashboard never carry that name into a webhook unless Movie names is opted in |
 | `test_reset_then_setup` | After a reset, setting up again reaches Monitor Only, same as a fresh install |
-| `test_connection_probe_parallel` | The parallel connection check reports exactly what the sequential one did — and every probe re-walks the library for the media-path check instead of judging a cached walk |
-| `test_save_health_reuse` | A save re-probes only when the answer could have moved, always after a failure, and always on a monitored-paths change (the media-path check must re-run against the current disk) |
+| `test_connection_probe_parallel` | The parallel connection check reports exactly what the sequential one did; the media-path check re-walks fresh when it runs, runs only on Check for Errors or a monitored-paths change, every other probe replays its stored per-server verdict untouched, and a failed judge (sampler down) keeps the retained verdict instead of wiping it |
+| `test_save_health_reuse` | A save re-probes connections only when the answer could have moved, always after a failure, and always on a monitored-paths change (which is one of the media-path check's two triggers; ordinary saves never re-run that check) |
 | `test_save_nav_guard` | Navigation is blocked while a save is in flight or the form is dirty |
 | `test_page_delivery` | Pages are gzipped and served entirely from this container. Fails if a template ever reintroduces a CDN link |
 | `test_progress_phases` | Each progress step fills 0→100 once; path resolution reports under the indeterminate step |

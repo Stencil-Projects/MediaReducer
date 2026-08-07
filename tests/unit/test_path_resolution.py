@@ -85,6 +85,23 @@ check("a size matching NEITHER copy resolves nothing (never guess)",
       E.resolve_under_library("/films/Heat (1995)/Heat (1995).mkv",
                               expected_size=42) is None)
 
+# ── Flat server layouts: the root name is a weak folder identity ────────────
+# A server that sees files FLAT ("/movies/Flat Film.mkv") reports its mount
+# root as the fingerprint's folder — and "movies" is a common folder name.
+# A size-exact file elsewhere outranks a same-named file under a merely
+# look-alike folder; without a size (or with no better match) the folder+name
+# hit stands, since the size never REJECTS.
+lookalike = mk("Other/movies/Flat Film.mkv", 999)
+flat_real = mk("Movies/Films Flat/Flat Film.mkv", 5678)
+E._reset_library_file_index()
+check("a size-exact match outranks a look-alike folder+name hit",
+      E.resolve_under_library("/movies/Flat Film.mkv", expected_size=5678) == flat_real)
+check("without a size, the folder+name hit stands",
+      E.resolve_under_library("/movies/Flat Film.mkv") == lookalike)
+check("with a stale size and no better match, the hit still stands (never reject)",
+      E.resolve_under_library("/x/Films Flat/Flat Film.mkv",
+                              expected_size=123) == flat_real)
+
 # ── No folder match: the (filename, size) index is the rescue ───────────────
 check("a flat/renamed layout resolves through the (filename, size) index",
       E.resolve_under_library("/completely/other/root/Solo Film (2020).mkv",
@@ -172,12 +189,66 @@ try:
 except SystemExit:
     check("folder samples are excluded from the check entirely", False, _aborted)
 
+# A FEW unmatched samples are stale server entries — files renamed, upgraded,
+# or removed since the server's last scan. They warn and the run continues:
+# an unresolvable entry scans as missing and is never deleted. MOST samples
+# unmatched is the wrong library (or none) — the run fails before scoring.
+GOOD = [("/d/Movies/Heat (1995)/Heat (1995).mkv", 5000),
+        ("/d/Movies/Solo Film (2020)/Solo Film (2020).mkv", 1234),
+        ("/d/Other/Extra Film (2019)/Extra Film (2019).mkv", 555)]
+GHOST = [(f"/gone/Ghost {i} (1999)/Ghost {i} (1999).mkv", 7) for i in range(4)]
+E._sample_tautulli_reported_paths = lambda: GOOD + GHOST[:1]
+_aborted.clear()
+try:
+    E.verify_media_path_compatibility()
+    check("one stale entry (a ghost file) warns, never fails the run",
+          not _aborted, _aborted)
+except SystemExit:
+    check("one stale entry (a ghost file) warns, never fails the run", False, _aborted)
+E._sample_tautulli_reported_paths = lambda: GOOD[:1] + GHOST
+_aborted.clear()
+try:
+    E.verify_media_path_compatibility()
+    check("mostly-unmatched samples fail the run as the wrong library",
+          False, "no abort raised")
+except SystemExit:
+    check("mostly-unmatched samples fail the run as the wrong library",
+          "not under" in _aborted.get("msg", "")
+          and _aborted.get("phase") == "checking", _aborted)
+
+# The samplers surface one file through several metadata shapes; each file
+# must count ONCE toward the thresholds, or a single stale movie sampled
+# three ways could clear the "at least 3 files" floor on its own.
+E._sample_tautulli_reported_paths = lambda: (
+    [("/d/Other/Extra Film (2019)/Extra Film (2019).mkv", 9)] * 3   # ONE stale file, thrice
+    + GOOD[:2])
+_aborted.clear()
+try:
+    E.verify_media_path_compatibility()
+    check("duplicate samples of one file count once (no false wrong-library)",
+          not _aborted, _aborted)
+except SystemExit:
+    check("duplicate samples of one file count once (no false wrong-library)",
+          False, _aborted)
+
+# ── Protection paths survive ambiguity ──────────────────────────────────────
+# A favorited/protected movie whose path can't RESOLVE (same-named copies,
+# no size reported) must still protect: the raw path stays in the protection
+# set and its fp key matches every same-named copy. Dropping it silently
+# un-protected the movie — the one direction this system must never fail.
+_fav = E._item_resolved_paths({"Path": "/x/Twin (2021)/Twin (2021).mkv"})
+check("an unresolvable protection path is kept raw, never dropped",
+      _fav == {"/x/Twin (2021)/Twin (2021).mkv"}, _fav)
+_prot = E._make_protection_check(set(), set(), set(), set(), set(), set(), _fav)
+check("...and still protects every same-named copy through the fp key",
+      _prot(str(twin_a)) and _prot(str(twin_b)))
+
 check("the tripwire needs at least 3 mismatches AND a majority",
-      shared.size_mismatch_problem(4, 3) is True
-      and shared.size_mismatch_problem(4, 2) is False
-      and shared.size_mismatch_problem(2, 2) is False
-      and shared.size_mismatch_problem(6, 3) is False
-      and shared.size_mismatch_problem("x", "y") is False)
+      shared.wrong_library_problem(4, 3) is True
+      and shared.wrong_library_problem(4, 2) is False
+      and shared.wrong_library_problem(2, 2) is False
+      and shared.wrong_library_problem(6, 3) is False
+      and shared.wrong_library_problem("x", "y") is False)
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

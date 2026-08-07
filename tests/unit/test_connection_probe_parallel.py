@@ -94,8 +94,11 @@ A._appdata_mount_state = lambda: {k: {"ok": True, "mounted": True, "path": "/" +
 A._filesystem_rw_state = lambda: {"ok": True, "writable": True, "errors": [], "warnings": []}
 
 
-def health(cfg=None, *, probe=True):
-    h = A._connection_health_state(dict(cfg or CFG), probe=probe)
+def health(cfg=None, *, probe=True, media_paths=True):
+    # media_paths=True = the Check for Errors flavor: these scenarios pin the
+    # check itself, so each runs it fresh. The gating (when it does NOT run)
+    # has its own section at the end.
+    h = A._connection_health_state(dict(cfg or CFG), probe=probe, media_paths=media_paths)
     h.pop("appdata", None)
     return h
 
@@ -159,6 +162,42 @@ _compat = {c.get("server"): c for c in _h.get("media_path_compatibility") or []}
 check("a fresh probe re-walks the library (a poisoned recent walk is discarded)",
       len(_compat) == 2 and all(c.get("unmatched") == 0 and c.get("matched", 0) > 0
                                 for c in _compat.values()))
+
+# ── The media-path check runs only when asked, or when the paths changed ────
+# An ordinary probe (a save, a scheduler tick) REPLAYS the stored verdict —
+# no samplers, no library walk — even if the servers now report something
+# else. Only Check for Errors (media_paths=True) or a monitored-paths change
+# re-judges against the current disk.
+SAMPLE["path"] = "/foreign/mount/Nope (2001)/Nope (2001).mkv"   # would be unmatched
+A._MEDIA_FP_INDEX.update({"at": time.time(), "dir_name": {}, "name_size": {}})
+_h2 = health(media_paths=None)                                  # ordinary probe
+_compat2 = {c.get("server"): c for c in _h2.get("media_path_compatibility") or []}
+check("an ordinary probe replays the stored verdict without re-checking",
+      len(_compat2) == 2 and all(c.get("unmatched") == 0 for c in _compat2.values()))
+_h3 = health({**CFG, "MONITOR_DIRS": ["/library/movies"]}, media_paths=None)
+_compat3 = {c.get("server"): c for c in _h3.get("media_path_compatibility") or []}
+check("a monitored-paths change re-judges on its own",
+      any(c.get("unmatched", 0) == 1 for c in _compat3.values()))
+
+# ── A failed judge never wipes an active verdict ────────────────────────────
+# Record a verdict carrying a stale-entry warning, then make the Jellyfin
+# sampler raise during a re-judge: the retained per-server slot must keep
+# reporting it — one hiccup must not flap an active verdict to "no problem"
+# the check never actually verified.
+A._MEDIA_FP_INDEX["at"] = 0.0
+_h5 = health()                                       # judged: 1 stale entry per server
+check("setup: the judged verdict carries the Jellyfin stale-entry warning",
+      any("Jellyfin entries" in w for w in _h5["warnings"]))
+_real_sampler = A._sample_jellyfin_media_paths
+A._sample_jellyfin_media_paths = lambda conn, limit=12: (_ for _ in ()).throw(RuntimeError("boom"))
+_h6 = health()                                       # re-judge, sampler down
+A._sample_jellyfin_media_paths = _real_sampler
+check("a failed sampler keeps the retained Jellyfin verdict (no wipe)",
+      any("Jellyfin entries" in w for w in _h6["warnings"])
+      and any(c.get("server") == "Jellyfin" and c.get("unmatched") == 1
+              for c in _h6.get("media_path_compatibility") or []))
+check("...and says the check itself could not run",
+      any("Could not check Jellyfin" in w for w in _h6["warnings"]))
 
 
 # ── They actually overlap, and a dead server doesn't hold up the rest ────────

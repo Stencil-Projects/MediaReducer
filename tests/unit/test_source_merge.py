@@ -1,12 +1,13 @@
 """Plex + Jellyfin source merge and dedup — get_all_movies() and its helpers.
 
-When both servers are enabled the SAME physical file must collapse to ONE
-candidate (matched by /library path across differing mount roots), combining
-play stats without double-counting; a movie on only one server passes through;
-and a movie that SHOULD have matched but whose paths diverged is flagged as an
-unreconciled twin and skipped (never deleted on an ambiguous identity). This is
-the layer that prevents a two-server setup from doubling every play count or
-deleting the wrong copy."""
+When both servers are enabled the SAME movie must collapse to ONE candidate,
+matched by FINGERPRINT (the folder + file name identity key, plus the resolved
+/library path when it resolves) — never by comparing path shapes, whose deeper
+segments differ between mounts by design. Play stats combine without
+double-counting; a movie on only one server passes through; the provider-id
+check downstream arbitrates whether two same-fingerprint rows really are one
+film. This is the layer that prevents a two-server setup from doubling every
+play count."""
 import os
 import sys
 import tempfile
@@ -52,8 +53,8 @@ jf_only = run_merge(None, [jf_row()])
 check("Jellyfin-only passes through tagged", len(jf_only) == 1 and jf_only[0]["rating_key"] == "jf:1")
 
 # ── Same file on both servers collapses to one, combining stats ──────────────
-# Different mount roots (/plex vs /jf) but the same trailing folder+file, so the
-# suffix match key ties them (no on-disk resolution needed for the test).
+# Different mount roots (/plex vs /jf) but the same folder + file name, so the
+# fingerprint key ties them (no on-disk resolution needed for the test).
 merged = run_merge(
     [plex_row(play_count=2, last_played=1_700_000_000, added_at=1_500_000_000)],
     [jf_row(play_count=3, last_played=1_650_000_000, added_at=1_400_000_000,
@@ -98,39 +99,22 @@ check("merge_added_at keeps the older of two real dates",
       E._merge_added_at(1_600_000_000, 1_500_000_000) == 1_500_000_000)
 check("merge_added_at of two unknowns is 0", E._merge_added_at(0, 0) == 0)
 
-# ── Near-miss twin: same filename, paths that don't match → skip, not delete ─
-# Same folder+filename ("Film (2020)/film.mkv") but the 3rd-from-last segment
-# differs, so the suffix keys diverge and they DON'T merge — yet the twin check
-# catches it and flags the Jellyfin copy as an unreconciled twin.
+# ── Same fingerprint across mounts is ONE movie, whatever the deeper path ───
+# Same folder+filename ("Film (2020)/film.mkv") under diverging deeper
+# layouts (/plex/A vs /jf/B): the fp key merges them — identity is the
+# fingerprint, arbitrated downstream by provider ids, never the path shape.
+# The old design skipped this pair as an "unreconciled twin"; merging is
+# strictly safer: watch data unions (retention only rises) and the Jellyfin
+# favorite/protection land on the row that could actually be deleted.
 twin = run_merge(
-    [plex_row(file="/plex/A/Film (2020)/film.mkv")],
-    [jf_row(file="/jf/B/Film (2020)/film.mkv")],
+    [plex_row(file="/plex/A/Film (2020)/film.mkv", play_count=2)],
+    [jf_row(file="/jf/B/Film (2020)/film.mkv", play_count=3, _jf_favorite=True)],
 )
-jf_twin = next((r for r in twin if r["rating_key"] == "jf:1"), None)
-px_twin = next((r for r in twin if r["rating_key"] != "jf:1"), None)
-check("a same-filename path divergence stays two rows (no false merge)", len(twin) == 2)
-check("the unmerged twin is flagged so the scan skips it",
-      jf_twin is not None and "_unmerged_plex_twin" in jf_twin)
-# BOTH sides. The rows point at one film and the Plex row carries no Jellyfin
-# favorite or protection — those are written only onto rows that merged — so
-# flagging the Jellyfin copy alone left the Plex copy a full deletion candidate
-# with its Jellyfin protection stripped, deleted while the run summary said
-# "Identity mismatch: 1 (skipped, not deleted)".
-check("...and so is the PLEX row, which is the one that could be deleted",
-      px_twin is not None and "_unmerged_jf_twin" in px_twin)
-check("each side names the other", px_twin and jf_twin
-      and px_twin["_unmerged_jf_twin"]["file"] == jf_twin["file"]
-      and jf_twin["_unmerged_plex_twin"]["file"] == px_twin["file"])
-# The favorite that makes this dangerous: a Jellyfin-favorited film whose paths
-# did not reconcile has no _jf_favorite on the Plex row to protect it.
-fav = run_merge(
-    [plex_row(file="/plex/A/Fav (2020)/fav.mkv")],
-    [jf_row(file="/jf/B/Fav (2020)/fav.mkv", _jf_favorite=True)],
-)
-fav_px = next((r for r in fav if r["rating_key"] != "jf:1"), None)
-check("a favorited twin leaves the Plex row unprotected — so it must be flagged",
-      fav_px is not None and not fav_px.get("_jf_favorite")
-      and "_unmerged_jf_twin" in fav_px)
+check("a same-fingerprint pair merges into ONE row", len(twin) == 1)
+check("...with plays summed across the servers",
+      E.parse_int(twin[0]["play_count"], 0) == 5)
+check("...and the Jellyfin favorite carried onto the deletable row",
+      twin[0].get("_jf_favorite") is True and twin[0].get("_jf_matched") is True)
 
 # ── One enabled server returning nothing is a broken source, not a library ───
 # Degrading to single-source mode here deletes a full run's worth of movies with

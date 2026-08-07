@@ -4934,7 +4934,8 @@ def _settled(call):
 _PROBE_SAMPLE_DEPENDS_ON = {"tautulli_paths": "tautulli", "jellyfin_paths": "jellyfin"}
 
 
-def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: bool) -> dict:
+def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: bool,
+                                media_paths: bool = True) -> dict:
     """Every network call the connection check needs, fetched concurrently.
 
     Gated exactly as the checks below are, so nothing is requested that the
@@ -4950,7 +4951,8 @@ def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: boo
             url = (f"{conn['tautulli_url'].rstrip('/')}/api/v2"
                    f"?apikey={conn['tautulli_key']}&cmd=get_libraries")
             jobs["tautulli"] = lambda: _probe_json(url, timeout=6)
-            jobs["tautulli_paths"] = lambda: _sample_tautulli_media_paths(conn)
+            if media_paths:
+                jobs["tautulli_paths"] = lambda: _sample_tautulli_media_paths(conn)
         if conn.get("plex_url") and conn.get("plex_token"):
             purl = (f"{conn['plex_url'].rstrip('/')}/library/sections"
                     f"?X-Plex-Token={conn['plex_token']}")
@@ -4963,7 +4965,8 @@ def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: boo
             jurl,
             headers={"Authorization": f'MediaBrowser Token="{jf_key}"', "X-Emby-Token": jf_key},
             timeout=6)
-        jobs["jellyfin_paths"] = lambda: _sample_jellyfin_media_paths(conn)
+        if media_paths:
+            jobs["jellyfin_paths"] = lambda: _sample_jellyfin_media_paths(conn)
     if conn.get("radarr_url") and conn.get("radarr_key"):
         rurl = f"{conn['radarr_url'].rstrip('/')}/api/v3/system/status"
         rkey = conn["radarr_key"]
@@ -5010,7 +5013,7 @@ def _probe_result(pre: dict, name: str) -> tuple[bool, str]:
     return False, str(got) if got is not None else "not probed"
 
 
-def _sample_result(pre: dict, name: str) -> list[str]:
+def _sample_result(pre: dict, name: str) -> list:
     """A prefetched media-path sample; a failed job re-raises for the caller's
     own try/except, which is what decides the warning wording."""
     got = pre.get(name)
@@ -5020,6 +5023,29 @@ def _sample_result(pre: dict, name: str) -> list[str]:
 
 
 _MEDIA_FP_INDEX = {"at": 0.0, "dir_name": {}, "name_size": {}}
+_MEDIA_FP_LOCK = threading.Lock()
+
+# The media-path check's LAST verdict, replayed into probes that don't re-run
+# it. The check itself (server samples + a full library walk) runs only when
+# the user clicks Check for Errors or a save changes the monitored paths —
+# never on an ordinary save, even while its error is active; the stored
+# verdict (its error/warning lines and blocker state) simply carries forward
+# until one of those two triggers re-judges the current disk. PER SERVER:
+# a slot is replaced only when that server was actually judged (a sampler
+# failure or a down server never wipes an active verdict) and replayed only
+# while its server stays enabled (deselecting Jellyfin retires its verdict).
+_MEDIA_PATH_VERDICT = {"sig": None, "servers": {}}
+
+
+def _monitor_dirs_signature(cfg: dict | None = None) -> str:
+    """Normalization-invariant signature of the monitored paths: the SAME
+    normalization a save applies, deduped and sorted — a posted form whose
+    dirs normalize to the saved value must never read as a change (that would
+    re-probe, and re-judge the media paths, on saves that changed nothing)."""
+    cfg = cfg or load_config()
+    dirs = {_normalize_library_path(d) for d in (cfg.get("MONITOR_DIRS") or [])
+            if str(d or "").strip()}
+    return json.dumps(sorted(d for d in dirs if d))
 
 
 def _media_fingerprint_index() -> dict:
@@ -5028,24 +5054,40 @@ def _media_fingerprint_index() -> dict:
     (parent-folder name, filename) -> [paths] and (filename, byte size) ->
     [paths]. Cached briefly (30 s) so one Check for Errors walks the library
     once, while a re-check after a mount fix never reads a stale walk."""
-    now = time.time()
-    if now - _MEDIA_FP_INDEX["at"] > 30:
-        by_dir_name, by_name_size = {}, {}
-        try:
-            for dirpath, _dirs, files in os.walk(FILESYSTEM_CHECK_PATH):
-                parent = Path(dirpath).name.lower()
-                for fn in files:
-                    p = Path(dirpath) / fn
-                    by_dir_name.setdefault((parent, fn.lower()), []).append(p)
-                    try:
-                        by_name_size.setdefault((fn.lower(), p.stat().st_size), []).append(p)
-                    except OSError:
-                        continue
-        except Exception:
+    # One walk at a time, and check-then-build under the lock: without it a
+    # slow concurrent walk could publish a PRE-fix view over a fresh reset.
+    with _MEDIA_FP_LOCK:
+        now = time.time()
+        if now - _MEDIA_FP_INDEX["at"] > 30:
             by_dir_name, by_name_size = {}, {}
-        _MEDIA_FP_INDEX.update({"at": now, "dir_name": by_dir_name,
-                                "name_size": by_name_size})
-    return _MEDIA_FP_INDEX
+            _visited = set()
+            try:
+                # followlinks: a library assembled from symlinked subtrees is
+                # a normal layout; the visited-realpath guard stops cycles.
+                for dirpath, dirnames, files in os.walk(FILESYSTEM_CHECK_PATH,
+                                                        followlinks=True):
+                    try:
+                        _rp = os.path.realpath(dirpath)
+                    except OSError:
+                        dirnames[:] = []
+                        continue
+                    if _rp in _visited:
+                        dirnames[:] = []
+                        continue
+                    _visited.add(_rp)
+                    parent = Path(dirpath).name.lower()
+                    for fn in files:
+                        p = Path(dirpath) / fn
+                        by_dir_name.setdefault((parent, fn.lower()), []).append(p)
+                        try:
+                            by_name_size.setdefault((fn.lower(), p.stat().st_size), []).append(p)
+                        except OSError:
+                            continue
+            except Exception:
+                by_dir_name, by_name_size = {}, {}
+            _MEDIA_FP_INDEX.update({"at": now, "dir_name": by_dir_name,
+                                    "name_size": by_name_size})
+        return _MEDIA_FP_INDEX
 
 
 def _resolve_media_path_explained(path_str: str | None, expected_size=0):
@@ -5071,7 +5113,9 @@ def _resolve_media_path_explained(path_str: str | None, expected_size=0):
         candidate = library_root / rel if rel else library_root
         if candidate.exists():
             return candidate, f"already under {library_s}"
-        return None, f"under {library_s} but nothing exists at this path"
+        # Nothing at the stated nesting: fall through to the fingerprint
+        # ladder like any other prefix — sharing our mount doesn't exempt a
+        # server's stale layout from folder+name matching.
 
     try:
         expected = int(expected_size) if expected_size else 0
@@ -5084,6 +5128,20 @@ def _resolve_media_path_explained(path_str: str | None, expected_size=0):
     pair = (parts[-2].lower(), parts[-1].lower())
     hits = idx["dir_name"].get(pair) or []
     if len(hits) == 1:
+        # The size never rejects a folder+name match, but it can point at a
+        # BETTER one: with a flat server layout the "folder" is the server's
+        # mount-root name, and a size-exact file elsewhere outranks a
+        # same-named file under a merely look-alike folder.
+        if expected > 0:
+            try:
+                if hits[0].stat().st_size != expected:
+                    by_size = idx["name_size"].get((parts[-1].lower(), expected)) or []
+                    if len(by_size) == 1 and by_size[0] != hits[0]:
+                        return by_size[0], ("matched by file name + exact size "
+                                            "(a same-named file under a look-alike "
+                                            "folder was passed over)")
+            except OSError:
+                pass
         return hits[0], "matched by folder + file name"
     if len(hits) > 1:
         if expected <= 0:
@@ -5166,12 +5224,23 @@ def _extract_media_paths_from_item(item: dict | None) -> list[tuple[str, int]]:
                         paths.append((str(value), part_size))
 
     out = []
-    seen = set()
+    seen = {}
     for path, size in paths:
         path = str(path).strip()
-        if path and path not in seen:
-            seen.add(path)
-            out.append((path, size))
+        if not path:
+            continue
+        if path in seen:
+            # The same path often appears twice — the item level (which for
+            # Jellyfin carries NO size) and again inside MediaSources (which
+            # does). Keep the first position but take the first REAL size, or
+            # the sizeless item entry would shadow it and starve the size
+            # tripwire and the same-name disambiguation of their fingerprint.
+            i = seen[path]
+            if size and not out[i][1]:
+                out[i] = (path, size)
+            continue
+        seen[path] = len(out)
+        out.append((path, size))
     return out
 
 
@@ -5246,8 +5315,12 @@ def _media_file_extensions(cfg: dict | None = None) -> set:
     """The configured movie-file extension set, lowercased — what decides
     whether a server-reported path is a media FILE entry at all."""
     cfg = cfg or load_config()
-    return {str(e).strip().lower() for e in (cfg.get("MOVIE_EXTENSIONS") or [])
-            if str(e).strip()}
+    exts = set()
+    for e in (cfg.get("MOVIE_EXTENSIONS") or []):
+        e = str(e).strip().lower()
+        if e:
+            exts.add(e if e.startswith(".") else "." + e)
+    return exts
 
 
 def _is_media_file_path(raw, exts: set) -> bool:
@@ -5262,7 +5335,7 @@ def _media_path_compatibility_state(server_name: str, paths: list) -> dict:
     on, never about path layouts. A few mismatches are normal (quality
     upgrades the server hasn't rescanned; the local file is the size
     authority) — but MOST samples mismatching is the wrong-library tripwire
-    (shared.size_mismatch_problem, the same rule the engine pre-check fails a
+    (shared.wrong_library_problem, the same rule the engine pre-check fails a
     run on), and it fails this check."""
     exts = _media_file_extensions()
     pairs = [s if isinstance(s, tuple) else (s, 0) for s in paths]
@@ -5285,17 +5358,23 @@ def _media_path_compatibility_state(server_name: str, paths: list) -> dict:
             if disk != want:
                 mismatches.append({"reported": raw, "resolved": str(match),
                                    "reported_bytes": want, "disk_bytes": disk})
-    mismatch_problem = shared.size_mismatch_problem(size_checked, len(mismatches))
+    mismatch_problem = shared.wrong_library_problem(size_checked, len(mismatches))
+    # A FEW unmatched entries are stale server rows (files renamed, upgraded,
+    # or removed since its last scan) — they scan as missing and are never
+    # deleted, so they warn; MOST samples unmatched is the wrong library (or
+    # none), and that fails the check.
+    unmatched_problem = shared.wrong_library_problem(len(pairs), len(unresolved))
     return {
         "server": server_name,
         "checked": len(pairs),
         "folder_entries": folder_entries,
         "matched": len(resolved),
         "unmatched": len(unresolved),
+        "unmatched_problem": unmatched_problem,
         "size_checked": size_checked,
         "size_mismatched": len(mismatches),
         "mismatch_problem": mismatch_problem,
-        "ok": (len(unresolved) == 0 and not mismatch_problem) if pairs else True,
+        "ok": (not unmatched_problem and not mismatch_problem) if pairs else True,
         "resolved_examples": resolved[:3],
         "unmatched_examples": unresolved[:5],
         "mismatch_examples": mismatches[:5],
@@ -5769,7 +5848,8 @@ def api_debug_tautulli_movies():
             if isinstance(r, dict):
                 lines.append(f"    - {r.get('title')!r} | rating_key={r.get('rating_key')} | "
                              f"play_count={r.get('play_count')} | last_played={r.get('last_played')} | "
-                             f"added_at={r.get('added_at')}")
+                             f"added_at={r.get('added_at')} | "
+                             f"file_size={r.get('file_size') or '(none)'}")
         sample_rows.extend(r for r in rows if isinstance(r, dict) and r.get("rating_key"))
 
     monitor_dirs = [str(d) for d in (cfg.get("MONITOR_DIRS") or [])]
@@ -5858,12 +5938,17 @@ def api_debug_jellyfin_movies():
     lines.append(f"  items with a Path: {with_path}/{len(items)} | with imdb/tmdb ProviderIds: {with_ids}/{len(items)}")
     for item in items[:3]:
         prov = {str(k).lower(): v for k, v in (item.get("ProviderIds") or {}).items()}
+        _sz = next((ms.get("Size") for ms in (item.get("MediaSources") or [])
+                    if isinstance(ms, dict) and ms.get("Size")), None)
         lines.append(f"    - {item.get('Name')!r} ({item.get('ProductionYear')}) | id={item.get('Id')} | "
                      f"imdb={prov.get('imdb') or '(none)'} | tmdb={prov.get('tmdb') or '(none)'} | "
-                     f"DateCreated={item.get('DateCreated') or '(none)'}")
+                     f"DateCreated={item.get('DateCreated') or '(none)'} | "
+                     f"Size={_sz or '(none — the size fingerprint and flat-file matching need it)'}")
         raw = item.get("Path") or ""
         if raw:
-            lines.append(_debug_resolved_line(raw, monitor_dirs))
+            _want = next((int(ms.get("Size") or 0) for ms in (item.get("MediaSources") or [])
+                          if isinstance(ms, dict) and ms.get("Size")), 0)
+            lines.append(_debug_resolved_line(raw, monitor_dirs, _want))
         else:
             lines.append("      (no Path on item)")
 
@@ -6037,6 +6122,14 @@ def api_debug_media_paths():
     monitor_dirs = [str(d) for d in (cfg.get("MONITOR_DIRS") or [])]
 
     lines = ["Media path mapping debug", ""]
+    lines.append("How matching works: files match by FINGERPRINT — the movie's folder")
+    lines.append("name + file name, with the server's byte count disambiguating")
+    lines.append("same-named copies. Mount prefixes never need to line up. Flat files")
+    lines.append("(no movie folder) match by file name + size, and with Jellyfin")
+    lines.append("enabled they are deletable only when every source and the disk")
+    lines.append("agree on the bytes. Folder paths (section locations) are not media")
+    lines.append("entries and are ignored by the accuracy check.")
+    lines.append("")
     root = Path(FILESYSTEM_CHECK_PATH)
     try:
         top = sorted(p.name for p in root.iterdir() if p.is_dir())
@@ -6045,6 +6138,33 @@ def api_debug_media_paths():
         lines.append(f"{FILESYSTEM_CHECK_PATH} listing ERROR: {e}")
     lines.append(f"{FILESYSTEM_CHECK_PATH} top-level folders ({len(top)}): {', '.join(top[:20]) or '(none)'}"
                  + (" …" if len(top) > 20 else ""))
+
+    exts = _media_file_extensions(cfg)
+    lines.append(f"Movie file extensions (what counts as a media FILE entry): "
+                 f"{', '.join(sorted(exts)) or '(none configured)'}")
+    idx = _media_fingerprint_index()
+    lines.append(f"Fingerprint index: {sum(len(v) for v in idx['dir_name'].values()):,} "
+                 f"file(s) walked {max(0, time.time() - idx['at']):.0f}s ago "
+                 f"(rebuilt fresh whenever the accuracy check runs)")
+
+    lines.append("")
+    lines.append("Stored media-path verdict (re-judged ONLY by Check for Errors or a")
+    lines.append("monitored-paths save; every other probe replays it as-is):")
+    if not _MEDIA_PATH_VERDICT["servers"]:
+        lines.append("  (never judged yet — run Check for Errors)")
+    for _name, _slot in sorted(_MEDIA_PATH_VERDICT["servers"].items()):
+        _c = _slot.get("compat") or {}
+        _age = time.time() - (_slot.get("at") or 0)
+        lines.append(f"  {_name}: judged {_age / 60:.0f} min ago | "
+                     f"checked={_c.get('checked')} matched={_c.get('matched')} "
+                     f"unmatched={_c.get('unmatched')} | size-checked={_c.get('size_checked')} "
+                     f"mismatched={_c.get('size_mismatched')} | "
+                     f"folder entries ignored={_c.get('folder_entries')} | "
+                     f"{'BLOCKING' if _slot.get('blocker') else 'ok'}")
+        for _e in _slot.get("errors") or []:
+            lines.append(f"    ERROR: {_e}")
+        for _w in _slot.get("warnings") or []:
+            lines.append(f"    warning: {_w}")
 
     lines.append("")
     lines.append("Monitored directories (the engine may only delete inside these):")
@@ -6846,7 +6966,8 @@ def api_collections():
     return jsonify(out)
 
 
-def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) -> dict:
+def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
+                             media_paths: bool | None = None) -> dict:
     """Validate connection health for the services MediaReducer talks to.
 
     Checks selected-API reachability and whether connected media-server paths resolve
@@ -6856,7 +6977,14 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
     their URL and key are present, so dependent UI sections stay locked until each API
     connects. Blank optional URLs raise no warning/error. MediaReducer-owned folders
     are also checked for read/write, since cache, logs, IMDb data, saves, and runs all
-    depend on them."""
+    depend on them.
+
+    media_paths controls the media-path accuracy check (server samples + a full
+    library walk — the expensive part): True runs it (Check for Errors), None
+    runs it only when the monitored paths changed since the last verdict, and
+    every probe that doesn't run it REPLAYS the stored verdict unchanged — an
+    active media-path error neither re-runs the check nor disappears on an
+    unrelated save."""
     cfg = cfg or load_config()
     mounts = _appdata_mount_state()
     filesystem = _filesystem_rw_state()
@@ -6881,9 +7009,15 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
     filesystem_blocker = False
     media_path_compatibility: list[dict] = []
     no_server_selected = not (use_plex or use_jellyfin)
+    _dirs_sig = _monitor_dirs_signature(cfg)
+    run_media_check = bool(probe and (media_paths is True
+                                      or (media_paths is None
+                                          and _dirs_sig != _MEDIA_PATH_VERDICT["sig"])))
     # Every probe below reads from here. Started together and awaited once, so a
-    # save waits for the slowest server rather than the sum of all of them.
-    pre = (_prefetch_connection_probes(conn, use_plex=use_plex, use_jellyfin=use_jellyfin)
+    # save waits for the slowest server rather than the sum of all of them. The
+    # media-path samplers ride along only when this probe re-judges the paths.
+    pre = (_prefetch_connection_probes(conn, use_plex=use_plex, use_jellyfin=use_jellyfin,
+                                       media_paths=run_media_check)
            if probe else {})
 
     def dedupe(items):
@@ -7088,18 +7222,59 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                 f"share or disk that has not come up yet rather than an empty "
                 f"library. Check the mount, then recheck.")
 
-    if probe and not library_missing:
-        # A real probe re-walks the library: the fingerprint index's short
+    if probe and not library_missing and not run_media_check:
+        # This probe does NOT re-judge the media paths: replay each stored
+        # per-server verdict unchanged — the same compat facts, error/warning
+        # lines, and blocker state — so an active problem stays visible (and
+        # keeps blocking) without the check's samples and library walk running
+        # on every save. Check for Errors or a monitored-paths save re-judges.
+        # Only servers still ENABLED replay; deselecting one retires its slot.
+        for _name, _on in (("Plex/Tautulli", use_plex), ("Jellyfin", use_jellyfin)):
+            _slot = _MEDIA_PATH_VERDICT["servers"].get(_name)
+            if not _on or not _slot:
+                continue
+            media_path_compatibility.append(dict(_slot["compat"]))
+            for _e in _slot["errors"]:
+                add_error(_e)
+            for _w in _slot["warnings"]:
+                add_warning(_w)
+            if _slot["blocker"]:
+                media_path_blocker = True
+
+    if probe and not library_missing and run_media_check:
+        # Re-judging: a fresh walk, always — the fingerprint index's short
         # cache exists to share ONE walk between the two servers' checks
-        # below, never to let Check for Errors (or a save re-probe after a
-        # mount fix) judge a walk from before the fix.
+        # below, never to judge a walk from before a mount fix.
         _MEDIA_FP_INDEX["at"] = 0.0
+        _judged_any = False
+
+        def _store_media_verdict(_name, _e0, _w0):
+            """Replace one server's stored verdict slot — called only when its
+            check actually produced a compat entry, so a sampler failure or a
+            down server keeps the previous verdict instead of clearing it."""
+            nonlocal _judged_any
+            if media_path_compatibility and media_path_compatibility[-1].get("server") == _name:
+                _c = media_path_compatibility[-1]
+                _MEDIA_PATH_VERDICT["servers"][_name] = {
+                    "compat": dict(_c),
+                    "errors": list(errors[_e0:]),
+                    "warnings": list(warnings[_w0:]),
+                    "blocker": bool(_c.get("checked") and not _c.get("ok")),
+                    "at": time.time(),
+                }
+                _judged_any = True
+
+        _e0, _w0 = len(errors), len(warnings)
         if use_plex and tautulli_connected:
             try:
                 compat = _media_path_compatibility_state("Plex/Tautulli", _sample_result(pre, "tautulli_paths"))
                 media_path_compatibility.append(compat)
                 if compat["checked"] == 0:
-                    add_warning("Plex/Tautulli connected, but no movie paths were available to check.")
+                    if compat.get("folder_entries"):
+                        add_warning(f"Plex/Tautulli returned only folder entries "
+                                    f"({compat['folder_entries']}) — no movie file paths to check.")
+                    else:
+                        add_warning("Plex/Tautulli connected, but no movie paths were available to check.")
                 elif not compat["ok"]:
                     media_path_blocker = True
                     if compat.get("mismatch_problem"):
@@ -7120,15 +7295,30 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                             f"library. Check the /library mount, then recheck; the "
                             f"Tautulli debug button under Connections shows each sampled "
                             f"path and why it did or didn't match.")
+                elif compat["unmatched"]:
+                    _ex = (compat.get("unmatched_examples") or [""])[0]
+                    add_warning(
+                        f"{compat['unmatched']} of {compat['checked']} sampled Plex entries "
+                        f"match no file under {FILESYSTEM_CHECK_PATH}"
+                        + (f" (for example {_ex})" if _ex else "") + " — usually a stale "
+                        f"Plex entry whose file was renamed, upgraded, or removed since "
+                        f"its last scan. It scans as missing and is never deleted; a "
+                        f"Plex/Tautulli rescan clears this.")
             except Exception:
                 add_warning("Could not check Plex media paths.")
+            _store_media_verdict("Plex/Tautulli", _e0, _w0)
 
+        _e0, _w0 = len(errors), len(warnings)
         if use_jellyfin and jellyfin_connected:
             try:
                 compat = _media_path_compatibility_state("Jellyfin", _sample_result(pre, "jellyfin_paths"))
                 media_path_compatibility.append(compat)
                 if compat["checked"] == 0:
-                    add_warning("Jellyfin connected, but no movie paths were available to check.")
+                    if compat.get("folder_entries"):
+                        add_warning(f"Jellyfin returned only folder entries "
+                                    f"({compat['folder_entries']}) — no movie file paths to check.")
+                    else:
+                        add_warning("Jellyfin connected, but no movie paths were available to check.")
                 elif not compat["ok"]:
                     media_path_blocker = True
                     if compat.get("mismatch_problem"):
@@ -7150,8 +7340,40 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False) ->
                             f"library. Check the /library mount, then recheck; the "
                             f"Jellyfin debug button under Connections shows each sampled "
                             f"path and why it did or didn't match.")
+                elif compat["unmatched"]:
+                    _ex = (compat.get("unmatched_examples") or [""])[0]
+                    add_warning(
+                        f"{compat['unmatched']} of {compat['checked']} sampled Jellyfin entries "
+                        f"match no file under {FILESYSTEM_CHECK_PATH}"
+                        + (f" (for example {_ex})" if _ex else "") + " — usually a stale "
+                        f"Jellyfin entry whose file was renamed, upgraded, or removed since "
+                        f"its last scan. It scans as missing and is never deleted; a "
+                        f"Jellyfin library scan clears this.")
             except Exception:
                 add_warning("Could not check Jellyfin media paths.")
+            _store_media_verdict("Jellyfin", _e0, _w0)
+        # A server whose judge did NOT complete this run (its sampler failed,
+        # or it was down) keeps showing its RETAINED verdict — otherwise one
+        # hiccup would flap an active error to "no problem" for exactly one
+        # response and back on the next probe.
+        for _name, _on in (("Plex/Tautulli", use_plex), ("Jellyfin", use_jellyfin)):
+            if not _on or any(c.get("server") == _name for c in media_path_compatibility):
+                continue
+            _slot = _MEDIA_PATH_VERDICT["servers"].get(_name)
+            if not _slot:
+                continue
+            media_path_compatibility.append(dict(_slot["compat"]))
+            for _e in _slot["errors"]:
+                add_error(_e)
+            for _w in _slot["warnings"]:
+                add_warning(_w)
+            if _slot["blocker"]:
+                media_path_blocker = True
+        # The signature stamps only when SOMETHING was judged: a re-judge
+        # where no media server answered keeps retrying on later probes
+        # instead of recording "nothing wrong" it never verified.
+        if _judged_any:
+            _MEDIA_PATH_VERDICT["sig"] = _dirs_sig
 
     # Threshold values, library-cap readiness, and other run-mode blockers live in the
     # Dashboard buttons, Config validation, and the engine's own safety checks. Only
@@ -7244,10 +7466,10 @@ def _connection_health_signature(cfg: dict | None = None) -> str:
     usually accompanies a mount/library change, and the media-path check must
     re-run against the CURRENT disk to show a problem cleared (or appeared)
     rather than serving the cached verdict."""
-    return _config_signature(cfg, _API_CREDENTIAL_KEYS + (
+    return (_config_signature(cfg, _API_CREDENTIAL_KEYS + (
         "PROTECTED_COLLECTIONS", "JELLYFIN_PROTECTED_COLLECTIONS", "OUTPUT_DIR",
-        "MONITOR_DIRS",
-    )) + json.dumps(_CONFIG_FILE_ISSUES, sort_keys=True)
+    )) + "|dirs:" + _monitor_dirs_signature(cfg)
+        + json.dumps(_CONFIG_FILE_ISSUES, sort_keys=True))
 
 
 def _api_config_signature(cfg: dict | None = None) -> str:
@@ -7260,12 +7482,13 @@ def _radarr_section_detection_signature(cfg: dict | None = None) -> str:
     return _config_signature(cfg, ("PLEX_URL", "PLEX_TOKEN", "RADARR_URL", "RADARR_API_KEY"), strip=True)
 
 
-def _refresh_connection_health_cache(cfg: dict | None = None, *, probe: bool = True) -> dict:
+def _refresh_connection_health_cache(cfg: dict | None = None, *, probe: bool = True,
+                                     media_paths: bool | None = None) -> dict:
     """Run the connection check and store it for first-page display."""
     cfg = cfg or load_config()
     sig = _connection_health_signature(cfg)
     try:
-        health = _connection_health_state(cfg, probe=probe)
+        health = _connection_health_state(cfg, probe=probe, media_paths=media_paths)
     except Exception as e:
         health = {
             "ok": False,
@@ -8779,7 +9002,10 @@ def api_config_check():
             # Match save semantics: scheme-normalize the posted URLs. Blank
             # URLs resolve to their defaults inside the health check itself.
             _normalize_saved_service_urls(cfg)
-    health = _connection_health_state(cfg, probe=True)
+    # Check for Errors is one of the media-path check's two triggers (the
+    # other is a save that changes the monitored paths): it always re-judges
+    # against the current disk, active error or not.
+    health = _connection_health_state(cfg, probe=True, media_paths=True)
     # Cache both manual and automatic checks so highlighted override fields stay stable
     # if the user leaves Config and returns, instead of falling back to the non-probed
     # startup state. Keyed by the connection-related signature, so stale form values

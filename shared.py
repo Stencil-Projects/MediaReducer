@@ -100,17 +100,21 @@ def deleted_log_line(title, path, size_bytes, *, score=None, plays=None,
 
 # ── The wrong-library tripwire ───────────────────────────────────────────────
 
-def size_mismatch_problem(size_checked, mismatched) -> bool:
-    """True when enough sampled files' bytes on disk differ from what the
-    server reports to look like the WRONG library — a stale backup or copy
-    mounted at /library, or a server database describing different files —
-    rather than the odd quality upgrade the server hasn't rescanned yet.
+def wrong_library_problem(checked, bad) -> bool:
+    """True when enough sampled movie files disagree with the disk to look
+    like the WRONG library — a stale backup or copy mounted at /library, or a
+    server database describing different files. Applied to BOTH failure
+    shapes: files whose bytes differ from the server's count, and files that
+    match nothing at all. A few of either are normal library churn (a quality
+    upgrade the server hasn't rescanned; a stale entry whose file was renamed
+    or removed) — those warn, never block, because an unresolvable or
+    misdescribed entry simply scans as missing and is never deleted.
 
     The rule the engine pre-check (fails the run) and the configuration check
     (fails the health check) both apply: at least 3 disagreeing files AND more
-    than half of the size-reporting samples."""
+    than half of the samples."""
     try:
-        checked, bad = int(size_checked), int(mismatched)
+        checked, bad = int(checked), int(bad)
     except (TypeError, ValueError):
         return False
     return bad >= 3 and checked > 0 and bad * 2 > checked

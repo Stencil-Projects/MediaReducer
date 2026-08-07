@@ -59,6 +59,13 @@ check("a path already under the library shortcut-checks existence",
 check("a FOLDER path never resolves — media matches by file name + size only",
       A._resolve_reported_media_path("/x/movies/Solo (2020)") is None
       and A._resolve_reported_media_path("/data/movies-lq") is None)
+lookalike = mk("other/movies/Flat (2011).mkv", 999)
+flat_real = mk("movies/Flat Films/Flat (2011).mkv", 5678)
+A._MEDIA_FP_INDEX["at"] = 0.0
+check("a size-exact match outranks a look-alike folder+name hit (flat layouts)",
+      A._resolve_reported_media_path("/movies/Flat (2011).mkv", expected_size=5678)
+      == flat_real
+      and A._resolve_reported_media_path("/movies/Flat (2011).mkv") == lookalike)
 
 # The explained variant is what the debug buttons print: the reason must say
 # HOW a match happened and exactly why a miss missed.
@@ -112,9 +119,17 @@ check("...with the evidence attached (reported vs on-disk bytes)",
       and st["mismatch_examples"][0]["reported_bytes"] == 1
       and st["mismatch_examples"][0]["disk_bytes"] == 1234, st)
 
+# A stale server entry — a ghost file renamed, upgraded, or removed since the
+# server's last scan — warns instead of failing: it scans as missing and is
+# never deleted. MOST samples unmatched is the wrong library, and that fails.
 st = A._media_path_compatibility_state("Plex", [sample("/nope/Nowhere (1999)/x.mkv", 5)])
-check("an unresolvable path still fails the check (as before)",
-      not st["ok"] and st["unmatched"] == 1, st)
+check("a lone stale entry (ghost file) warns instead of failing the check",
+      st["ok"] and st["unmatched"] == 1 and not st["unmatched_problem"], st)
+st = A._media_path_compatibility_state("Plex", [
+    sample(f"/gone/Ghost {i} (1999)/Ghost {i} (1999).mkv", 5) for i in range(4)
+] + [sample("/d/movies/Solo (2020)/Solo (2020).mkv", 1234)])
+check("mostly-unmatched fails the check as the wrong library",
+      not st["ok"] and st["unmatched_problem"] and st["unmatched"] == 4, st)
 
 # Folder-shaped samples (section locations, folder items) are not movie file
 # entries — the check drops them entirely rather than judging path layouts:
@@ -129,6 +144,28 @@ check("folder samples are excluded from the check entirely",
 st = A._media_path_compatibility_state("Plex", [sample("/x/movies/Solo (2020)", 0)])
 check("nothing but folder samples reads as nothing to check, not a failure",
       st["ok"] and st["checked"] == 0, st)
+
+# ── The Media path mapping debug renders the stored verdict ─────────────────
+# Never judged: says so instead of pretending. Judged: shows each server's
+# slot with its age, counts, and any error/warning lines it carries.
+import time  # noqa: E402
+A._MEDIA_PATH_VERDICT["servers"].clear()
+with A.app.test_client() as c:
+    body = c.post("/api/debug/media-paths", headers={"X-MediaReducer": "1"}).get_json()
+check("the media-paths debug renders with an empty verdict",
+      body and body.get("ok") and "never judged yet" in body.get("text", ""), body)
+A._MEDIA_PATH_VERDICT["servers"]["Jellyfin"] = {
+    "compat": {"checked": 4, "matched": 3, "unmatched": 1, "size_checked": 3,
+               "size_mismatched": 0, "folder_entries": 2, "ok": True},
+    "errors": [], "warnings": ["1 of 4 sampled Jellyfin entries match no file under /library"],
+    "blocker": False, "at": time.time() - 120}
+with A.app.test_client() as c:
+    text = (c.post("/api/debug/media-paths", headers={"X-MediaReducer": "1"}).get_json() or {}).get("text", "")
+check("...and a judged slot with its age, counts, and lines",
+      "Jellyfin: judged 2 min ago" in text and "checked=4" in text
+      and "folder entries ignored=2" in text
+      and "warning: 1 of 4 sampled Jellyfin entries" in text, text[-400:])
+A._MEDIA_PATH_VERDICT["servers"].clear()
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

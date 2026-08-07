@@ -47,7 +47,7 @@ CFG = {"USE_JELLYFIN": True, "JELLYFIN_URL": "http://jelly:8096", "JELLYFIN_API_
 probes = {"n": 0}
 HEALTHY = {"n": True}
 
-def fake_state(cfg=None, *, probe=False):
+def fake_state(cfg=None, *, probe=False, media_paths=None):
     if probe:
         probes["n"] += 1
     return {"ok": HEALTHY["n"], "critical_ok": HEALTHY["n"], "severity": "ok",

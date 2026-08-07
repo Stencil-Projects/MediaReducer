@@ -37,7 +37,7 @@ E.get_all_movies_from_jellyfin = lambda: [
 ]
 E._tag_jellyfin_metadata = lambda r: r
 E.extract_file_path = lambda row, quiet=False: Path(f"/library/movies/{row.get('title', 'X').replace(' ', '')}/f.mkv")
-E._match_keys = lambda p: {str(p)}
+E._match_keys = lambda p, size=0: {str(p)}
 
 merged = E.get_all_movies()
 resolve = [c for c in calls if str(c.get("message", "")).startswith("Resolving")]

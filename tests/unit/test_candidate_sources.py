@@ -1,8 +1,8 @@
 """The candidate stage (build_candidates) under each server configuration —
 Plex-only, Jellyfin-only, and both enabled — the branches that consume merged
 rows and that NO full run otherwise exercises (the Plex-only e2e never sets
-USE_JELLYFIN). This is where Jellyfin protection, the unmerged-twin skip, and
-the cross-server identity check actually gate deletion (engine.py ~3758-3972).
+USE_JELLYFIN). This is where Jellyfin protection and the cross-server
+provider-id identity check actually gate deletion.
 
 Driven hermetically: a real temp /library with real movie files (the resolver
 and .exists()/.stat() checks need them), canned source fetchers, and IMDb
@@ -168,16 +168,78 @@ cands, stats, total = E.build_candidates()
 check("Both: a provider-id conflict on a shared file is skipped, not deleted",
       len(cands) == 0 and stats["identity_mismatch"] >= 1)
 
-# Near-miss twin: same folder+filename, divergent paths → they don't merge, but
-# the Jellyfin twin is flagged and skipped (never double-counted or deleted).
+# Same fingerprint (folder + file name) under diverging deeper paths, SAME
+# provider ids: that is ONE movie the two servers index at different spots.
+# It merges — identity is the fingerprint, arbitrated by the ids — into one
+# candidate, never an identity flag for a mere path divergence.
 _PLEX = [plex_row("400", f_twin_p)]
 _PLEX_META = {"400": {"protected": False, "tmdb_id": "40", "imdb_id": "tt40"}}
 _JELLY = [jf_row("F", f_twin_j, tmdb_id="40", imdb_id="tt40")]
 _reset(True, True)
 cands, stats, total = E.build_candidates()
-check("Both: an unmerged Plex/Jellyfin twin is flagged and not double-counted",
-      stats["identity_mismatch"] >= 1
-      and sum(1 for c in cands if c["title"] == "twin") <= 1)
+check("Both: a same-fingerprint pair with agreeing ids merges to ONE candidate",
+      stats["identity_mismatch"] == 0
+      and sum(1 for c in cands if c["title"] == "twin") == 1)
+
+# The same movie as TWO same-named copies, BOTH indexed by BOTH servers:
+# exact (resolved-file) pairing must marry each server's row to ITS copy —
+# two candidates, each with its own pair's summed plays — never a duplicate
+# jf-only row or cross-copy stat bleed. (fp is only the fallback bridge.)
+_PLEX = [plex_row("500", f_twin_p, play_count=1),
+         plex_row("501", f_twin_j, play_count=2)]
+_PLEX_META = {"500": {"protected": False, "tmdb_id": "40", "imdb_id": "tt40"},
+              "501": {"protected": False, "tmdb_id": "40", "imdb_id": "tt40"}}
+_JELLY = [jf_row("G", f_twin_p, tmdb_id="40", imdb_id="tt40", play_count=10),
+          jf_row("H", f_twin_j, tmdb_id="40", imdb_id="tt40", play_count=20)]
+_reset(True, True)
+cands, stats, total = E.build_candidates()
+plays = sorted(E.parse_int(c["play_count"], 0) for c in cands if c["title"] == "twin")
+check("Both: same-named copies pair per-copy (exact before fingerprint)",
+      plays == [1 + 10, 2 + 20] and stats["identity_mismatch"] == 0)
+
+# ══ Flat layouts need every source to agree ═════════════════════════════════
+# A row attached by NAME + SIZE alone (a flat server layout — the resolver's
+# "name_size" rung) with Jellyfin also carrying the movie: Tautulli's number
+# (refreshed each scan, equal to the disk by definition of the rung),
+# Jellyfin's number, and the disk must all line up before it is deletable.
+# Jellyfin can't refresh a single item's size, so until its scan catches up
+# the movie SKIPS as size_disagreement.
+f_flat = make("Storage/flatfilm.mkv")            # 1024 bytes on disk
+def _flat_stub(item, quiet=True):
+    if item.get("_unresolved"):
+        E._LAST_RESOLVE_RUNG = None
+        return None
+    E._LAST_RESOLVE_RUNG = item.get("_rung", "pair")
+    return Path(item["file"]) if item.get("file") else None
+E.extract_file_path = _flat_stub
+
+_PLEX = [plex_row("600", f_flat, file_size=1024, _rung="name_size")]
+_PLEX_META = {"600": {"protected": False, "tmdb_id": "60", "imdb_id": "tt60"}}
+_JELLY = [jf_row("J", "/jfroot/flatfilm.mkv", file_size=999, _unresolved=True)]
+_reset(True, True)
+cands, stats, total = E.build_candidates()
+check("Both, flat: a stale Jellyfin size holds the file back (all three must agree)",
+      stats["size_disagreement"] == 1
+      and not any(c["title"] == "flatfilm" for c in cands))
+
+# Jellyfin's scan catches up — its number now matches the disk — and the
+# same movie becomes deletable again.
+_JELLY = [jf_row("J", "/jfroot/flatfilm.mkv", file_size=1024, _unresolved=True)]
+_reset(True, True)
+cands, stats, total = E.build_candidates()
+check("Both, flat: agreement across every source releases the file",
+      stats["size_disagreement"] == 0
+      and any(c["title"] == "flatfilm" for c in cands))
+
+# A movie-FOLDER layout never consults the gate: the folder anchors identity
+# and sizes are not load-bearing there, whatever Jellyfin reports.
+_PLEX = [plex_row("601", f_keep, file_size=1024, _rung="pair")]
+_PLEX_META = {"601": {"protected": False, "tmdb_id": "61", "imdb_id": "tt61"}}
+_JELLY = [jf_row("K", "/jfroot/keep.mkv", file_size=42, _unresolved=True)]
+_reset(True, True)
+cands, stats, total = E.build_candidates()
+check("Both, folder layout: sizes are not load-bearing — no gate",
+      stats["size_disagreement"] == 0 and any(c["title"] == "keep" for c in cands))
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

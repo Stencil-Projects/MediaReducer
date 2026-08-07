@@ -2549,6 +2549,7 @@ function _prDebugBox() {
         '<div class="pr-debug-head">' +
           '<span class="pr-debug-title" id="pr-debug-title"></span>' +
           '<button type="button" class="btn btn-sm btn-outline-secondary" id="pr-debug-copy" onclick="prCopyDebugBox(this)">Copy</button>' +
+          '<button type="button" class="btn btn-sm btn-outline-secondary" id="pr-debug-download" onclick="prDownloadDebugBox(this)">Download</button>' +
           '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="prHideDebugBox()">Close</button>' +
         '</div>' +
         '<pre id="pr-debug-text"></pre>' +
@@ -2685,6 +2686,20 @@ function prHideDebugBox() {
     try { _prDebugReturnFocus.focus(); } catch (_) {}
   }
   _prDebugReturnFocus = null;
+}
+function prDownloadDebugBox(btn) {
+  // Same text the Copy button grabs, saved as a file named after the popup —
+  // debug output is what gets pasted into bug reports, and a download
+  // survives outputs too large for a clipboard.
+  const text = document.getElementById('pr-debug-text')?.textContent || '';
+  const title = document.getElementById('pr-debug-title')?.textContent || 'debug';
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'debug';
+  const ok = prDownloadText('mediareducer-' + slug + '_' + prFileStamp() + '.txt', text);
+  if (btn) {
+    const old = btn.textContent;
+    btn.textContent = ok ? 'Saved' : 'Save failed';
+    setTimeout(() => { btn.textContent = old; }, 1600);
+  }
 }
 async function prCopyDebugBox(btn) {
   const text = document.getElementById('pr-debug-text')?.textContent || '';
