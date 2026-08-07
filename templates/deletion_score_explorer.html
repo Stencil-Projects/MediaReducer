@@ -381,7 +381,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <input class="form-check-input" type="checkbox" id="c-movies-on" onchange="onExpFilterInput()">
           <span class="form-check-label">Allow movie cleanup</span>
         </label>
-        <div class="filter-score-help">Off = movies are never deleted. Scans and this page stay live.</div>
+        <div class="filter-score-help">Movies join the deletion order, scored per title; the worst-kept are marked, then deleted once the delay elapses. Off = movies are never deleted.</div>
       </div>
       <div class="filter-score-card">
         <label class="input-label" for="c-tv-on">TV shows</label>
@@ -389,7 +389,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <input class="form-check-input" type="checkbox" id="c-tv-on" onchange="onExpFilterInput()">
           <span class="form-check-label">Allow TV show cleanup</span>
         </label>
-        <div class="filter-score-help">On = seasons join the movies in one deletion order: a daily pass marks the worst-kept seasons and Automatic Cleanup deletes them after the deletion delay. Protected, favorited, watched-lately, and current seasons are held back. Off = TV is never deleted.</div>
+        <div class="filter-score-help">Seasons join the same order, scored per season; the worst-kept are marked, then deleted once the delay elapses. Off = seasons are never deleted.</div>
       </div>
     </div>
   </div>
@@ -437,7 +437,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <span class="input-group-text">pts</span>
         </div>
         <div id="c-tie-error" class="field-error">Must be 0.5–25 points — uncheck to turn off.</div>
-        <div class="filter-score-help">Scores within this many points count as tied; larger files go first inside a tie, so a space target costs the fewest movies. Off = strict score order.</div>
+        <div class="filter-score-help">Scores within this many points count as tied, and the larger file goes first inside a tie, so a space target costs the fewest movies. Off = strict score order.</div>
       </div>
     </div>
   </div>
@@ -459,7 +459,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <input class="form-check-input" type="checkbox" id="c-unplayed" onchange="onExpFilterInput()">
           <span class="form-check-label">Don't delete unplayed titles</span>
         </label>
-        <div class="filter-score-help">Skips unplayed movies and a show's never-watched seasons.</div>
+        <div class="filter-score-help">Unplayed movies and a show's never-watched seasons are held back. Off = they are scored like anything else.</div>
       </div>
       <div class="filter-score-card">
         <label class="input-label" for="c-cutoff">Maximum IMDb rating</label>
@@ -473,7 +473,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
                  onblur="_expValidateField('c-cutoff')" aria-describedby="c-cutoff-error">
         </div>
         <div id="c-cutoff-error" class="field-error">Must be above 0, up to 10 — uncheck to turn off.</div>
-        <div class="filter-score-help">Anything rated above this is never deleted — a season uses its show's rating. Unrated titles are unaffected.</div>
+        <div class="filter-score-help">Anything rated above this is held back, and a season uses its show's rating. Off = a rating shields nothing; unrated titles are unaffected either way.</div>
       </div>
       <div class="filter-score-card{{ '' if jellyfin_connected else ' connection-ghost' }}">
         <label class="input-label" for="c-jf-fav">Jellyfin favorites</label>
@@ -481,15 +481,15 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <input class="form-check-input" type="checkbox" id="c-jf-fav" onchange="onExpFilterInput()" {{ '' if jellyfin_connected else 'disabled' }}>
           <span class="form-check-label">Don't delete Jellyfin favorites</span>
         </label>
-        <div class="filter-score-help">Skips anything a Jellyfin user favorited; a favorited show shields all its seasons.</div>
+        <div class="filter-score-help">Anything a Jellyfin user favorited is held back, and a favorited show shields all its seasons. Off = favorites are scored like anything else.</div>
         <div class="filter-score-help connection-unlock-note" {{ 'hidden' if jellyfin_connected else '' }}>Connect Jellyfin to unlock this.</div>
       </div>
     </div>
   </div>
 
   <div class="filter-score-group">
-    <div class="filter-score-heading">TV show settings curve</div>
-    <div class="filter-score-subhead">TV-only rules; everything previews live below.</div>
+    <div class="filter-score-heading">TV show scoring</div>
+    <div class="filter-score-subhead">The only TV-only rules — everything above applies to seasons too. Previews live below.</div>
     <div class="filter-score-grid">
       <div class="filter-score-card">
         <label class="input-label" for="c-tv-elig">Season eligibility</label>
@@ -498,7 +498,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <option value="except_newest">Any season except the newest</option>
           <option value="all">All seasons</option>
         </select>
-        <div class="filter-score-help">Which of a show's seasons may delete. "Newest" = most recently added, even if it isn't the latest season. A continuing show's current season is always held back, and the other filters still apply.</div>
+        <div class="filter-score-help">Which of a show's seasons may delete. "Newest" = most recently added, even if it isn't the latest season. A continuing show's current season is always held back.</div>
       </div>
       <div class="filter-score-card">
         <label class="input-label" for="c-tv-weight">TV show watch weight</label>
@@ -516,7 +516,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
           <span id="v-tv-bump">10 pts</span>
         </div>
         <input type="range" class="form-range" id="c-tv-bump" min="0" max="25" step="0.5" value="10" oninput="onExpTvKnobInput()">
-        <div class="filter-score-help">Every watched episode lifts ALL of a show's seasons — one episode a little, more as more is watched — so a watched show's untouched seasons outrank those of shows nobody watches. 0 turns the lift off.</div>
+        <div class="filter-score-help">Every watched episode lifts ALL of a show's seasons, more as more is watched, so a watched show's untouched seasons outrank those of shows nobody watches. 0 = no lift.</div>
       </div>
     </div>
   </div>

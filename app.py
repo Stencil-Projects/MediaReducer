@@ -809,9 +809,11 @@ def _build_config() -> tuple[dict, list]:
     # someone having turned a media type off.
     cfg["MOVIE_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("MOVIE_CLEANUP_ENABLED", True), default=True)
     cfg["TV_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("TV_CLEANUP_ENABLED", True), default=True)
-    # Absent means ON: unmonitoring a deleted season is the shipped behavior
-    # (a deleted-but-monitored season is just re-downloaded).
-    cfg["SONARR_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("SONARR_CLEANUP_ENABLED", True), default=True)
+    # Absent means OFF, matching Optional Radarr cleanup: reaching into
+    # another app's state is opt-in, never something a fresh install does on
+    # its own. Off, a deleted season's files still go; Sonarr re-downloads it
+    # if it stays monitored, which is the user's call to make.
+    cfg["SONARR_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("SONARR_CLEANUP_ENABLED", False), default=False)
     # Absent means ON: the safety demote is the shipped behaviour, and a config
     # missing the key must not read as someone having turned it off.
     cfg["PAUSE_CLEANUP_ON_STARTUP"] = _coerce_bool(
@@ -1851,7 +1853,13 @@ def _arm_daily_slot_job(cfg: dict | None = None):
 def _write_progress_start_stub(mode_override: str | None, *, manual: bool = False):
     """Reset progress.json to a 'starting' state the instant a run is launched, so the
     dashboard panel flips immediately — even before the subprocess has imported Python.
-    The engine then overwrites this with real phase updates. Best-effort only."""
+    The engine then overwrites this with real phase updates. Best-effort only.
+
+    Returns the started_at it stamped, which IS the run's identity: the engine
+    is handed the same value so both writers agree. The dashboard treats a
+    changed started_at as a whole new run and restarts its per-stage bar, so
+    two stamps for one run made the first stage fill, snap to empty, and fill
+    again."""
     try:
         now = time.time()
         _atomic_write_json(progress_path(), {
@@ -1866,8 +1874,9 @@ def _write_progress_start_stub(mode_override: str | None, *, manual: bool = Fals
             "trigger": "", "current_title": "", "message": "Starting…",
             "started_at": now, "updated_at": now,
         })
+        return now
     except Exception:
-        pass
+        return None
 
 
 def _mark_progress_terminal(status: str, message: str, *, force: bool = False):
@@ -2311,7 +2320,7 @@ def run_script(mode_override: str | None = None, manual: bool = False,
         _run_manual  = bool(manual)
         _run_start   = datetime.now()
         _pause_scheduler_for_run()
-        _write_progress_start_stub(mode_override, manual=manual)
+        _run_started_at = _write_progress_start_stub(mode_override, manual=manual)
         _clear_run_report(output_dir())
 
     def _worker():
@@ -2323,6 +2332,11 @@ def run_script(mode_override: str | None = None, manual: bool = False,
                 env["MEDIAREDUCER_MODE_OVERRIDE"] = mode_override
             if manual:
                 env["MEDIAREDUCER_MANUAL"] = "1"
+            # One run, one started_at. Without this the engine mints its own,
+            # the dashboard reads the change as a new run, and the Checking
+            # bar restarts from empty mid-stage.
+            if _run_started_at:
+                env["MEDIAREDUCER_RUN_STARTED_AT"] = repr(float(_run_started_at))
 
             if _run_stop_requested.is_set():
                 return
@@ -4740,7 +4754,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
     sonarr_sid = None
     if not (s_url and s_key):
         pass
-    elif not bool(cfg.get("SONARR_CLEANUP_ENABLED", True)):
+    elif not bool(cfg.get("SONARR_CLEANUP_ENABLED", False)):
         print(f"TV cleanup: Sonarr cleanup is off — leaving {entry.get('title')} "
               f"S{entry.get('season')} monitored in Sonarr", flush=True)
     else:
@@ -6110,7 +6124,7 @@ def api_debug_sonarr():
         lines.append("No same-title series — the unmonitor lookup is unambiguous.")
 
     lines.append("")
-    lines.append(f"SONARR_CLEANUP_ENABLED = {bool(cfg.get('SONARR_CLEANUP_ENABLED', True))} "
+    lines.append(f"SONARR_CLEANUP_ENABLED = {bool(cfg.get('SONARR_CLEANUP_ENABLED', False))} "
                  f"(off: files still delete; seasons stay monitored in Sonarr)")
     return jsonify({"ok": True, "text": "\n".join(lines)})
 

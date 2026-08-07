@@ -231,25 +231,45 @@
     /* Only the elements listed above ease; every other surface, border and
        label repaints instantly. That is fine when a color changes on its own,
        but a THEME flip changes all of them at once — and for the 150ms the
-       listed ones spend easing, the page is wearing both palettes: a light
-       hairline drawn over a still-dark header, a card that has already flipped
-       carrying text that has not. prSetTheme adds this class for the duration
-       of the swap so the whole page changes in one frame instead. Transitions
-       only — animations (toasts, progress) are left to finish. */
+       listed ones spend easing, the page wears both palettes: a light hairline
+       drawn over a still-dark header, a card that has already flipped carrying
+       text that has not. Those are the seams. prSetTheme holds every
+       transition off for the duration of the swap, so the DOM's own colors
+       change in ONE frame and no element can be caught between palettes.
+       Transitions only — animations (toasts, progress) are left to finish. */
     :root.pr-theme-swap,
     :root.pr-theme-swap *,
     :root.pr-theme-swap *::before,
     :root.pr-theme-swap *::after {
       transition: none !important;
     }
+    /* The flip is still ANIMATED, just not element by element: prSetTheme runs
+       it inside a view transition, so the browser cross-fades a snapshot of the
+       whole old page into the whole new one. Every surface therefore changes
+       together — including the ones CSS could never ease between, like the
+       header washes and card-header gradients, which is what made the
+       element-by-element version seam no matter which properties it listed.
+       The old snapshot holds opaque underneath while the new one fades in over
+       it: two semi-transparent layers would let the page background show
+       through mid-fade, a wash of its own. */
+    :root.pr-theme-swap::view-transition-old(root) {
+      animation: none; opacity: 1;
+    }
+    :root.pr-theme-swap::view-transition-new(root) {
+      animation: pr-theme-fade .22s ease both;
+      mix-blend-mode: normal;
+    }
+    @keyframes pr-theme-fade { from { opacity: 0; } to { opacity: 1; } }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { transition: none !important; animation: none !important; }
     }
 
-    /* Page entrance: the content area fades in with a slight rise, once per
-       load, so switching between pages eases in instead of popping. The header
-       is identical on every page and stays static, reading as one continuous
-       surface across navigations. Only a `from` keyframe + backwards fill: the
+    /* Page entrance, and the whole of what a navigation looks like: the
+       content area fades in with a slight rise, once per load, so switching
+       between pages eases in instead of popping. The header is identical on
+       every page and is simply painted, not animated, so it reads as one
+       continuous surface across navigations — see the note below on why it is
+       NOT a view-transition group. Only a `from` keyframe + backwards fill: the
        animation eases INTO the element's natural style and leaves no animated
        transform behind once it ends (a lingering identity transform would make
        #main the containing block for any fixed-position descendant).
@@ -259,16 +279,22 @@
     }
     #main { animation: pr-page-enter .28s ease-out backwards; }
 
-    /* Cross-document view transitions (Chromium/Safari; others fall back to
-       the entrance fade above): navigating between pages cross-fades the old
-       page into the new one instead of flashing blank, and the header — named
-       as its own transition group, pixel-identical on every page — simply
-       stays put. A pagereveal handler below skips the entrance fade when a
-       view transition is animating the same navigation. */
-    @view-transition { navigation: auto; }
-    .site-header { view-transition-name: site-header; }
-    ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .22s; }
-    ::view-transition-group(site-header) { animation-duration: .01s; }
+    /* Navigation deliberately does NOT use a cross-document view transition.
+       One was tried, to hold the header still while the pages changed, and it
+       could not be made to sit still: a view transition renders from
+       SNAPSHOTS, and this header is translucent — 88% surface with a blur
+       behind it — so its snapshot composites over the fading page instead of
+       over live content and visibly dips, then comes back. Measured over the
+       header strip through a real tab click, the snapshot path swings its
+       brightness by ~11 of 255 and this path by 0. Cross-fading two different
+       pages had the matching problem in the body: both drawn at once is a
+       double exposure, every line of the old page showing through the new.
+       Without it the browser simply paints the arriving page — the header is
+       identical markup so it never moves, nothing is ever drawn twice, and
+       #main's entrance fade above eases the content in. Same-document view
+       transitions are untouched: the theme flip still cross-fades, where both
+       snapshots share a layout and dissolving is right. */
+
     @media (prefers-reduced-motion: reduce) {
       ::view-transition-group(*), ::view-transition-image-pair(*),
       ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
@@ -1753,16 +1779,6 @@
         document.documentElement.setAttribute('data-bs-theme', saved);
       } catch (e) {}
     })();
-    /* When a cross-document view transition is animating this navigation, the
-       old page already cross-fades into this one — skip the CSS entrance fade
-       so the content doesn't ease in twice. (pagereveal fires before first
-       render; browsers without view transitions never fire it with one.) */
-    window.addEventListener('pagereveal', function (e) {
-      if (e.viewTransition) {
-        var main = document.getElementById('main');
-        if (main) main.style.animation = 'none';
-      }
-    });
     /* Every mutating request carries X-MediaReducer; the server rejects writes
        without it, blocking cross-origin drive-by POSTs (another origin can't add
        a custom header without a CORS preflight this server never approves).
@@ -2440,25 +2456,51 @@ function prNormalizeDisplayedTimestamps(text) {
   });
 }
 
-function prSetTheme(theme) {
+// Only the NEWEST theme swap may lift the transition suppression. Each call
+// takes a ticket; a restore from an earlier one is ignored. Without this an
+// earlier call's backstop timer fires mid-flip and un-suppresses transitions
+// while the new palette is still resolving — html eases alone against
+// surfaces that already snapped, which is the seam wearing a different hat.
+let _prThemeSwapSeq = 0;
+function prSetTheme(theme, opts) {
   const t = theme === 'light' ? 'light' : 'dark';
   const root = document.documentElement;
-  // Swap the whole palette in one frame. Both attributes are set together —
-  // ours drives the app's tokens, Bootstrap's drives its own — and .pr-theme-swap
-  // holds every transition off while they land, so nothing is caught halfway
-  // between the two themes. Reading offsetWidth forces the new colors to be
-  // computed before transitions come back.
-  root.classList.add('pr-theme-swap');
-  root.setAttribute('data-theme', t);
-  root.setAttribute('data-bs-theme', t);
-  void root.offsetWidth;
+  const seq = ++_prThemeSwapSeq;
+  // The palette lands in ONE frame either way. Both attributes are set
+  // together — ours drives the app's tokens, Bootstrap's drives its own — and
+  // .pr-theme-swap holds every transition off while they do, so no element is
+  // ever caught wearing half of each theme. Reading offsetWidth forces the new
+  // colors to be computed before transitions come back.
+  const apply = () => {
+    root.setAttribute('data-theme', t);
+    root.setAttribute('data-bs-theme', t);
+    void root.offsetWidth;
+  };
   // Two frames: the first is the one the new palette paints in, so the class
   // can only come off after it. requestAnimationFrame may not run in a
   // background tab, so a timer backstops it — leaving the class on would
   // silently kill every transition on the page.
-  const restore = () => root.classList.remove('pr-theme-swap');
-  requestAnimationFrame(() => requestAnimationFrame(restore));
-  setTimeout(restore, 250);
+  const restore = () => {
+    if (seq === _prThemeSwapSeq) root.classList.remove('pr-theme-swap');
+  };
+  const settle = () => {
+    requestAnimationFrame(() => requestAnimationFrame(restore));
+    setTimeout(restore, 400);
+  };
+  root.classList.add('pr-theme-swap');
+  // A deliberate flip (the toggle) cross-fades; syncing on load must not.
+  // Where view transitions are missing the flip is simply instant — the same
+  // page, one frame sooner, never a seamed one.
+  const wantsFade = !!(opts && opts.animate)
+    && typeof document.startViewTransition === 'function'
+    && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (wantsFade) {
+    const vt = document.startViewTransition(apply);
+    vt.finished.then(settle, settle);
+  } else {
+    apply();
+    settle();
+  }
   try { localStorage.setItem('pr-theme', t); } catch (e) {}
   const label = document.getElementById('theme-toggle-label');
   const btn = document.getElementById('theme-toggle');
@@ -2468,7 +2510,7 @@ function prSetTheme(theme) {
 }
 function prToggleTheme() {
   const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-  prSetTheme(current === 'light' ? 'dark' : 'light');
+  prSetTheme(current === 'light' ? 'dark' : 'light', { animate: true });
 }
 // Sync the label/title with whatever the pre-paint script already applied.
 document.addEventListener('DOMContentLoaded', function () {
@@ -2668,10 +2710,24 @@ function _morphButtonText(btn, text, opts = {}) {
   }, 210);
 }
 let _prDebugReturnFocus = null;
-function prShowDebugBox(title, text) {
+// Copy and Download act on the box's TEXT, so while a probe is still running
+// they would hand over the "Running debug…" placeholder — a file or clipboard
+// full of nothing, with no sign anything went wrong. Ghost them until the
+// output lands. Close stays live: leaving is always allowed.
+// pending defaults to false, so every terminal call — results, failures, and
+// the collection debugs' own renderers — un-ghosts them by simply not asking.
+function prShowDebugBox(title, text, opts) {
   const overlay = _prDebugBox();
   overlay.querySelector('#pr-debug-title').textContent = title || 'Debug output';
   overlay.querySelector('#pr-debug-text').textContent = text || '(empty)';
+  const pending = !!(opts && opts.pending);
+  for (const id of ['pr-debug-copy', 'pr-debug-download']) {
+    const el = overlay.querySelector('#' + id);
+    if (!el) continue;
+    el.disabled = pending;
+    el.setAttribute('aria-disabled', pending ? 'true' : 'false');
+    el.title = pending ? 'Available when the output finishes' : '';
+  }
   overlay.classList.add('show');
   // The box declares role=dialog aria-modal, so actually move focus into it
   // (and back on close) — otherwise keyboard focus stays on the now-disabled
@@ -2752,7 +2808,7 @@ function prDebugMinVisible(startedAt) {
 async function prRunDebug(url, title, btn, body) {
   if (btn) btn.disabled = true;
   const startedAt = performance.now();
-  prShowDebugBox(title, 'Running debug…');
+  prShowDebugBox(title, 'Running debug…', { pending: true });
   try {
     const r = await fetch(url, {
       method: 'POST',

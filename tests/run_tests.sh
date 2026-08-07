@@ -231,6 +231,18 @@ PY
       # Confirmation dialogs: the answer decides whether anything is deleted, so
       # both pages are driven to every outcome with the network stubbed.
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_confirm_modal node tests/e2e/e2e_confirm_modal.mjs
+      # Progress bar: frames are fed to renderProgress directly, so it needs no
+      # run in flight — only the real page realm.
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_progress_monotonic node tests/e2e/e2e_progress_monotonic.mjs
+      # Theme crossfade: samples computed colors across a real flip, so it needs
+      # the real stylesheet — any page will do.
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_theme_crossfade node tests/e2e/e2e_theme_crossfade.mjs
+      # Debug popup: holds an endpoint open to observe the pending window, so
+      # it needs a real server but no particular state.
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_debug_pending node tests/e2e/e2e_debug_pending.mjs
+      # Page transitions: navigates between the real tabs, so it needs every
+      # page served but no particular data.
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_nav_transition node tests/e2e/e2e_nav_transition.mjs
     else
       echo "SKIP browser tests — playwright not installed (set PLAYWRIGHT_MODULE, or run: npm i playwright)"
     fi

@@ -485,6 +485,7 @@
 {% set use_plex = config.USE_PLEX %}
 {% set use_jellyfin = config.USE_JELLYFIN %}
 {% set radarr_connected = connection_health.radarr_connected %}
+{% set sonarr_connected = connection_health.sonarr_connected %}
 {% set plex_connected = connection_health.plex_connected %}
 {% set tautulli_connected = connection_health.tautulli_connected %}
 {% set jellyfin_connected = connection_health.jellyfin_connected %}
@@ -914,15 +915,17 @@
           <div class="form-text">Removes a deleted movie from Radarr so it isn't re-downloaded.</div>
         </div>
 
-        <div id="sonarr-cleanup-box" class="optional-cleanup-box">
+        <div id="sonarr-cleanup-box" class="optional-cleanup-box {{ 'connection-ghost' if not sonarr_connected else '' }}">
           <h6 class="mb-2">Optional Sonarr cleanup</h6>
           <div class="config-form-width-xl">
             <label class="filter-score-toggle-row" for="sonarr-cleanup-enabled">
               <input class="form-check-input" type="checkbox" id="sonarr-cleanup-enabled"
-                     {{ 'checked' if config.SONARR_CLEANUP_ENABLED else '' }}>
+                     {{ 'checked' if config.SONARR_CLEANUP_ENABLED else '' }}
+                     {{ 'disabled' if not sonarr_connected else '' }}>
               <span class="form-check-label">Unmonitor deleted seasons in Sonarr</span>
             </label>
           </div>
+          <div id="sonarr-cleanup-requires-sonarr" class="form-text connection-unlock-note"{{ '' if not sonarr_connected else ' hidden' }}>Connect Sonarr to unlock this.</div>
           <div class="form-text">Unmonitors a season in Sonarr before deleting it, so it isn't re-downloaded. Off = files still delete, but Sonarr will grab monitored seasons again.</div>
         </div>
         </div>
@@ -1674,6 +1677,9 @@ function _applyMoviePathAvailability() {
   const radarrReady = !!_savedConfigHealth?.radarr_connected;
   const sectionToggle = document.getElementById('section-enabled');
   if (sectionToggle) sectionToggle.disabled = !enabled || !radarrReady;
+  const sonarrReady = !!_savedConfigHealth?.sonarr_connected;
+  const sonarrToggle = document.getElementById('sonarr-cleanup-enabled');
+  if (sonarrToggle) sonarrToggle.disabled = !enabled || !sonarrReady;
 }
 
 function _applyAdvancedActionAvailability() {
@@ -1747,6 +1753,7 @@ function syncSavedVisibilitySections() {
   _setConnectionGhost('plex-protect-group', _savedPlexApiConnected());
   _setConnectionGhost('jellyfin-protect-group', _savedJellyfinApiConnected());
   _setConnectionGhost('optional-cleanup-box', !!_savedConfigHealth?.radarr_connected);
+  _setConnectionGhost('sonarr-cleanup-box', !!_savedConfigHealth?.sonarr_connected);
   _applyConfigRuntimeLocks();
 }
 function _savedConnectionHasValues(names) {
@@ -2235,7 +2242,7 @@ function _canonicalConfig(cfg) {
     RADARR_API_KEY: _str(cfg.RADARR_API_KEY),
     SONARR_URL: _str(cfg.SONARR_URL),
     SONARR_API_KEY: _str(cfg.SONARR_API_KEY),
-    SONARR_CLEANUP_ENABLED: cfg.SONARR_CLEANUP_ENABLED !== false,
+    SONARR_CLEANUP_ENABLED: cfg.SONARR_CLEANUP_ENABLED === true,
     // Notifications — included so edits here arm Save/Revert. The defaults in
     // _NOTIFY_FIELDS mirror notify.TOGGLE_DEFAULTS: the three alert types that
     // report on the library are pre-selected, the ones that add detail or
@@ -2676,7 +2683,7 @@ function populateForm(cfg) {
 
   [   'TAUTULLI_URL','TAUTULLI_API_KEY','PLEX_URL','PLEX_TOKEN',
    'RADARR_URL','RADARR_API_KEY','SONARR_URL','SONARR_API_KEY'].forEach(k => sv(k, cfg[k]));
-  sc('sonarr-cleanup-enabled', cfg.SONARR_CLEANUP_ENABLED !== false);
+  sc('sonarr-cleanup-enabled', cfg.SONARR_CLEANUP_ENABLED === true);
   _hideAllSecretFields();
 
   const hasSection = cfg.RADARR_OVERSEERR_SECTION_ID !== null && cfg.RADARR_OVERSEERR_SECTION_ID !== undefined;
@@ -2788,7 +2795,7 @@ function getFormConfig() {
     RADARR_URL:        v('RADARR_URL'),
     SONARR_URL:        v('SONARR_URL'),
     SONARR_API_KEY:    v('SONARR_API_KEY'),
-    SONARR_CLEANUP_ENABLED: chk('sonarr-cleanup-enabled') !== false,
+    SONARR_CLEANUP_ENABLED: chk('sonarr-cleanup-enabled') === true,
     RADARR_API_KEY:    v('RADARR_API_KEY'),
     ...Object.fromEntries(_NOTIFY_FIELDS.map(([key, kind, dflt]) => [key,
       kind === 'check' ? chk(key)
@@ -4126,7 +4133,8 @@ async function debugPlexCollections() {
   if (btn) btn.disabled = true;
   if (statusEl) { statusEl.textContent = 'Debugging selected collection...'; statusEl.style.color = 'var(--text-muted)'; }
   const startedAt = performance.now();
-  prShowDebugBox('Plex protected collections', 'Asking Plex what is inside: ' + names.join(', ') + '…');
+  prShowDebugBox('Plex protected collections', 'Asking Plex what is inside: ' + names.join(', ') + '…',
+                  { pending: true });
   try {
     const r = await fetch('/api/collections/plex/debug', {
       method: 'POST',
@@ -4213,7 +4221,8 @@ async function debugJellyfinCollections() {
   if (btn) btn.disabled = true;
   if (statusEl) { statusEl.textContent = 'Debugging selected collection...'; statusEl.style.color = 'var(--text-muted)'; }
   const startedAt = performance.now();
-  prShowDebugBox('Jellyfin protected collections', 'Asking Jellyfin what is inside: ' + names.join(', ') + '…');
+  prShowDebugBox('Jellyfin protected collections', 'Asking Jellyfin what is inside: ' + names.join(', ') + '…',
+                  { pending: true });
   try {
     const r = await fetch('/api/collections/jellyfin/debug', {
       method: 'POST',

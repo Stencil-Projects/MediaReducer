@@ -10,8 +10,8 @@ Two properties that are easy to lose in a later edit and expensive when lost:
   • The favicon resolves, including the bare /favicon.ico browsers request on
     their own.
   • Responses are gzipped. Flask serves this app directly (no proxy in the
-    container to do it), and the pages are large: the Config page is 396 KB of
-    HTML that compresses to 90 KB.
+    container to do it), and the pages are large: the Config page is ~470 KB of
+    HTML that compresses to ~115 KB.
 """
 import atexit
 import gzip

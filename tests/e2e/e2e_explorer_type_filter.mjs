@@ -135,7 +135,7 @@ const headings = await p.evaluate(() =>
   [...document.querySelectorAll('#filter-score-card .filter-score-heading')].map(h => h.textContent.trim()));
 check('the card is organized into the four setting groups',
       JSON.stringify(headings) === JSON.stringify(
-        ['Cleanup scope', 'Scoring & ordering', 'Eligibility filters', 'TV show settings curve']),
+        ['Cleanup scope', 'Scoring & ordering', 'Eligibility filters', 'TV show scoring']),
       headings);
 check('both TV knobs are sliders', await p.evaluate(() =>
       document.getElementById('c-tv-weight')?.type === 'range'

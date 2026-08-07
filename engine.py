@@ -1319,6 +1319,20 @@ _PROGRESS: dict = {}
 # the dashboard progress panel keeps showing the last real run.
 _QUIET_PROGRESS = False
 
+def _run_started_at() -> float:
+    """This run's identity for the dashboard. When the web app launched us it
+    already stamped the start stub and passes its value down, so both writers
+    agree on one timestamp; a changed one reads as a NEW run and restarts the
+    per-stage progress bar mid-stage. A standalone run (cron, CLI) has no app
+    stamp and mints its own."""
+    raw = _os.environ.get("MEDIAREDUCER_RUN_STARTED_AT", "")
+    try:
+        stamped = float(raw)
+    except (TypeError, ValueError):
+        return time.time()
+    return stamped if stamped > 0 else time.time()
+
+
 def emit_progress(**fields):
     """Merge fields into the run-progress state and atomically write progress.json.
 
@@ -6930,7 +6944,7 @@ def main():
                       scanned=0, total=0, eligible=0, deleted=0, bytes_freed=0,
                       target_bytes=0, trigger="", current_title="",
                       message="Paused — no scan or cleanup performed.",
-                      started_at=time.time())
+                      started_at=_run_started_at())
         return
 
     # Config-save reconcile: rebuild the queue from the stored snapshot, no scan.
@@ -6951,7 +6965,7 @@ def main():
                   scanned=0, total=0, eligible=0, protected=0, skipped=0,
                   deleted=0, bytes_freed=0, target_bytes=0, trigger="",
                   current_title="", message="Checking connections…",
-                  started_at=time.time())
+                  started_at=_run_started_at())
 
     if not validate_connections():
         emit_progress(status="error", phase="checking",

@@ -362,14 +362,16 @@ season side, each run:
    movie, and shows alongside the marked movies in the deletion history window
    and the Cache contents debug (Configuration → Advanced).
 4. In **Automatic Cleanup**, a later run deletes marked seasons whose delay
-   has elapsed **and that the fresh plan still takes**: when Sonarr is
-   connected the season is unmonitored there first (so it isn't
-   re-downloaded), then its episode files — freshly listed by the media
-   server — are removed and recorded in `deleted.log`, and Sonarr is asked
-   to rescan. **Monitor Only** marks but never deletes. (**Sonarr cleanup**
-   on the Configuration page turns the unmonitor step off if you'd rather
-   manage monitoring yourself; with no Sonarr at all, seasons simply delete
-   without it.)
+   has elapsed **and that the fresh plan still takes**: its episode files —
+   freshly listed by the media server — are removed and recorded in
+   `deleted.log`. **Monitor Only** marks but never deletes. **Optional Sonarr
+   cleanup** on the Configuration page adds the unmonitor step: with it on,
+   the season is unmonitored in Sonarr *before* the first file goes (a
+   refusal from Sonarr leaves the season intact and still marked), and Sonarr
+   is asked to rescan afterwards. Like **Optional Radarr cleanup** for
+   movies, it starts **off** — reaching into another app's state is opt-in —
+   and it unlocks once Sonarr is connected. Left off, seasons still delete,
+   and Sonarr re-downloads any that stay monitored.
 
 A season leaves the marked list the moment the plan stops taking it — the cap
 was raised, the show got protected or favorited, someone started watching it,

@@ -76,10 +76,13 @@ CFG = {
     # Every season eligible: this test's scenarios need both seasons in the
     # plan (the season-eligibility modes are pinned in test_tv_season_plan).
     "TV_SEASON_ELIGIBILITY": "all",
-    # Jellyfin supplies the inventory; Sonarr is configured for the optional
-    # unmonitor step (tests below also run with it absent).
+    # Jellyfin supplies the inventory; Sonarr is configured AND its optional
+    # cleanup turned on, because most cases below exercise the unmonitor step.
+    # The switch ships OFF (see the default test at the end) — every scenario
+    # that wants the step has to ask for it, exactly like a user does.
     "USE_JELLYFIN": True, "JELLYFIN_URL": "http://jf.test", "JELLYFIN_API_KEY": "jk",
     "SONARR_URL": "http://sonarr.test:8989", "SONARR_API_KEY": "k",
+    "SONARR_CLEANUP_ENABLED": True,
     "DELETE_DELAY_DAYS": 1, "RUN_MODE": "headroom", "DAILY_RUN_TIME": "00:00",
     "USE_PLEX": False,
     "TAUTULLI_URL": "", "TAUTULLI_API_KEY": "", "PLEX_URL": "", "PLEX_TOKEN": "",
@@ -409,6 +412,28 @@ A._space_threshold_state = _orig_sts
 check("the safety refusal holds the season side without a TV-specific abort",
       r["blocked_by_safety"] and r["aborted"] is None
       and not r["deleted_seasons"] and r["marked_new"] == 0, r)
+
+# ── Optional means opt-IN ───────────────────────────────────────────────────
+# Sonarr cleanup ships OFF, exactly like Optional Radarr cleanup: reaching
+# into another app's state is never something a fresh install starts doing on
+# its own. A config that predates the key reads as off too — an absent key is
+# not consent. The files still delete either way; only the unmonitor step is
+# withheld.
+check("the toggle is off on a fresh install",
+      A.load_config().get("SONARR_CLEANUP_ENABLED") is False,
+      A.load_config().get("SONARR_CLEANUP_ENABLED"))
+reset_files()
+reset_state()
+_CFG_NO_OPT = {k: v for k, v in CFG.items() if k != "SONARR_CLEANUP_ENABLED"}
+A._run_tv_cleanup_pass(_CFG_NO_OPT, execute=True)          # marks S1
+st = A._tv_cleanup_state()
+st["marked"][MARK_KEY]["marked_at"] -= 3 * 86400
+A._save_tv_cleanup_state(st)
+CALLS.clear()
+r = A._run_tv_cleanup_pass(_CFG_NO_OPT, execute=True)
+check("an absent key deletes the season without touching Sonarr's monitoring",
+      len(r["deleted_seasons"]) == 1 and not S1.exists()
+      and not any("sonarr" in u for _, u in CALLS), (r, CALLS))
 
 # ── The nomenclature guard ──────────────────────────────────────────────────
 # "TV pass" is not a thing anywhere a user reads: one cleanup, one report.

@@ -1,7 +1,19 @@
-"""Per-stage progress bar: each step fills 0→100 once. The Plex+Jellyfin
-path-resolution loop must report under the indeterminate "library" step, not
-as denominatored "scanning" progress — otherwise the Scanning bar fills twice
-(once for resolution, once for the real candidate scan)."""
+"""Per-stage progress bar: each step fills 0→100 ONCE, and never restarts.
+
+Two ways that breaks, both pinned here:
+
+  • A stage emitting the wrong shape. The Plex+Jellyfin path-resolution loop
+    must report under the indeterminate "library" step, not as denominatored
+    "scanning" progress — otherwise the Scanning bar fills twice (once for
+    resolution, once for the real candidate scan).
+  • Two writers disagreeing about WHICH RUN this is. The web app stamps the
+    start stub with a started_at and hands the same value to the engine; the
+    dashboard treats a changed started_at as a whole new run and restarts its
+    per-stage bar. When the engine minted its own instead, the very first
+    stage — Checking — visibly filled, snapped back to empty, and filled
+    again, because the app's stub and the engine's first frame disagreed by
+    the seconds between them.
+"""
 import os
 import sys
 import tempfile
@@ -55,6 +67,35 @@ check("resolution is indeterminate (no scanned/total denominator)",
 # that mislabels the phase but still carries a denominator.
 check("no denominatored progress bar anywhere in the merge",
       len(denominatored) == 0)
+
+# ── One run, one identity ───────────────────────────────────────────────────
+# The engine takes the app's stamp when it is handed one, and mints its own
+# only when nothing did (a cron or CLI run with no app in front of it).
+_STAMP = 1_700_000_000.5
+os.environ["MEDIAREDUCER_RUN_STARTED_AT"] = repr(_STAMP)
+check("the engine adopts the run identity the app handed it",
+      E._run_started_at() == _STAMP)
+for _junk in ("", "   ", "not-a-time", "0", "-5"):
+    os.environ["MEDIAREDUCER_RUN_STARTED_AT"] = _junk
+    _own = E._run_started_at()
+    if not (_own > 0 and _own != _STAMP):
+        break
+else:
+    _junk = None
+check("an absent or unusable stamp falls back to its own clock", _junk is None)
+os.environ.pop("MEDIAREDUCER_RUN_STARTED_AT", None)
+check("no stamp at all still yields a usable start time", E._run_started_at() > 0)
+
+# The app half of the same contract: the start stub REPORTS the stamp it
+# wrote, which is what the worker passes down. A stub that writes one and
+# returns nothing silently reopens the gap.
+import json  # noqa: E402
+_tmpout.config()          # a config with OUTPUT_DIR, before app's startup runs
+import app as A  # noqa: E402
+_returned = A._write_progress_start_stub(None, manual=False)
+_written = json.loads(Path(A.progress_path()).read_text()).get("started_at")
+check("the start stub returns the started_at it wrote",
+      _returned is not None and _returned == _written)
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
