@@ -208,6 +208,7 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_filter_score_sections node tests/e2e/e2e_filter_score_sections.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_reduced_effects node tests/e2e/e2e_reduced_effects.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_nothing_eligible node tests/e2e/e2e_nothing_eligible.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_slider_scroll_guard node tests/e2e/e2e_slider_scroll_guard.mjs
 
       # A Debug-mode dashboard (its own app + isolated OUTPUT_DIR): the Cleanup
       # button morphs to Debug Cleanup, which must stay enabled through status

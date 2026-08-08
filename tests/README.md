@@ -192,6 +192,7 @@ dead port so an accidental network fetch fails loudly.
 | `e2e_page_notes` | Page-level notes: still-in-effect ones pinned with no X, already-done ones dismissible underneath — and dismissed means gone |
 | `e2e_startup_mode_option` | The checkbox living inside the click-to-select Automatic Cleanup card: ticking it must not also arm the deleting mode |
 | `e2e_last_run_colon` | The Last run clock's colon ticks while a run is active and holds still when idle |
+| `e2e_slider_scroll_guard` | Scrolling a finger down a slider-heavy page never moves a slider. Sweeps every page for `input[type=range]` rather than naming them, so a slider added later is covered the day it lands: each must carry `touch-action: pan-y`, snap back (and re-fire `input`) on a vertical gesture, and still follow a horizontal drag |
 
 ## Environment
 
