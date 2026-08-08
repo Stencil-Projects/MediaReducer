@@ -390,6 +390,17 @@ Optional outbound alerts. See [Notifications](#notifications) below.
 IMDb dataset settings, display/time settings, log retention, cache tools,
 debug mode, the headroom safety cap, and **Reset MediaReducer**.
 
+**Reduce visual effects** (off by default) strips the decorative layer:
+pages switch without the entrance animation, buttons change color on hover
+and press without fading between them (and press lands on the same color as
+hover instead of a darker third), the header tabs drop their sliding
+underline and click ripple, the run pill stops pulsing, and the progress bar
+loses its stripes and sweep. Nothing that carries information goes with it —
+the underline on the current tab, every button color, the run pill itself and
+the progress percentage all stay. It applies on save, from the first paint of
+the next page. Your browser's own "reduce motion" setting already does most of
+this; the toggle is for when the browser is not set that way.
+
 ## Filtering & Scoring
 
 This tab holds every rule that decides *what* can be deleted and *in what
@@ -463,6 +474,16 @@ TV-only rules, all previewing live in the library table:
   recently *added* season — which may not be the latest), or **all seasons**.
   A continuing show's current season is always held back, and the eligibility
   filters above still apply.
+- **Season episode cap** (default 50) — a season with more episodes than this
+  is held back, whatever it scores. Not every show splits its run into
+  seasons: anime that never re-numbers, long-running dailies, and libraries
+  whose folders were flattened all present the whole show as a single season,
+  where deleting "a season" deletes the lot. An episode count no real season
+  reaches is what tells those apart — ordinary seasons top out around 26, so
+  the default leaves roughly a season of headroom before it could touch one.
+  A season whose episode count is unknown is judged by the other rules
+  instead, so a server that stops reporting counts does not shield the whole
+  library. **0** turns the cap off.
 - **TV show watch weight** (100–200%) — a season's plays convert to
   movie-watch equivalents: plays ÷ episodes × this weight, run through the
   same play curve a movie's watch count uses. At 100%, playing all 12

@@ -73,16 +73,25 @@ const shape = await p.evaluate((sels) => {
              .map(h => h.textContent.replace('!', '').trim()),
     ids: sels.filter(s => card.querySelector(s)),
     open: sels.filter(s => card.querySelector(s).classList.contains('show')),
-    // Every setting is still here — just folded away, not dropped.
+    // Every setting is still here — just folded away, not dropped. Counted
+    // as wrappers, and cross-checked against the CONTROLS: every c-* input
+    // has to sit inside one. A setting added with the wrong wrapper class
+    // looks fine and silently loses its invalid-field flag, because the
+    // validator finds the flag target with closest('.filter-score-card').
     settings: card.querySelectorAll('.filter-score-card').length,
+    unwrapped: [...card.querySelectorAll('input[id^="c-"], select[id^="c-"]')]
+                 .filter(el => !el.closest('.filter-score-card'))
+                 .map(el => el.id),
   };
 }, SECTIONS);
 check('the four groups are the four sections, in order',
       JSON.stringify(shape.names) === JSON.stringify(
         ['Cleanup scope', 'Scoring & ordering', 'Eligibility filters', 'TV show scoring']),
       shape.names);
-check('all four are in the DOM with all 12 settings — folded, not dropped',
-      shape.ids.length === 4 && shape.settings === 12, shape);
+check('all four sections are in the DOM, with the settings folded into them',
+      shape.ids.length === 4 && shape.settings >= 12, shape);
+check('...and every setting sits in a wrapper, so its invalid flag has a target',
+      shape.unwrapped.length === 0, shape.unwrapped);
 check('one starts open, the rest closed', shape.open.length === 1 && shape.open[0] === '#fs-scope',
       shape.open);
 

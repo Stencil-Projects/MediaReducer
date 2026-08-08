@@ -100,64 +100,65 @@ for (const [from, link] of [['/config', 'Filtering & Scoring'],
   check(`${from} -> ${link}: the arriving page still eases in`,
         r.entrance === 'pr-page-enter', r);
 
-  // What the entrance is, and what it does NOT get to be.
+  // What the entrance is — and not one of the numbers it is made of.
   //
-  // How long it runs, how far it travels and whether it fades are taste, and
-  // this test had opinions about all three — so tuning the animation broke it,
-  // which is a test being wrong rather than the page. What survives is the
-  // pair that has a real failure mode behind it: the whole of the page below
-  // the header rides it, not a few chosen pieces, and IF it fades it stays
-  // short and front-loaded, because a slow fade over a dark backdrop is the
-  // flash this file exists to keep away.
+  // How far it travels, how much it fades and how long it takes are taste.
+  // This test had opinions about all three, so tuning the animation broke it,
+  // which is a test being wrong rather than the page being wrong. They live in
+  // --pr-enter-rise / --pr-enter-fade / --pr-enter-time now, and what is
+  // checked is that those tokens are WIRED: each one is moved to an absurd
+  // value and the animation has to change accordingly. A knob that silently
+  // stopped driving anything — someone inlining a value back into the keyframe
+  // — is the failure this replaces the old value-pinning with, and it is the
+  // one that would actually cost an afternoon.
   //
   // Replayed from the settled page, since by now this navigation's own
   // animation has finished.
   const enter = await p.evaluate(async () => {
     const m = document.getElementById('main');
+    const root = document.documentElement;
+    const replay = async () => {
+      m.style.animation = 'none';
+      void m.offsetWidth;
+      m.style.animation = '';
+      const first = getComputedStyle(m);
+      const shot = { opacity: Number(first.opacity), transform: first.transform,
+                     dur: document.getAnimations()
+                            .filter(a => a.effect && a.effect.target === m)
+                            .map(a => a.effect.getTiming().duration)[0] };
+      await new Promise(r2 => requestAnimationFrame(r2));
+      return shot;
+    };
     // What is riding the animation: everything under the header.
     const covers = { title: !!m.querySelector('.page-title'),
                      cards: m.querySelectorAll('.card, .accordion-item').length,
                      outside: [...document.querySelectorAll('.card')]
                                 .filter(c => !m.contains(c)).length };
-    m.style.animation = 'none';
-    void m.offsetWidth;                       // replay it
-    m.style.animation = '';
-    // The effect's own easing reads 'linear' — a CSS animation's timing
-    // function lives on the keyframes, so it has to come off the style.
-    const cs0 = getComputedStyle(m);
-    const timing = { duration: (document.getAnimations()
-                       .filter(a => a.effect && a.effect.target === m)
-                       .map(a => a.effect.getTiming().duration)[0]),
-                     easing: cs0.animationTimingFunction };
-    const seen = [];
-    for (let i = 0; i < 30; i++) {
-      const s = getComputedStyle(m);
-      seen.push([Number(s.opacity), s.transform]);
-      await new Promise(r2 => requestAnimationFrame(r2));
-    }
-    return { covers, timing: { dur: timing.duration, easing: timing.easing },
-             first: seen[0], opacities: seen.map(s => s[0]),
-             moved: seen.some(s => s[1] !== 'none' && s[1] !== seen.at(-1)[1]) };
+    const base = await replay();
+    // One token at a time, each to a value nothing would pick, then put back.
+    const knob = async (name, value) => {
+      root.style.setProperty(name, value);
+      const got = await replay();
+      root.style.removeProperty(name);
+      return got;
+    };
+    return { covers, base,
+             rise: await knob('--pr-enter-rise', '400px'),
+             fade: await knob('--pr-enter-fade', '0'),
+             time: await knob('--pr-enter-time', '9s') };
   });
   check(`${from} -> ${link}: the page's whole contents ride the entrance`,
         enter.covers.title && enter.covers.cards >= 1 && enter.covers.outside === 0,
         enter.covers);
-  check(`${from} -> ${link}: ...and it moves them`, enter.moved === true, enter.first[1]);
-  // A fade is optional. When there is one, it is on a clock: while the content
-  // is transparent the arriving page paints DARKER than it settles (28.9 of
-  // 255 against 38.5 — the backdrop is dark), and a browser may put one blank
-  // frame ahead of it, so landing dim after a pale frame is the flash. Time to
-  // reach 92% of settled brightness, measured through a real navigation: a
-  // plain ease-out over .28s never did inside 150ms; a steep bezier took 43ms
-  // at .24s and 85ms at .38s. Hence the pairing — fade freely, but not slowly,
-  // and not on a keyword ease. Pinned as the shape of the curve rather than
-  // sampled brightness, which no headless run can measure the way a screen
-  // recording did.
-  const fades = enter.opacities.some(o => o < 0.99);
-  check(`${from} -> ${link}: a fading entrance stays short and front-loaded`,
-        !fades || (enter.timing.dur <= 450
-                   && /cubic-bezier/.test(String(enter.timing.easing))),
-        { fades, ...enter.timing });
+  check(`${from} -> ${link}: --pr-enter-rise sets how far it travels`,
+        enter.rise.transform !== enter.base.transform
+        && /400/.test(enter.rise.transform), [enter.base.transform, enter.rise.transform]);
+  check(`${from} -> ${link}: --pr-enter-fade sets what it fades from`,
+        enter.fade.opacity === 0 && enter.fade.opacity !== enter.base.opacity,
+        [enter.base.opacity, enter.fade.opacity]);
+  check(`${from} -> ${link}: --pr-enter-time sets how long it takes`,
+        enter.time.dur === 9000 && enter.time.dur !== enter.base.dur,
+        [enter.base.dur, enter.time.dur]);
 }
 
 check('no JS errors', errs.length === 0, errs);

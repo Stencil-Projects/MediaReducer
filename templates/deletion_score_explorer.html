@@ -539,6 +539,19 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
             <div class="filter-score-help">Which of a show's seasons may delete. "Newest" = most recently added, even if it isn't the latest season. A continuing show's current season is always held back.</div>
           </div>
           <div class="filter-score-card">
+            <label class="input-label" for="c-tv-eps-cap">Season episode cap</label>
+            <div class="input-group">
+              <input type="number" class="form-control" id="c-tv-eps-cap" value="50"
+                     min="0" max="999" step="1" inputmode="numeric"
+                     onkeydown="if(['.',',','e','E'].includes(event.key))event.preventDefault()"
+                     oninput="onExpFilterInput()" onblur="_expValidateField('c-tv-eps-cap')"
+                     aria-describedby="c-tv-eps-cap-error">
+              <span class="input-group-text">eps</span>
+            </div>
+            <div id="c-tv-eps-cap-error" class="field-error">Must be 0–999 episodes (0 turns it off).</div>
+            <div class="filter-score-help">Seasons with more episodes than this are held back, whatever they score. A show filed entirely under one season number would otherwise be deleted whole; a real season rarely passes 26. 0 = no cap.</div>
+          </div>
+          <div class="filter-score-card">
             <label class="input-label" for="c-tv-weight">TV show watch weight</label>
             <div class="score-balance-labels">
               <span>Plays = episodes counts as</span>
@@ -817,6 +830,7 @@ function canonCfg(c){
     TVBUMP:clamp(Math.round((Number(c.TVBUMP ?? 10)||0)*10)/10,0,25),
     TVWEIGHT:clamp(Math.round(Number(c.TVWEIGHT ?? 100)||100),100,200),
     TVELIG:['oldest','except_newest','all'].includes(c.TVELIG)?c.TVELIG:'oldest',
+    TVEPCAP:clamp(Math.round(Number(c.TVEPCAP ?? 50)||0),0,999),
   };
 }
 function readCfg(){
@@ -836,6 +850,7 @@ function readCfg(){
     TVBUMP:num('c-tv-bump',10),
     TVWEIGHT:num('c-tv-weight',100),
     TVELIG:document.getElementById('c-tv-elig')?.value,
+    TVEPCAP:num('c-tv-eps-cap',50),
   });
 }
 function cfgFromServer(cfg){
@@ -852,6 +867,7 @@ function cfgFromServer(cfg){
     TVBUMP:cfg.TV_SERIES_WATCH_BUMP===undefined?10:cfg.TV_SERIES_WATCH_BUMP,
     TVWEIGHT:cfg.TV_WATCH_WEIGHT===undefined?100:cfg.TV_WATCH_WEIGHT,
     TVELIG:cfg.TV_SEASON_ELIGIBILITY,
+    TVEPCAP:cfg.TV_MAX_SEASON_EPISODES===undefined?50:cfg.TV_MAX_SEASON_EPISODES,
   });
 }
 function cfgPayload(c){
@@ -869,6 +885,7 @@ function cfgPayload(c){
     TV_SERIES_WATCH_BUMP:c.TVBUMP,
     TV_WATCH_WEIGHT:c.TVWEIGHT,
     TV_SEASON_ELIGIBILITY:c.TVELIG,
+    TV_MAX_SEASON_EPISODES:c.TVEPCAP,
   };
 }
 function cfgEq(a,b){
@@ -876,7 +893,8 @@ function cfgEq(a,b){
   return a.MOVIES_ON===b.MOVIES_ON&&a.TV_ON===b.TV_ON
     &&a.BAL===b.BAL&&a.CUTOFF===b.CUTOFF&&a.UNPLAYED===b.UNPLAYED
     &&a.GRACE===b.GRACE&&a.JF_FAV===b.JF_FAV&&a.TIE===b.TIE&&a.STALE===b.STALE
-    &&a.TVBUMP===b.TVBUMP&&a.TVWEIGHT===b.TVWEIGHT&&a.TVELIG===b.TVELIG;
+    &&a.TVBUMP===b.TVBUMP&&a.TVWEIGHT===b.TVWEIGHT&&a.TVELIG===b.TVELIG
+    &&a.TVEPCAP===b.TVEPCAP;
 }
 function setFormFromCfg(c){
   c=canonCfg(c);
@@ -898,6 +916,7 @@ function setFormFromCfg(c){
   set('c-tv-bump',el=>el.value=c.TVBUMP);
   set('c-tv-weight',el=>el.value=c.TVWEIGHT);
   set('c-tv-elig',el=>el.value=c.TVELIG);
+  set('c-tv-eps-cap',el=>el.value=c.TVEPCAP);
   _syncTvKnobBadges();
   _expValidateAll();
 }
@@ -918,6 +937,7 @@ const _expFieldRules={
   'c-cutoff':{on:()=>!!document.getElementById('c-cutoff-on')?.checked&&!document.getElementById('c-cutoff')?.disabled,ok:v=>v>0&&v<=10},
   'c-tie':{on:()=>!!document.getElementById('c-tie-on')?.checked&&!document.getElementById('c-tie')?.disabled,ok:v=>v>=0.5&&v<=25},
   'c-stale':{on:()=>!document.getElementById('c-stale')?.disabled,ok:v=>v>=1&&v<=120},
+  'c-tv-eps-cap':{on:()=>!document.getElementById('c-tv-eps-cap')?.disabled,ok:v=>v>=0&&v<=999&&Number.isInteger(v)},
 };
 function _expFieldInvalid(id){
   const rule=_expFieldRules[id];
@@ -939,10 +959,10 @@ function _expValidateField(id){
   return !invalid;
 }
 function _expValidateAll(){
-  return ['c-cutoff','c-tie','c-stale'].map(_expValidateField).every(Boolean);
+  return ['c-cutoff','c-tie','c-stale','c-tv-eps-cap'].map(_expValidateField).every(Boolean);
 }
 function _expAnyFieldInvalid(){
-  return ['c-cutoff','c-tie','c-stale'].some(_expFieldInvalid);
+  return ['c-cutoff','c-tie','c-stale','c-tv-eps-cap'].some(_expFieldInvalid);
 }
 let _filterTableTimer=null;
 function onExpFilterInput(){
@@ -1183,7 +1203,7 @@ function scoreOne(m,cfg){
   else sc.status='ok';
   return sc;
 }
-const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed',tv_off:'TV cleanup off',tv_oos:'off monitored paths',tv_latest:'latest season',tv_not_oldest:'not the oldest season',tv_newest:'newest season'};
+const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed',tv_off:'TV cleanup off',tv_oos:'off monitored paths',tv_latest:'latest season',tv_not_oldest:'not the oldest season',tv_newest:'newest season',tv_bigseason:'over the episode cap'};
 // One TV SEASON's eligibility, mirroring _tv_season_plan's exclusion ladder:
 // seasons are IN the pool, so an unfiltered season is eligible and ranks in
 // the same deletion order as the movies. Whole-series shields first (scope,
@@ -1199,6 +1219,11 @@ function seasonStatus(m,cfg){
   if(imdbInUse(cfg)&&m.rating==null)return 'nodata';
   if(cfg.CUTOFF!=null&&m.rating!=null&&m.rating>cfg.CUTOFF)return 'cutoff';
   if(m.latestOfContinuing)return 'tv_latest';
+  // Above the cap the row is a whole show filed under one season number,
+  // not a season. Ranked above the eligibility rule for the same reason the
+  // plan ranks it there: a flattened show IS its own oldest season, so
+  // "waiting its turn" would be the wrong thing to read.
+  if(cfg.TVEPCAP>0&&(m.seasonEps||0)>cfg.TVEPCAP)return 'tv_bigseason';
   if(cfg.TVELIG==='oldest'&&!m.isOldestSeason)return 'tv_not_oldest';
   if(cfg.TVELIG==='except_newest'&&m.isNewestSeason)return 'tv_newest';
   // Grace on the SEASON's own added date (its newest episode file), falling
@@ -1266,6 +1291,7 @@ const FILTER_REASONS={
   tv_latest:'The latest season of a show not known to be ended — the household may be keeping up with it',
   tv_not_oldest:'Season eligibility is "only the oldest season" — this one waits its turn',
   tv_newest:'Season eligibility holds back the show\'s most recently added season',
+  tv_bigseason:'More episodes than the season episode cap — a show filed under one season number, not a season',
 };
 function fmtV(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':n.toLocaleString();}
 function fmtE(m){return m<1?'< 1 mo':m<2?'1 mo ago':m<12?Math.round(m)+' mo ago':m<24?'1 yr ago':Math.floor(m/12)+'+ yr ago';}

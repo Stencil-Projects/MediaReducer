@@ -1310,6 +1310,18 @@
                 <hr class="config-divider my-2">
               </div>
               <div class="col-12">
+                <div class="input-label">Appearance</div>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="REDUCE_VISUAL_EFFECTS"
+                         name="REDUCE_VISUAL_EFFECTS" {{ 'checked' if config.REDUCE_VISUAL_EFFECTS else '' }}>
+                  <label class="form-check-label" for="REDUCE_VISUAL_EFFECTS">Reduce visual effects</label>
+                </div>
+                <div class="form-text">Pages switch without the entrance animation, buttons change color on hover and press without fading, the header tabs drop their sliding underline and click ripple, and the progress bar loses its stripes. Nothing that carries information is hidden — colors, the underline on the current tab, and the percentage all stay. Applies on save.</div>
+              </div>
+              <div class="col-12">
+                <hr class="config-divider my-2">
+              </div>
+              <div class="col-12">
                 <div class="d-flex align-items-center gap-3 flex-wrap">
                   <div class="form-check">
                     <input class="form-check-input" type="checkbox" id="DEBUG_MODE"
@@ -2150,6 +2162,7 @@ function _canonicalConfig(cfg) {
     IMDB_RATINGS_MAX_AGE_DAYS: _numOrNull(cfg.IMDB_RATINGS_MAX_AGE_DAYS),
     LOG_RETENTION_DAYS: (cfg.LOG_RETENTION_DAYS ?? 30),
     KEEP_INTERRUPTED_LOGS: !!cfg.KEEP_INTERRUPTED_LOGS,
+    REDUCE_VISUAL_EFFECTS: !!cfg.REDUCE_VISUAL_EFFECTS,
     DEBUG_MODE: !!cfg.DEBUG_MODE,
     TIME_ZONE: _str(cfg.TIME_ZONE || 'auto'),
     DISPLAY_TIME_FORMAT: _str(cfg.DISPLAY_TIME_FORMAT || '12h'),
@@ -2224,7 +2237,7 @@ function _configsMatch(a, b) {
 
 const SECTION_DEFAULT_FIELDS = {
   space: ['HEADROOM_GB', 'REDLINE_GB', 'REDLINE_ONLY_MODE', 'MAX_LIBRARY_GB', 'DELETE_DELAY_DAYS'],
-  advanced: ['IMDB_RATINGS_URL', 'IMDB_RATINGS_MAX_AGE_DAYS', 'LOG_RETENTION_DAYS', 'KEEP_INTERRUPTED_LOGS', 'DEBUG_MODE', 'MAX_HEADROOM_PCT'],
+  advanced: ['IMDB_RATINGS_URL', 'IMDB_RATINGS_MAX_AGE_DAYS', 'LOG_RETENTION_DAYS', 'KEEP_INTERRUPTED_LOGS', 'REDUCE_VISUAL_EFFECTS', 'DEBUG_MODE', 'MAX_HEADROOM_PCT'],
   notifications: _NOTIFY_KEYS,
 };
 
@@ -2617,6 +2630,7 @@ function populateForm(cfg) {
   sv('IMDB_RATINGS_MAX_AGE_DAYS', cfg.IMDB_RATINGS_MAX_AGE_DAYS);
   sv('LOG_RETENTION_DAYS', cfg.LOG_RETENTION_DAYS ?? 30);
   sc('KEEP_INTERRUPTED_LOGS', cfg.KEEP_INTERRUPTED_LOGS);
+  sc('REDUCE_VISUAL_EFFECTS', cfg.REDUCE_VISUAL_EFFECTS);
   sc('DEBUG_MODE', cfg.DEBUG_MODE);
   sv('TIME_ZONE', cfg.TIME_ZONE || 'auto');
   sv('DISPLAY_TIME_FORMAT', cfg.DISPLAY_TIME_FORMAT || '12h');
@@ -2704,6 +2718,7 @@ function getFormConfig() {
     IMDB_RATINGS_MAX_AGE_DAYS:    Math.max(1, parseInt(v('IMDB_RATINGS_MAX_AGE_DAYS')) || 7),
     LOG_RETENTION_DAYS:           Math.max(0, parseInt(v('LOG_RETENTION_DAYS')) || 0),
     KEEP_INTERRUPTED_LOGS:        chk('KEEP_INTERRUPTED_LOGS'),
+    REDUCE_VISUAL_EFFECTS:        chk('REDUCE_VISUAL_EFFECTS'),
     DEBUG_MODE:                   chk('DEBUG_MODE'),
     TIME_ZONE:                    (v('TIME_ZONE').trim() || 'auto'),
     DAILY_RUN_TIME:               (v('DAILY_RUN_TIME').trim() || '00:00'),

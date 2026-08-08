@@ -894,6 +894,13 @@
       0% { transform:translateX(-100%); }
       100% { transform:translateX(100%); }
     }
+    /* Reduce visual effects: the stripes and the sweep are the fill saying
+       "still working" through a percentage that is not moving. Stopping their
+       animation would leave the stripes painted on as a static barber pole
+       and the sweep frozen as a bright band, so both are removed outright —
+       the percentage and the stage line carry the same news in words. */
+    :root[data-effects="off"] .rp-bar.is-running { background-image:none; }
+    :root[data-effects="off"] .rp-bar.is-running::after { display:none; }
     .rp-bar.is-done { background:var(--text-accent); }
     .rp-current { font-size:.76rem; color:var(--text-muted); margin-top:7px; min-height:1.1em; }
     .rp-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin-top:14px; }

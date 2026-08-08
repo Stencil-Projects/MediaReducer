@@ -203,5 +203,61 @@ d2_nb = next(e for e in nobump["order"] if (e["title"], e["season"]) == ("Dead S
 check("the bump knob at 0 removes the series lift", d2_nb["score"] < d2["score"],
       (d2_nb["score"], d2["score"]))
 
+# ── The season episode cap ──────────────────────────────────────────────────
+# Not every show splits its run into seasons. Anime that never re-numbers,
+# long-running dailies, a library whose folders were flattened: the whole show
+# arrives as one season, and deleting "a season" deletes all of it. The cap is
+# the one thing that tells those apart from a real season — an episode count no
+# real season reaches. Ordinary seasons run to about 26, so the shipped 50 has
+# roughly a season of headroom before it could touch one.
+def flat_rows(eps):
+    return [series("Flat Show", [season(1, eps=eps, size=200 * GB)])]
+
+capped = A._tv_season_plan(flat_rows(400), CFG, now=NOW)
+check("a 400-episode season is held back by the shipped cap",
+      not capped["order"] and capped["excluded"]["oversized_season"] == 1,
+      capped["excluded"])
+normal = A._tv_season_plan(flat_rows(24), CFG, now=NOW)
+check("...while an ordinary 24-episode season is untouched by it",
+      [e["season"] for e in normal["order"]] == [1]
+      and normal["excluded"]["oversized_season"] == 0, normal["excluded"])
+edge = A._tv_season_plan(flat_rows(50), dict(CFG, TV_MAX_SEASON_EPISODES=50), now=NOW)
+check("the cap is a ceiling, not a limit: exactly 50 still deletes",
+      [e["season"] for e in edge["order"]] == [1], edge["excluded"])
+over = A._tv_season_plan(flat_rows(51), dict(CFG, TV_MAX_SEASON_EPISODES=50), now=NOW)
+check("...and 51 does not", not over["order"], over["excluded"])
+
+# Negative control for the default itself: with the cap OFF the same row is
+# eligible, so the check above is the cap acting and not some other rung.
+off = A._tv_season_plan(flat_rows(400), dict(CFG, TV_MAX_SEASON_EPISODES=0), now=NOW)
+check("0 turns the cap off — the same season is then eligible",
+      [e["season"] for e in off["order"]] == [1]
+      and off["excluded"]["oversized_season"] == 0, off["excluded"])
+
+# A config written before this setting existed still gets the protection. The
+# shield only ever holds deletions back, so absent must mean the shipped
+# default, not "no cap" — 0 is the off switch and 0 is a value someone chose.
+no_key = {k: v for k, v in CFG.items() if k != "TV_MAX_SEASON_EPISODES"}
+check("a config with no cap key still gets the shipped default",
+      A._tv_season_plan(flat_rows(400), no_key, now=NOW)["excluded"]["oversized_season"] == 1)
+
+# Unknown is not oversized. A server that stops reporting episode counts would
+# otherwise shield the entire library at once — the failure mode of a shield
+# that fires on missing data.
+blank = A._tv_season_plan(
+    [series("No Counts", [dict(season(1), eps=0)], s_eps=0)], CFG, now=NOW)
+check("a season with no episode count is judged by the other rules, not the cap",
+      [e["season"] for e in blank["order"]] == [1]
+      and blank["excluded"]["oversized_season"] == 0, blank["excluded"])
+
+# The cap outranks the season-eligibility rule, and that ordering is the point:
+# a flattened show IS its own oldest season, so under oldest-only it would
+# report "waiting its turn" — a reason that reads as "later", for something
+# that must never happen.
+both = A._tv_season_plan(flat_rows(400), dict(CFG, TV_SEASON_ELIGIBILITY="oldest"), now=NOW)
+check("an oversized season reports its size, not the eligibility rule",
+      both["excluded"]["oversized_season"] == 1 and both["excluded"]["season_rule"] == 0,
+      both["excluded"])
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

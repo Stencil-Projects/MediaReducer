@@ -416,6 +416,13 @@ def _time_zone_options() -> list[str]:
 # plain version when anything sorts them.
 APP_VERSION = "1.0.0-alpha.10"
 
+# Episodes above which a "season" is really a whole show filed under one
+# number. Named here because two places need the same fallback: the settings
+# resolver, when a config predates the key, and the page that renders the
+# field. Set well clear of a real season — the longest ordinary ones run to
+# about 26 — so raising it is a choice, never a rescue from false positives.
+TV_MAX_SEASON_EPISODES_DEFAULT = 50
+
 # Host clock, captured before any TIME_ZONE override is applied so switching the
 # setting back to auto can restore it.
 _HOST_TZ = os.environ.get("TZ")
@@ -617,6 +624,10 @@ _CONFIG_NUM_RULES = (
     ("NEAR_TIE_PTS", "blank", lambda n: 0.5 <= n <= 25, "must be a number from 0.5 to 25 points, or null"),
     ("TV_SERIES_WATCH_BUMP", None, lambda n: 0 <= n <= 25, "must be a number of points from 0 to 25"),
     ("TV_WATCH_WEIGHT", None, lambda n: 100 <= n <= 200, "must be a percentage from 100 to 200"),
+    # 0 is the off switch: no season is ever too big. The GUI writes it, so
+    # unlike DELETE_DELAY_DAYS's 0 this is a real value, not a lockout.
+    ("TV_MAX_SEASON_EPISODES", None, lambda n: 0 <= n <= 999 and float(n).is_integer(),
+     "must be a whole number of episodes from 0 to 999 (0 turns it off)"),
     ("MAX_STALENESS_MONTHS", None, lambda n: 1 <= n <= 120, "must be a number of months from 1 to 120"),
 )
 
@@ -663,7 +674,7 @@ def _config_file_issues(saved: dict) -> list[dict]:
                 "USE_JELLYFIN", "KEEP_INTERRUPTED_LOGS", "DEBUG_MODE",
                 "REDLINE_ONLY_MODE", "PAUSE_CLEANUP_ON_STARTUP",
                 "MOVIE_CLEANUP_ENABLED", "TV_CLEANUP_ENABLED",
-                "SONARR_CLEANUP_ENABLED"):
+                "SONARR_CLEANUP_ENABLED", "REDUCE_VISUAL_EFFECTS"):
         if key in saved and not isinstance(saved[key], bool):
             bad(key, "must be true or false")
     # "off" = the scheduler is fully paused (no ticks do anything); "paused" =
@@ -1696,6 +1707,10 @@ def inject_display_time_settings():
         "connection_onboarding_needed": _connection_onboarding_needed(cfg),
         "api_connection_error": _api_connection_error(cfg),
         "debug_mode": bool(cfg.get("DEBUG_MODE")),
+        # Stamped on <html> by base.html so the very first paint is already
+        # plain — a page that animated once and then settled would defeat the
+        # point of asking for no animation.
+        "reduce_effects": bool(cfg.get("REDUCE_VISUAL_EFFECTS")),
         "welcome_needed": _welcome_guide_needed(cfg),
         # First-launch only: adopt the browser's time zone (client posts it to
         # /api/timezone/init). True only on a brand-new install still on "auto"
@@ -4132,6 +4147,9 @@ def _season_score_settings(cfg: dict) -> dict:
     bump = _config_num(cfg.get("TV_SERIES_WATCH_BUMP"))
     weight = _config_num(cfg.get("TV_WATCH_WEIGHT"))
     cutoff = _config_num(cfg.get("MAX_IMDB_RATING"))
+    eps_cap = _config_num(cfg.get("TV_MAX_SEASON_EPISODES"))
+    if eps_cap is None:
+        eps_cap = float(TV_MAX_SEASON_EPISODES_DEFAULT)
     return {
         "history_weight": 1.0 - quality_weight,
         "quality_weight": quality_weight,
@@ -4150,6 +4168,16 @@ def _season_score_settings(cfg: dict) -> dict:
         "season_eligibility": (str(cfg.get("TV_SEASON_ELIGIBILITY") or "oldest").lower()
                                if str(cfg.get("TV_SEASON_ELIGIBILITY") or "oldest").lower()
                                in ("oldest", "except_newest", "all") else "oldest"),
+        # Above this many episodes a season is not a season — it is a show
+        # filed under one number, and deleting it deletes the show. See the
+        # ladder in _tv_season_plan for why it is a shield rather than a
+        # scoring input.
+        #
+        # A MISSING key takes the shipped default rather than "no cap": this
+        # shield only ever holds deletions back, so a config written before it
+        # existed should get it. 0 is the off switch, and 0 is a value someone
+        # chose — absent is not.
+        "max_season_episodes": (int(eps_cap) if eps_cap and eps_cap > 0 else None),
     }
 
 
@@ -4179,7 +4207,7 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
 
     order = []
     excluded = {"off_path": 0, "protected": 0, "favorite": 0,
-                "latest_of_continuing": 0, "season_rule": 0,
+                "latest_of_continuing": 0, "oversized_season": 0, "season_rule": 0,
                 "recently_added": 0, "high_rated": 0, "no_imdb_data": 0,
                 "unplayed": 0}
     for r in tv_rows:
@@ -4236,6 +4264,21 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
         for s in seasons:
             if continuing and (s.get("n") or 0) == latest_n:
                 excluded["latest_of_continuing"] += 1
+                continue
+            # A show whose seasons are not split — everything filed under one
+            # number — presents its whole run as a single season, and deleting
+            # that deletes the show. Anime that never re-numbers, long-running
+            # dailies, a library that flattened its folders. The cap catches
+            # them by the one thing that distinguishes them: an episode count
+            # no real season has. Ranked ABOVE the season-eligibility rule so
+            # a flattened show, which is by definition its own oldest season,
+            # reports the size and not "waiting its turn".
+            #
+            # A season with no episode count is not judged: unknown is not
+            # oversized, and a shield that fires on missing data would hold
+            # back everything the moment a server stopped reporting.
+            if ss["max_season_episodes"] and (s.get("eps") or 0) > ss["max_season_episodes"]:
+                excluded["oversized_season"] += 1
                 continue
             if ss["season_eligibility"] == "oldest" and (s.get("n") or 0) != oldest_n:
                 excluded["season_rule"] += 1
@@ -6367,6 +6410,7 @@ def api_debug_cache():
                          f"{len(porder)} seasons | {total_gb:,.1f} GB in the order | "
                          f"held back: {pex['protected']} protected, {pex['favorite']} favorited, "
                          f"{pex['latest_of_continuing']} latest-of-continuing, "
+                         f"{pex['oversized_season']} over the episode cap, "
                          f"{pex['season_rule']} by the season-eligibility rule, "
                          f"{pex['off_path']} off-path")
             lp = tv_state.get("last_pass") if isinstance(tv_state.get("last_pass"), dict) else None
@@ -8852,6 +8896,8 @@ def _score_page_config(cfg: dict) -> dict:
         "TV_SERIES_WATCH_BUMP": cfg.get("TV_SERIES_WATCH_BUMP", 10),
         "TV_WATCH_WEIGHT": cfg.get("TV_WATCH_WEIGHT", 100),
         "TV_SEASON_ELIGIBILITY": cfg.get("TV_SEASON_ELIGIBILITY", "oldest"),
+        "TV_MAX_SEASON_EPISODES": cfg.get("TV_MAX_SEASON_EPISODES",
+                                         TV_MAX_SEASON_EPISODES_DEFAULT),
         "GRACE_PERIOD_DAYS": cfg.get("GRACE_PERIOD_DAYS", 0),
         "PROTECT_JELLYFIN_FAVORITES": bool(cfg.get("PROTECT_JELLYFIN_FAVORITES")),
         "NEAR_TIE_PTS": cfg.get("NEAR_TIE_PTS", 2),
@@ -9329,6 +9375,15 @@ def api_save_score_config():
             if elig not in ("oldest", "except_newest", "all"):
                 raise ValueError("Season eligibility must be one of the listed options.")
             updates["TV_SEASON_ELIGIBILITY"] = elig
+
+        if "TV_MAX_SEASON_EPISODES" in payload:
+            try:
+                cap_val = int(float(payload.get("TV_MAX_SEASON_EPISODES")))
+            except (TypeError, ValueError):
+                raise ValueError("The season episode cap must be a whole number of episodes.")
+            if not 0 <= cap_val <= 999:
+                raise ValueError("The season episode cap must be 0\u2013999 episodes (0 turns it off).")
+            updates["TV_MAX_SEASON_EPISODES"] = cap_val
 
         if "MAX_STALENESS_MONTHS" in payload:
             try:
@@ -9971,6 +10026,7 @@ def api_save_config():
             return jsonify({"ok": False, "error": "Keep run logs for (days) must be a whole number (0 = keep forever)."}), 400
         cfg["KEEP_INTERRUPTED_LOGS"] = bool(cfg.get("KEEP_INTERRUPTED_LOGS"))
         cfg["DEBUG_MODE"] = bool(cfg.get("DEBUG_MODE"))
+        cfg["REDUCE_VISUAL_EFFECTS"] = bool(cfg.get("REDUCE_VISUAL_EFFECTS"))
 
         # Notifications (outbound alerting). A partial/scripted POST that omits
         # these keeps whatever was saved; bad service URLs never block a save —

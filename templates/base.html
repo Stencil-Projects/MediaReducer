@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en" data-bs-theme="dark"{{ ' data-effects="off"'|safe if reduce_effects else '' }}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -38,6 +38,12 @@
       --pr-anim-out: .18s ease;
       --pr-pulse-period: 1.5s;
       --pr-spin-period: .8s;
+      /* The page entrance, in three numbers — the whole of what a navigation
+         looks like. Tune them here; see the keyframe below for what each does
+         and what a slow deep fade costs. */
+      --pr-enter-rise: 8px;    /* how far the content slides up into place */
+      --pr-enter-fade: .15;    /* the opacity it starts from; 1 = no fade */
+      --pr-enter-time: .7s;    /* how long the whole thing takes */
       /* Muted glass palette, paired to the light reference theme. */
       --surface-0:     #12161d;  /* deepest inset surfaces */
       --surface-1:     rgba(30,35,43,.88);  /* glass cards */
@@ -264,6 +270,99 @@
       *, *::before, *::after { transition: none !important; animation: none !important; }
     }
 
+    /* ═══════ Visual effects off ═══════
+       An Advanced setting (Reduce visual effects), stamped on <html> by the
+       server so the FIRST paint is already plain — a page that animated once
+       and then settled would defeat the point of asking for no animation.
+       Off by default.
+
+       The same blanket as reduced motion, which covers most of it: the page
+       entrance, hover and press fades, the run badge's pulse, the toasts, the
+       progress bar's stripes and sweep. Nothing changes color or position by
+       a different amount — it changes at once instead of over 150ms.
+
+       What a blanket cannot do is the handful of effects that are ELEMENTS
+       rather than animations. Killing their animation alone would freeze each
+       one mid-effect: the tab wave would sit as a permanent gradient, the
+       sliding underline would strand itself under whichever tab was hovered
+       last. Those are removed outright below, and what they were drawn over
+       has to come back — hence the static underline being restored. */
+    :root[data-effects="off"] *,
+    :root[data-effects="off"] *::before,
+    :root[data-effects="off"] *::after {
+      transition: none !important;
+      animation: none !important;
+    }
+    /* The sliding underline is a JS-created bar (initTabIndicator does not run
+       at all in this mode, so this is the belt to that braces) — and with it
+       gone, the per-tab border-bottom that it suppresses has to come back, or
+       the current tab is left unmarked. */
+    :root[data-effects="off"] .header-tab-indicator { display: none !important; }
+    :root[data-effects="off"] .header-tabs.has-indicator a.active {
+      border-bottom-color: var(--text-accent) !important;
+    }
+    :root[data-effects="off"] .header-tabs.has-indicator a.active.config-needs-onboarding {
+      border-bottom-color: var(--text-danger) !important;
+    }
+    /* The click wave, and the underline it left behind while navigating: both
+       are the effect, not information — the page arriving is the feedback. */
+    :root[data-effects="off"] .header-tabs a.is-navigating::after,
+    :root[data-effects="off"] .header-tabs a.is-arriving::after {
+      display: none !important;
+    }
+    :root[data-effects="off"] .header-tabs a.is-navigating:not(.active) {
+      color: var(--text-muted);
+      border-bottom-color: transparent;
+    }
+    /* Hover stays — it says the thing is clickable — it just lands at once
+       instead of over 150ms. Press lands on the SAME color as hover rather
+       than a third, darker one, per family: --press-* cannot simply be
+       redefined as --hover-*, because each --hover-* is derived FROM its
+       --press-* (hover is the midpoint between rest and press), so aliasing
+       them makes both circular and neither resolves. Each family's press is
+       pointed at its own hover value instead, matching the blocks above.
+       The raised/sunk shadows go with them: a press that neither moves nor
+       recolors should not still be pressing a hole in the surface. */
+    :root[data-effects="off"] .btn-success:active,
+    :root[data-effects="off"] .btn-success.active,
+    :root[data-effects="off"] .btn-success.show,
+    :root[data-effects="off"] .btn-success:first-child:active {
+      background: var(--hover-save) !important;
+      border-color: var(--hover-save) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn-outline-primary:active,
+    :root[data-effects="off"] .btn-outline-primary.active,
+    :root[data-effects="off"] .btn-outline-primary.show,
+    :root[data-effects="off"] .btn-outline-primary:first-child:active {
+      background: var(--hover-primary) !important;
+      border-color: var(--hover-primary) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn-outline-warning:active,
+    :root[data-effects="off"] .btn-outline-warning.active,
+    :root[data-effects="off"] .btn-outline-warning.show,
+    :root[data-effects="off"] .btn-outline-warning:first-child:active {
+      background: var(--hover-warning) !important;
+      border-color: var(--hover-warning) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled):active,
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled).active,
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled).show,
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled):first-child:active,
+    :root[data-effects="off"] .btn-icon:not(:disabled):active,
+    :root[data-effects="off"] .theme-toggle:active {
+      background: var(--hover-neutral) !important;
+      border-color: var(--hover-neutral) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn:not(.btn-close):active,
+    :root[data-effects="off"] .btn-icon:active:not(:disabled),
+    :root[data-effects="off"] .theme-toggle:active {
+      box-shadow: var(--btn-shadow-hover);
+    }
+
     /* Page entrance, and the whole of what a navigation looks like: everything
        below the header — title bar, actions and every card — rises into place
        once per load, so switching between pages eases in instead of popping.
@@ -276,22 +375,38 @@
        any fixed-position descendant).
        (Reduced-motion users get none of this via the kill switch above.)
 
-       How long it runs and how far it travels are taste. Whether it also FADES
-       is not free, and that is why this one doesn't: the page behind #main is
-       dark, so while the content is transparent the arriving page paints
-       DARKER than it settles — 28.9 of 255 against 38.5 — and a browser may
-       put one blank frame between two documents (Chromium holds the old pixels
-       and shows none; other Chromium builds paint their own canvas color).
-       Landing dim right after a pale frame is what reads as a flash. Measured
-       through a real navigation, time to reach 92% of settled brightness with
-       the fade on: a plain ease-out over .28s never did inside 150ms; this
-       curve took 43ms at .24s and 85ms at .38s. So a fade can come back, but
-       it has to be short and front-loaded — at this duration it would leave
-       the page visibly dim for a third of a second. */
+       All three numbers are tokens (--pr-enter-* at the top of this file), so
+       the whole entrance is tuned in one place and nothing here needs editing
+       to change how it feels.
+
+       What each costs, so a value can be picked rather than guessed:
+
+         --pr-enter-rise  free. Transform animation is compositor work.
+         --pr-enter-time  the window the other two are spent over.
+         --pr-enter-fade  the one that is not free. The page behind #main is
+           dark, so while the content is under full opacity the arriving page
+           paints DARKER than it settles — measured 28.9 of 255 against 38.5
+           at a full fade — and a browser may put one blank frame between two
+           documents (Chromium holds the old pixels and shows none; other
+           Chromium builds paint their own canvas color). Landing dim right
+           after a pale frame is what reads as a flash. Time to reach 92% of
+           settled brightness through a real navigation: a plain ease-out over
+           .28s never did inside 150ms; this curve took 43ms at .24s and 85ms
+           at .38s. Starting nearer 1, or over a shorter time, spends less of
+           that. `1` opts out of the fade entirely and costs nothing.
+
+       Note the curve is deliberately front-loaded rather than a keyword ease:
+       it is what keeps most of the fade out of the way early, and it is why a
+       longer --pr-enter-time is affordable at all. */
     @keyframes pr-page-enter {
-      from { opacity: 15; transform: translateY(8px); }
+      from {
+        opacity: var(--pr-enter-fade);
+        transform: translateY(var(--pr-enter-rise));
+      }
     }
-    #main { animation: pr-page-enter .70s cubic-bezier(.16,.9,.3,1) backwards; }
+    #main {
+      animation: pr-page-enter var(--pr-enter-time) cubic-bezier(.16,.9,.3,1) backwards;
+    }
 
     /* Navigation deliberately does NOT use a cross-document view transition.
        One was tried, to hold the header still while the pages changed, and it
@@ -3128,10 +3243,17 @@ window.prSetConfigTabError = function (on) {
   if (on) tab.title = 'Fix the API connection settings';
   else tab.removeAttribute('title');
 };
+// One question for every decorative effect below: has the user asked for a
+// plain interface (Advanced -> Reduce visual effects)? The CSS blanket stops
+// them animating, but these two BUILD things — a bar element, a wave overlay —
+// and the honest way to not have an effect is to not create it.
+const PR_EFFECTS_OFF = document.documentElement.getAttribute('data-effects') === 'off';
+
 // Tab click feedback: mark the clicked tab while its navigation is in flight
 // (see .is-navigating). Skipped for the current page and for modified clicks
 // (new-tab etc., which don't navigate this document).
 (function initTabNavFeedback() {
+  if (PR_EFFECTS_OFF) return;
   document.querySelectorAll('.header-tabs a').forEach((a) => {
     const dest = () => (a.getAttribute('href') || '').split('#')[0];
     // The wave starts the moment the pointer goes DOWN — click fires on
@@ -3218,6 +3340,7 @@ window.prSetConfigTabError = function (on) {
 // Sliding tab underline: on hover-capable pointers the active tab's blue bar
 // glides to the hovered tab and returns when the pointer leaves the tab row.
 (function initTabIndicator() {
+  if (PR_EFFECTS_OFF) return;
   if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
   const tabs = document.querySelector('.header-tabs');
   if (!tabs || !tabs.querySelector('a')) return;
