@@ -18,6 +18,10 @@
 // touchmove, then check what the guard leaves behind. A horizontal drag is
 // checked in the same breath — a guard that ate deliberate slides would pass
 // every vertical case and still be broken.
+//
+// Chromium only, which is as far as the guard itself reaches: Firefox for
+// Android does not deliver these events for a range input, and covering it is
+// a decided no. So a pass here is not a claim about every mobile browser.
 const BASE = process.env.MR_BASE_URL || 'http://127.0.0.1:7474';
 const PW = process.env.PLAYWRIGHT_MODULE || 'playwright';
 const { chromium } = await import(PW);

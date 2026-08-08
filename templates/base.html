@@ -2140,7 +2140,13 @@
        some mobile browsers still jump the slider's value on the INITIAL touch
        before deciding the gesture is a scroll. Remember the value at
        touchstart and restore it when the gesture turns out to be vertical —
-       taps (no movement) and horizontal drags keep working untouched. */
+       taps (no movement) and horizontal drags keep working untouched.
+
+       Chromium-engine browsers only, deliberately. Firefox for Android does
+       not deliver these events for a range input the way Chromium does, so the
+       thumb still moves under a scrolling finger there. A pointer-event twin
+       covers it and was tried; it is not worth carrying two gesture paths for,
+       so Firefox mobile goes without. */
     (function prGuardRangeTouchScroll() {
       let g = null;
       const restore = () => {
