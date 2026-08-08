@@ -55,6 +55,20 @@
     border-color: var(--border);
     opacity: 1;
   }
+  /* Inside a grid row, a divider followed by a heading in the SAME column sat
+     lopsided: 24px of air above it, 8px below. Every other divider there is
+     followed by a new COLUMN, which is a grid item — its margin cannot collapse
+     with the rule's, so the row's vertical gutter lands on top of the rule's own
+     margin-bottom. A heading sharing the column is an ordinary sibling: its
+     margin collapses with that margin-bottom instead of stacking on it. So the
+     gutter is added back AND the rule's margin restated, since only the larger
+     of the two survives the collapse.
+     Scoped to the grid: a divider and heading standing on their own (the Time
+     one, under Connections) never met a gutter and were even already — the
+     unscoped version of this rule pushed THAT pair out by 8px instead. */
+  .col-12 > .config-divider + h6 {
+    margin-top: calc(var(--bs-gutter-y, 1rem) + .5rem);   /* .5rem = the my-2 */
+  }
   .config-section-title {
     font-weight: 600;
   }
@@ -357,7 +371,7 @@
   .connection-disabled {
     opacity: .55;
   }
-  /* Locked-section ghosting, shared by Connections, Movie Library Paths and
+  /* Locked-section ghosting, shared by Connections, Media Library Paths and
      Space Thresholds: dim the section's content but keep the inline lock
      notice ("A run is active…") fully readable. */
   /* Two selectors, one rule, and no assumption about how deep anything sits.
@@ -800,7 +814,7 @@
   <div class="accordion-item">
     <h2 class="accordion-header">
       <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#s-paths">
-        Movie Library Paths
+        Media Library Paths
       </button>
     </h2>
     <div id="s-paths" class="accordion-collapse collapse">
@@ -1041,7 +1055,7 @@
 
         <div>
           <h6 class="mb-2">Deletion delay</h6>
-          <p class="section-desc mb-3">A grace period before a marked movie is deleted — time to protect it or change the rules first.</p>
+          <p class="section-desc mb-3">A grace period before a marked movie or season is deleted — time to protect it or change the rules first.</p>
           <div class="input-group gb-input-group mb-2" id="delete-delay-field">
             <input type="number" class="form-control" id="DELETE_DELAY_DAYS" name="DELETE_DELAY_DAYS"
                    value="{{ config.DELETE_DELAY_DAYS or 1 }}" min="1" max="365" step="1" inputmode="numeric"
@@ -1051,11 +1065,11 @@
             <span class="input-group-text">days</span>
           </div>
           <div id="delete-delay-error" class="field-error">Must be a whole number of days, 1–365.</div>
-          <div class="form-text">How long a marked movie waits before it can be deleted. Redline and manual Cleanups skip it. Changes apply to future marks only — already-marked movies keep their original delay.</div>
+          <div class="form-text">How long a mark waits before it can be deleted. Redline and manual Cleanups skip it. Changes apply to future marks only — existing marks keep their original delay.</div>
           <div id="delay-redline-only-note" class="form-text redline-only-note" {{ '' if (has_monitor_dirs and not headroom_enabled and not library_cap_enabled) else 'hidden' }}>Not used in redline-only mode — Redline deletes immediately at the floor.</div>
           <div id="delay-redline-advisory" class="form-text delay-redline-advisory" hidden></div>
-          <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="btn-reset-delays" onclick="resetMarkDelays()">Reset marked movies' delays</button>
-          <div class="form-text">Gives every marked movie the full delay above again, counted from today.</div>
+          <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="btn-reset-delays" onclick="resetMarkDelays()">Reset marked delays</button>
+          <div class="form-text">Gives every marked movie and season the full delay above again, counted from today.</div>
         </div>
       </div>
     </div>
@@ -1310,7 +1324,6 @@
                 <hr class="config-divider my-2">
               </div>
               <div class="col-12">
-                <div class="input-label">Appearance</div>
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" id="REDUCE_VISUAL_EFFECTS"
                          name="REDUCE_VISUAL_EFFECTS" {{ 'checked' if config.REDUCE_VISUAL_EFFECTS else '' }}>
@@ -1596,7 +1609,7 @@ function _sectionNoticeText(reason) {
 
 function _sectionLockReason(section) {
   if (_configActivityLocked()) return _RUN_ACTIVE_REASON;
-  // Connections, Movie Library Paths, AND Space Thresholds all stay editable
+  // Connections, Media Library Paths, AND Space Thresholds all stay editable
   // while Automatic Cleanup is armed: saving a change to any of them auto-pauses Automatic Cleanup
   // server-side, so nothing needs a hard lock here.
   if ((section === 'paths' || section === 'space') && !_filesystemReady()) {
@@ -3139,7 +3152,7 @@ function validateRedline({ show = false, focus = false } = {}) {
   return !invalid;
 }
 
-// A deletion delay defers freeing marked movies for N days. Redline is the only
+// A deletion delay defers freeing marks for N days. Redline is the only
 // trigger that bypasses the delay (deletes immediately when free space is
 // critically low). Without it, a fast-filling library can run out of space
 // before marks age out — advise (don't require) a Redline floor in that case.
@@ -3153,7 +3166,7 @@ function _updateDelayRedlineAdvisory() {
   // Redline-only mode retires the delay entirely, so the advisory is moot.
   const show = _spaceThresholdsHaveUsableLibrary() && _headroomEnabled() && delay >= 2 && !redlineOn;
   if (show) {
-    note.textContent = `No Redline floor set — with a ${delay}-day delay, the disk could fill before marked movies age out. A Redline floor deletes immediately, skipping the delay.`;
+    note.textContent = `No Redline floor set — with a ${delay}-day delay, the disk could fill before marks age out. A Redline floor deletes immediately, skipping the delay.`;
   }
   note.hidden = !show;
 }
@@ -4734,7 +4747,7 @@ function _immediatePruneWarning(cfg, nowCleanup) {
       : `Library Size Cap (${cap} GB) is below the current library (~${size} GB) — the next Cleanup will prune down to it.`;
   })();
   if (capWarning) warnings.push(capWarning);
-  // No lowered-delay warning: an already-marked movie keeps the delay it was
+  // No lowered-delay warning: an existing mark keeps the delay it was
   // marked under, so changing the setting never makes existing marks ripe
   // sooner — only the delay-reset button (or a re-mark) applies the new value.
   // Headroom/Redline-driven prune: a free-space threshold the disk is ALREADY
@@ -4883,7 +4896,7 @@ async function saveConfig() {
     _setSaveText('Save Configuration');
     const lines = [];
     if (armingCleanup) {
-      lines.push({ text: 'Automatic Cleanup deletes movie files on its own, on the daily '
+      lines.push({ text: 'Automatic Cleanup deletes media files on its own, on the daily '
                        + 'schedule and whenever free space hits the Redline floor.', warn: true });
     }
     if (pruneWarning) lines.push({ text: pruneWarning, warn: true });
@@ -5217,7 +5230,7 @@ function _delayValueEdited() {
   return (prBlankNumber('DELETE_DELAY_DAYS', 1) ?? 1) !== saved;
 }
 
-// Restart the deletion-delay clock on every currently marked movie: each mark's
+// Restart the deletion-delay clock on every currently marked movie and season: each mark's
 // delete date becomes today + the saved delay. The server refuses while a
 // run/reconcile owns the queue.
 async function resetMarkDelays() {

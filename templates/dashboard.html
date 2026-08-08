@@ -1221,6 +1221,10 @@ let _dailyRunTime = {{ daily_run_time|tojson }};
 let _markedRipeCount = {{ delete_forecast.ripe|tojson }};
 // The next deletion EVENT from the marked plan: the exact batch the next
 // deleting daily run removes. on=null means "ripe now" (the next run).
+// Everything eligible right now, movies and seasons together — the Marked &
+// Eligible button's own number. The breach note needs it to tell "no plan has
+// been built" from "the plan is current and nothing qualifies".
+let _eligibleCount = null;
 let _markedEvent = {
   on: {{ delete_forecast.event_on|tojson }},
   count: {{ delete_forecast.event_count|tojson }},
@@ -2293,7 +2297,7 @@ async function clearDeletedHistory() {
     return;
   }
   // One-click by design: this only truncates the deleted.log history file —
-  // no movie files, run logs, or config are touched.
+  // no media files, run logs, or config are touched.
   const eraseBtn = document.getElementById('btn-clear-deleted-log');
   if (eraseBtn) { eraseBtn.disabled = true; eraseBtn.classList.add('btn-busy'); }
   try {
@@ -2552,9 +2556,19 @@ function _updateBreachNote() {
       text = willRunItself
         ? `Redline hit — the next check (within ~15 min) frees ~${prGbAmount(d.redline)} GB back above the floor.`
         : `Redline hit — a run would free ~${prGbAmount(d.redline)} GB to clear the floor.`;
+    } else if (!ev.count && _eligibleCount === 0) {
+      // The plan is CURRENT (simulate_required is false, handled above) and it
+      // still came out empty: every title is filtered out. Asking for another
+      // Simulate — what this branch used to say — sends the one user who
+      // cannot be helped by one to run it again, since the filters would
+      // disqualify everything a second time too. Name the actual lever.
+      text = `Over space limits — but nothing is eligible to delete. Check the filters in `
+           + `Filtering & Scoring: a media type may be turned off, or a rule may be `
+           + `disqualifying everything.`;
     } else if (!ev.count) {
-      // Nothing marked — Simulate writes the plan, and deletion (automatic OR the
-      // manual button) stays ghosted over limits until it exists.
+      // Nothing marked, but things ARE eligible — Simulate writes the plan, and
+      // deletion (automatic OR the manual button) stays ghosted over limits
+      // until it exists.
       text = `Over space limits — run Simulate to mark the ~${prGbAmount(d.max)} GB deletion plan.`;
     } else if (!ev.on) {
       // The event batch is ripe now: the next deleting run removes exactly it.
@@ -2698,9 +2712,9 @@ async function runCleanup(mode, btnId) {
     title: 'Run a cleanup now?',
     body: [
       { text: sized
-          ? `This deletes movie files now — about ${prGbAmount(deficit)} GB, `
-            + 'working up from the lowest-scoring movie until your space limits are met.'
-          : 'This deletes movie files now, working up from the lowest-scoring movie '
+          ? `This deletes media files now — about ${prGbAmount(deficit)} GB, `
+            + 'working up from the lowest-scoring title until your space limits are met.'
+          : 'This deletes media files now, working up from the lowest-scoring title '
             + 'until your space limits are met.',
         warn: true },
       'There is no recycle bin — deleted files are gone.',
@@ -2830,6 +2844,7 @@ async function syncStatus({refreshLog = true} = {}) {
     if (d.delete_delay_days !== undefined) _deleteDelayDays = d.delete_delay_days;
     if (d.daily_run_time !== undefined) _dailyRunTime = d.daily_run_time;
     if (d.marked_ripe_count !== undefined) _markedRipeCount = d.marked_ripe_count;
+    if (d.marked_count !== undefined) _eligibleCount = d.marked_count;
     if (d.marked_event_count !== undefined) {
       _markedEvent = { on: d.marked_event_on, count: d.marked_event_count, bytes: d.marked_event_bytes };
     }

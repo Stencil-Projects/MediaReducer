@@ -31,6 +31,9 @@ E.log = lambda *a, **k: None
 E.log_stage = lambda *a, **k: None
 E.log_blank = lambda *a, **k: None
 E.emit_progress = lambda *a, **k: None
+# Deleting movies ships OFF — opt in, the way a user does before their
+# first cleanup. This file is about which movies become candidates.
+E.MOVIE_CLEANUP_ENABLED = True
 
 # ── A real /library with real movie files ────────────────────────────────────
 lib = Path(tempfile.mkdtemp(prefix="mr-cand-lib."))

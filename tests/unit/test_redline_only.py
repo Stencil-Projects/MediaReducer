@@ -122,6 +122,10 @@ check("onboarding save with no dirs accepts the 0/null spelling", r.status_code 
 # Safety pct 60 keeps the 500 GB headroom and 200 GB redline of the test
 # configs under the cap on the 1000 GB test disk (cap = 600 GB).
 BASE = {"RUN_MODE": "paused", "MAX_HEADROOM_PCT": 60, "MONITOR_DIRS": ["/library/movies"],
+        # Both per-type cleanup switches ship OFF, and Automatic Cleanup is
+        # gated on at least one being on. This file is about the SPACE gates,
+        # so the fixture opts in and leaves that one out of the way.
+        "MOVIE_CLEANUP_ENABLED": True,
         "USE_PLEX": False, "USE_JELLYFIN": False,
         "TAUTULLI_URL": "http://tautulli.test", "TAUTULLI_API_KEY": "test-key",
         "IMDB_RATINGS_URL": "https://example.test/r.tsv.gz", "OUTPUT_DIR": _OUT}

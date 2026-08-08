@@ -70,6 +70,10 @@ BASE_SAVED = {
     "USE_PLEX": False, "USE_JELLYFIN": False,
     "IMDB_RATINGS_URL": "https://example.test/r.tsv.gz",
     "OUTPUT_DIR": _OUT_DIR,
+    # Both per-type cleanup switches ship OFF, and Automatic Cleanup is gated on
+    # at least one being on. This matrix is about the SPACE gates, so the fixture
+    # opts in and leaves that one out of the way.
+    "MOVIE_CLEANUP_ENABLED": True,
 }
 
 def expected_valid(mode, h, r, c):

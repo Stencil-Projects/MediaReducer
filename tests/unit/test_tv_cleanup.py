@@ -481,6 +481,36 @@ check("...and deletes nothing, whatever the mode",
 check("...while an ON switch still reports eligible seasons",
       A._run_tv_cleanup_pass(CFG, execute=False)["eligible_seasons"] >= 1)
 
+# ── A season abandoned MID-DELETION still reports what it removed ───────────
+# Every guard inside the file loop bails on the whole season, and the files
+# already unlinked are gone: deleted.log has their lines, the disk has the
+# space. Bailing without folding them into the report made the run disagree
+# with its own history — 0 GB freed in the summary and the notification, no
+# inventory refresh (it is gated on deleted_files, so the stored season kept
+# the size of files that no longer existed), and no re-stamp of the TV share,
+# so the engine went on subtracting a share nothing had freed.
+#
+# Staged with a symlink, which is one of the guards: episode one is a real
+# file and deletes, episode two is refused, so the abort happens with work
+# already done.
+reset_files()
+reset_state()
+(S1 / "ep2.mkv").unlink()
+(S1 / "ep2.mkv").symlink_to(S1 / "ep1.mkv")
+_partial = {"skipped": [], "deleted_seasons": [], "deleted_files": 0, "freed_bytes": 0}
+_res = A._delete_tv_season(dict(CFG, SONARR_CLEANUP_ENABLED=False),
+                           {"sid": "jellyfin:5", "season": 1, "title": "Dead Show",
+                            "year": 2001, "path": str(SHOW)}, _partial)
+check("a mid-season abort leaves the mark (it returns False)", _res is False, _res)
+check("...and the first episode really is gone", not (S1 / "ep1.mkv").exists())
+check("...so the report carries what it removed, not zero",
+      _partial["deleted_files"] == 1 and _partial["freed_bytes"] == 1000, _partial)
+check("...and the season is recorded as partial, beside the skip reason",
+      len(_partial["deleted_seasons"]) == 1
+      and _partial["deleted_seasons"][0].get("partial") is True
+      and len(_partial["skipped"]) == 1, _partial)
+reset_files()
+
 # ── The nomenclature guard ──────────────────────────────────────────────────
 # "TV pass" is not a thing anywhere a user reads: one cleanup, one report.
 # Seasons are part of the run, and every surface — templates, notifications,

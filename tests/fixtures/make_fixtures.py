@@ -69,6 +69,11 @@ config = {
     "REDLINE_GB": None,
     "SCORE_BALANCE": 0,
     "MAX_IMDB_RATING": None,
+    # Both ship OFF (deleting files is opt-in), and every run test here is
+    # about what a run DOES — so the fixture opts in, the way a user would
+    # before their first cleanup.
+    "MOVIE_CLEANUP_ENABLED": True,
+    "TV_CLEANUP_ENABLED": True,
     "OUTPUT_DIR": str(cfg_dir),
     # Point downloads at a dead port: any accidental network fetch fails loudly.
     "IMDB_RATINGS_URL": "http://127.0.0.1:9/never",

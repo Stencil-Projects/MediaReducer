@@ -41,7 +41,10 @@ _paths = [str(_lib / f"Movie {n}.mkv") for n in ("A", "B")]
 for p in _paths:
     Path(p).write_bytes(b"\0")
 
-CFG = {"OUTPUT_DIR": _OUT, "MONITOR_DIRS": [str(_lib)]}
+# Both per-type cleanup switches ship OFF, and Automatic Cleanup is gated on at
+# least one being on. This file is about the Simulate-required gate, so the
+# fixture opts in and leaves that one out of the way.
+CFG = {"OUTPUT_DIR": _OUT, "MONITOR_DIRS": [str(_lib)], "MOVIE_CLEANUP_ENABLED": True}
 A.load_config = lambda: dict(CFG)
 _NDIRS = A._normalized_monitor_dirs(CFG)
 A.disk_stats = lambda: {"total_gb": 1000, "used_gb": 100, "free_gb": 900, "pct_used": 10}

@@ -414,7 +414,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.10"
+APP_VERSION = "1.0.0-alpha.11"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -815,11 +815,12 @@ def _build_config() -> tuple[dict, list]:
     cfg["PROTECT_JELLYFIN_FAVORITES"] = _coerce_bool(cfg.get("PROTECT_JELLYFIN_FAVORITES"))
     cfg["USE_PLEX"] = _coerce_bool(cfg.get("USE_PLEX"))
     cfg["USE_JELLYFIN"] = _coerce_bool(cfg.get("USE_JELLYFIN"))
-    # Absent means ON for both per-type switches: deleting movies is the shipped
-    # behavior, and a config written before the keys existed must not read as
-    # someone having turned a media type off.
-    cfg["MOVIE_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("MOVIE_CLEANUP_ENABLED", True), default=True)
-    cfg["TV_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("TV_CLEANUP_ENABLED", True), default=True)
+    # Absent means OFF for both per-type switches. Deleting files is opt-in:
+    # a fresh install scans, scores and shows you everything, and deletes
+    # nothing until you say which types it may touch. Absent reading as ON
+    # would mean a config that never named a type still deleted one.
+    cfg["MOVIE_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("MOVIE_CLEANUP_ENABLED", False), default=False)
+    cfg["TV_CLEANUP_ENABLED"] = _coerce_bool(cfg.get("TV_CLEANUP_ENABLED", False), default=False)
     # Absent means OFF, matching Optional Radarr cleanup: reaching into
     # another app's state is opt-in, never something a fresh install does on
     # its own. Off, a deleted season's files still go; Sonarr re-downloads it
@@ -2517,7 +2518,7 @@ def force_stop_script():
             "The engine did not respond to being killed. That almost always means it is "
             "stuck in a system call the kernel won't interrupt — usually a network share "
             "that stopped answering. No signal can end it until that storage responds "
-            "again or the host restarts. Check the mount for your movie library first.")
+            "again or the host restarts. Check the mount for your media library first.")
     _mark_progress_terminal(
         "stopped", "Run force-stopped. Its log was not archived; deletions already made "
                    "are permanent.", force=True)
@@ -3157,6 +3158,20 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
             and cfg.get("REDLINE_GB") is None
             and cfg.get("MAX_LIBRARY_GB") is None):
         safety_errors.append("Set a Headroom target, Redline, or Library Size Cap to enable Automatic Cleanup.")
+
+    # ...and something it is allowed to delete. With both per-type switches off
+    # nothing is ever eligible, so an armed Automatic Cleanup would wake on
+    # schedule, scan, and find its own hands tied — a mode that reads as
+    # deleting while deleting nothing.
+    #
+    # This is not a space rule, and it lives here anyway: ok_for_cleanup is the
+    # single gate every armed-cleanup path already consults — the mode radio,
+    # the save that arms it, the manual Cleanup endpoint and the scheduler's
+    # own next-run check. A parallel gate would have to be added to each, and
+    # the one that got missed would be the one that mattered.
+    if not (cfg.get("MOVIE_CLEANUP_ENABLED") or cfg.get("TV_CLEANUP_ENABLED")):
+        safety_errors.append("Allow movie or TV show cleanup in Filtering & Scoring "
+                             "to enable Automatic Cleanup.")
 
     # Dedupe (order-preserving): a message can be reached by multiple paths.
     def _dedupe(items: list[str]) -> list[str]:
@@ -4106,10 +4121,15 @@ def _resolve_tv_scope(rows: list, cfg: dict) -> None:
     inventory — including shows kept somewhere deliberately unmanaged — so
     each series folder is looked for under the monitored directories BY NAME
     (the server's own path is in its container namespace, so the folder name
-    is the part both filesystems share). Found: the row carries the resolved
-    /library path and is in scope. Not found: out of scope, and the row says
-    so rather than disappearing — an inventory that silently omits what it
-    won't manage looks like a scan bug, not a decision."""
+    is the part both filesystems share).
+
+    Exactly one match: the row carries that resolved /library path and is in
+    scope. None, or more than one: out of scope, and the row stays with the
+    reason on it — an inventory that silently omits what it won't manage looks
+    like a scan bug, not a decision. More than one is its own answer because a
+    name is not an identity: two libraries of the same shows give the same
+    folder name under both, and picking either would delete out of the copy the
+    server was not describing."""
     dirs = [str(d) for d in (cfg.get("MONITOR_DIRS") or []) if str(d or "").strip()]
     for row in rows:
         # The same trailing-run rule the movie side's resolve_under_library
@@ -4120,21 +4140,44 @@ def _resolve_tv_scope(rows: list, cfg: dict) -> None:
         # never resolve — a path ending in ".." would name a monitored dir's
         # PARENT and hand the deletion pass a folder that isn't a series.
         parts = [seg for seg in str(row.get("path") or "").replace("\\", "/").split("/") if seg]
-        resolved = None
+        resolved, conflict = None, []
         if parts and not any(seg in (".", "..") for seg in parts):
             for start in range(len(parts)):
+                # Every monitored dir that HAS this run, not the first one that
+                # does. Two libraries of the same shows — a 1080p tree and a 4K
+                # tree, an archive beside a live one — give the same folder name
+                # under both, and taking whichever came first in MONITOR_DIRS
+                # would delete seasons out of the copy the server was not
+                # talking about, scored on the other copy's facts. A name is
+                # not an identity, so an ambiguous one resolves to nothing.
+                #
+                # Keyed by the REAL path: the same folder reachable through two
+                # overlapping monitored entries is one place, not a conflict.
+                hits = {}
                 for d in dirs:
                     candidate = Path(d).joinpath(*parts[start:])
                     try:
                         if candidate.is_dir():
-                            resolved = str(candidate)
-                            break
+                            hits.setdefault(candidate.resolve(), str(candidate))
                     except OSError:
                         continue
-                if resolved:
+                if len(hits) == 1:
+                    resolved = next(iter(hits.values()))
+                    break
+                if hits:
+                    # A SHORTER run matches in at least as many places, never
+                    # fewer, so there is no less-ambiguous rung left to try.
+                    conflict = sorted(hits.values())
                     break
         row["path"] = resolved
         row["tv_in_scope"] = 1 if resolved else 0
+        # Kept on the row so the debug report can say "ambiguous" rather than
+        # leaving it indistinguishable from a show nobody monitors.
+        row["tv_scope_conflict"] = conflict
+        if conflict:
+            print(f"TV scope: {row.get('title') or row.get('path')} matches "
+                  f"{len(conflict)} monitored folders ({', '.join(conflict)}) — "
+                  f"out of scope until the name is unambiguous", flush=True)
 
 
 def _season_score_settings(cfg: dict) -> dict:
@@ -4387,7 +4430,7 @@ def _tv_in_scope(cfg: dict) -> bool:
 def _tv_cleanup_armed(cfg: dict) -> bool:
     """Seasons may actually be marked and deleted: in scope AND the switch is
     on. _tv_in_scope is the wider question of whether they are planned at all."""
-    return bool(cfg.get("TV_CLEANUP_ENABLED", True)) and _tv_in_scope(cfg)
+    return bool(cfg.get("TV_CLEANUP_ENABLED", False)) and _tv_in_scope(cfg)
 
 
 def _tv_cleanup_state() -> dict:
@@ -4603,7 +4646,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
     report["excluded"] = dict(plan.get("excluded") or {})
     report["seasons_seen"] = sum(len(r.get("tv_seasons") or [])
                                  for r in rows if isinstance(r, dict))
-    if not bool(cfg.get("TV_CLEANUP_ENABLED", True)):
+    if not bool(cfg.get("TV_CLEANUP_ENABLED", False)):
         # Held back by the switch. Marks go too: an ineligible season must not
         # keep a delay clock running, exactly as a raised cap unmarks.
         report["cleanup_off"] = len(plan["order"])
@@ -4790,7 +4833,11 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
     directory and ask Sonarr to rescan. Returns True when the mark is
     finished; False leaves it marked for the next pass. Any doubt — an id
     that doesn't parse, a path that escapes the series folder, a server call
-    that fails — skips the season rather than improvising."""
+    that fails — skips the season rather than improvising.
+
+    A skip raised part-way through the files still reports what it removed
+    (marked `partial`): those episodes are gone whatever the rest of the
+    season does, and the run's accounting has to agree with deleted.log."""
     def skip(why: str) -> bool:
         report["skipped"].append({"title": entry.get("title"),
                                   "season": entry.get("season"), "why": why})
@@ -4891,17 +4938,36 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
         return skip(err)
 
     deleted, freed, dirs = 0, 0, set()
+
+    def abort(why: str) -> bool:
+        """Give up on this season, having possibly already removed some of it.
+
+        Files unlinked before the doubt are GONE, and deleted.log already
+        carries their lines. Bailing without folding them into the report
+        makes the run disagree with its own history: it says 0 GB freed, the
+        inventory refresh that keeps stored sizes honest never fires (it is
+        gated on deleted_files), and the TV share is not re-stamped, so the
+        engine subtracts a share nothing freed. The mark still stays — the
+        return is False — so the next pass finishes the season."""
+        if deleted:
+            report["deleted_seasons"].append({
+                "title": entry.get("title"), "season": entry.get("season"),
+                "files": deleted, "bytes": freed, "partial": True})
+            report["deleted_files"] += deleted
+            report["freed_bytes"] += freed
+        return skip(why)
+
     for rp, want in rels:
         if not rp.parts or rp.is_absolute() or any(p in ("..", ".") for p in rp.parts):
-            return skip(f"unsafe file path from the media server: {str(rp)!r}")
+            return abort(f"unsafe file path from the media server: {str(rp)!r}")
         target = series_dir.joinpath(*rp.parts)
         try:
             if target.is_symlink():
-                return skip(f"refusing a symlink: {target}")
+                return abort(f"refusing a symlink: {target}")
             if not target.is_file():
                 continue   # already gone — nothing to remove
             if not target.resolve().is_relative_to(series_real):
-                return skip(f"file escapes the series folder: {target}")
+                return abort(f"file escapes the series folder: {target}")
             size = target.stat().st_size
             # The LOCAL stat is the size authority (the file's identity is its
             # path under the series folder): a file the server describes at
@@ -4914,7 +4980,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
                       f"on-disk size (server metadata is behind)", flush=True)
             target.unlink()
         except OSError as e:
-            return skip(f"could not delete {target} ({e})")
+            return abort(f"could not delete {target} ({e})")
         deleted += 1
         freed += size
         dirs.add(target.parent)
@@ -6395,7 +6461,7 @@ def api_debug_cache():
                          f"{size_gb:,.1f} GB | {in_scope} under monitored paths | "
                          f"{watched} with watch history | {favs} Jellyfin-favorited")
             _tv_cfg = load_config()
-            tv_cleanup_on = bool(_tv_cfg.get("TV_CLEANUP_ENABLED", True))
+            tv_cleanup_on = bool(_tv_cfg.get("TV_CLEANUP_ENABLED", False))
             plan = _tv_season_plan(tv_rows, _tv_cfg)
             porder = plan["order"]
             pex = plan["excluded"]
@@ -7313,7 +7379,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
         media_path_blocker = True
         if not _library.get("mounted"):
             add_error(
-                f"No movie library at {FILESYSTEM_CHECK_PATH}. The container has no "
+                f"No media library at {FILESYSTEM_CHECK_PATH}. The container has no "
                 f"library mounted there, so nothing can be scanned or deleted. Check "
                 f"the /library mapping, then recheck.")
         else:
@@ -8224,29 +8290,46 @@ def _unschedule_pending_marks() -> int:
 
 def _restart_pending_mark_clocks() -> int:
     """Re-stamp every running delay clock (marked_at) to NOW under the CURRENT
-    delay setting, so each marked movie gets the full configured delay again
-    from today. This is the one deliberate way to move existing marks onto a
-    changed delay — a setting change alone leaves each mark on the delay it was
-    made under. Returns how many clocks were restarted. Callers must ensure no
-    run/reconcile is writing the queue (the endpoint re-checks under _run_lock
-    right at the write)."""
+    delay setting, so each mark gets the full configured delay again from today.
+    This is the one deliberate way to move existing marks onto a changed delay —
+    a setting change alone leaves each mark on the delay it was made under.
+    Marked seasons run the same clock as marked movies, so they move with them;
+    a delay reset that skipped them would leave half the queue on the old dates.
+    Returns how many clocks were restarted. Callers must ensure no run/reconcile
+    is writing the queue or the season marks (the endpoint re-checks under
+    _run_lock right at the write)."""
+    now, restarted = time.time(), 0
     try:
         delay = _delete_delay_days()
         with _store_write() as conn:
             cur = conn.execute(
                 "UPDATE queue SET marked_at=?, delay_days=? WHERE marked_at IS NOT NULL",
-                (time.time(), delay))
-            return cur.rowcount
+                (now, delay))
+            restarted += cur.rowcount
     except Exception:
-        return 0
+        pass
+    try:
+        st = _tv_cleanup_state()
+        moved = 0
+        for m in (st.get("marked") or {}).values():
+            if isinstance(m, dict) and m.get("marked_at"):
+                m["marked_at"], m["delay_days"] = now, delay
+                moved += 1
+        if moved:
+            _save_tv_cleanup_state(st)
+            restarted += moved
+    except Exception:
+        pass
+    return restarted
 
 
 @app.route("/api/queue/reset-delays", methods=["POST"])
 def api_reset_mark_delays():
-    """Restart the deletion-delay clock on every currently marked movie — the
-    config page's button next to the Deletion delay setting. Each mark's
-    delete date becomes today + DELETE_DELAY_DAYS; the 15-minute marked-change
-    alert then reports the re-dated marks once, like a delay-setting change."""
+    """Restart the deletion-delay clock on every currently marked movie and
+    season — the config page's button next to the Deletion delay setting. Each
+    mark's delete date becomes today + DELETE_DELAY_DAYS; the 15-minute
+    marked-change alert then reports the re-dated marks once, like a
+    delay-setting change."""
     if _run_active:
         return _run_active_response()
     if _summary_active:
@@ -8263,10 +8346,10 @@ def api_reset_mark_delays():
         n = _restart_pending_mark_clocks()
     if not n:
         return jsonify({"ok": True, "reset": 0,
-                        "message": "No movies are marked for deletion."})
+                        "message": "Nothing is marked for deletion."})
     delay = int(load_config().get("DELETE_DELAY_DAYS") or 1)
     return jsonify({"ok": True, "reset": n,
-                    "message": f"Delay reset — {n} marked movie(s) now delete "
+                    "message": f"Delay reset — {n} mark(s) now delete "
                                f"{delay} day(s) from today."})
 
 
@@ -8641,7 +8724,7 @@ def _tv_eligible_entries(cfg: dict, marked_keys) -> list[dict]:
     TV tail of the pool's deletion order, in the movie entry shape. No dates:
     eligibility is visible order, not a schedule, exactly like the eligible
     movies behind the marked prefix."""
-    if not bool(cfg.get("TV_CLEANUP_ENABLED", True)):
+    if not bool(cfg.get("TV_CLEANUP_ENABLED", False)):
         return []
     try:
         data, _err = _read_library_snapshot()
@@ -8769,6 +8852,18 @@ def pending_delete_forecast(cfg: dict | None = None) -> dict:
         "event_bytes": int(sum(e.get("size_bytes") or 0 for e in batch)),
     }
 
+
+def _marked_clocked_count(cfg: dict, forecast: dict) -> int:
+    """Everything running a delay clock — marked movies AND marked seasons. What
+    the Config page gates the delay-reset button on, and what its save prompt
+    counts, so both cover exactly what a reset re-dates. The forecast itself
+    stays movie-only: its ripe/event fields describe the movie batch the next
+    daily run removes, which seasons are not part of. Redline-only marks no
+    seasons at all, so that branch's zero stands."""
+    if _redline_only_mode_cfg(cfg):
+        return int(forecast.get("marked") or 0)
+    return int(forecast.get("marked") or 0) + _tv_marked_count()
+
 # ── Routes — pages ────────────────────────────────────────────────────────────
 
 @app.route("/favicon.ico")
@@ -8865,7 +8960,7 @@ def config_page():
         summary_active=_summary_active,
         time_zone_options=_time_zone_options(),
         library_root=FILESYSTEM_CHECK_PATH,
-        marked_clocked_count=pending_delete_forecast(cfg)["marked"],
+        marked_clocked_count=_marked_clocked_count(cfg, pending_delete_forecast(cfg)),
         # Monitor Only's third requirement: an up-to-date library database.
         monitor_scan_ok=_library_db_fresh(cfg),
         monitor_locked_reason=_scan_lock_reason(cfg),
@@ -8891,8 +8986,8 @@ def _score_page_config(cfg: dict) -> dict:
         "SCORE_BALANCE": cfg.get("SCORE_BALANCE", 50),
         "MAX_IMDB_RATING": cfg.get("MAX_IMDB_RATING"),
         "SKIP_UNPLAYED_MOVIES": bool(cfg.get("SKIP_UNPLAYED_MOVIES")),
-        "MOVIE_CLEANUP_ENABLED": bool(cfg.get("MOVIE_CLEANUP_ENABLED", True)),
-        "TV_CLEANUP_ENABLED": bool(cfg.get("TV_CLEANUP_ENABLED", True)),
+        "MOVIE_CLEANUP_ENABLED": bool(cfg.get("MOVIE_CLEANUP_ENABLED", False)),
+        "TV_CLEANUP_ENABLED": bool(cfg.get("TV_CLEANUP_ENABLED", False)),
         "TV_SERIES_WATCH_BUMP": cfg.get("TV_SERIES_WATCH_BUMP", 10),
         "TV_WATCH_WEIGHT": cfg.get("TV_WATCH_WEIGHT", 100),
         "TV_SEASON_ELIGIBILITY": cfg.get("TV_SEASON_ELIGIBILITY", "oldest"),
@@ -9015,9 +9110,9 @@ def api_status():
         # — the "marked" half of the dashboard's Marked & Queued button.
         "marked_imminent_count":   _marked_imminent_count(cfg),
         "marked_ripe_count":       _forecast["ripe"],
-        # How many queue entries carry a running delay clock; the Config page
-        # gates the delay-reset button on this (nothing marked = nothing to reset).
-        "marked_clocked_count":    _forecast["marked"],
+        # How many marks carry a running delay clock; the Config page gates the
+        # delay-reset button on this (nothing marked = nothing to reset).
+        "marked_clocked_count":    _marked_clocked_count(cfg, _forecast),
         "marked_event_on":         _forecast["event_on"],
         "marked_event_count":      _forecast["event_count"],
         "marked_event_bytes":      _forecast["event_bytes"],
@@ -9206,7 +9301,7 @@ def api_connections_autodetect():
 
 @app.route("/api/library/browse")
 def api_library_browse():
-    """List folders under the library root for the Movie Library Paths browser."""
+    """List folders under the library root for the Media Library Paths browser."""
     root = FILESYSTEM_CHECK_PATH
     root_name = root.rsplit("/", 1)[-1] or "library"
     # Two namespaces, deliberately kept apart. `root` is the one the config, this
@@ -9404,9 +9499,9 @@ def api_save_score_config():
         # movies off empties the deletion plan (a pure reconcile below), TV off
         # stops the season plan preview from proposing seasons.
         if "MOVIE_CLEANUP_ENABLED" in payload:
-            updates["MOVIE_CLEANUP_ENABLED"] = _coerce_bool(payload.get("MOVIE_CLEANUP_ENABLED"), default=True)
+            updates["MOVIE_CLEANUP_ENABLED"] = _coerce_bool(payload.get("MOVIE_CLEANUP_ENABLED"), default=False)
         if "TV_CLEANUP_ENABLED" in payload:
-            updates["TV_CLEANUP_ENABLED"] = _coerce_bool(payload.get("TV_CLEANUP_ENABLED"), default=True)
+            updates["TV_CLEANUP_ENABLED"] = _coerce_bool(payload.get("TV_CLEANUP_ENABLED"), default=False)
         # Disabled optional fields keep their last entered value so the grayed-out field
         # still shows it (surviving restarts). Prefer the text still in the disabled
         # input (posted as _<key>_LAST), then the value this save is disabling, then the
@@ -9428,6 +9523,20 @@ def api_save_score_config():
             else:
                 cfg.pop(_last_key, None)
         cfg.update(updates)
+        # Turning BOTH types off from this page leaves nothing for an armed
+        # Automatic Cleanup to delete, and the Configuration page's own gate
+        # cannot help — it is a different page, and this save never passes
+        # through it. So it drops to Monitor Only here, the same way a
+        # threshold or connection change does, with a reason the dashboard can
+        # explain. Refusing the save instead would make turning cleanup off
+        # require switching modes first, which is backwards for the safer
+        # direction of travel.
+        if (_is_cleanup_mode(cfg.get("RUN_MODE"))
+                and not (cfg.get("MOVIE_CLEANUP_ENABLED") or cfg.get("TV_CLEANUP_ENABLED"))):
+            cfg["RUN_MODE"] = "paused"
+            cfg["_RUN_MODE_AUTOPAUSE_REASON"] = ("neither movies nor TV shows are allowed to be "
+                                                 "cleaned up — allow a type in Filtering & Scoring, "
+                                                 "then re-enable Automatic Cleanup.")
         if not save_config(cfg):
             return _invalid_config_response() or (jsonify({
                 "ok": False, "error": "Save was refused — config.json changed on disk. Reload the page.",

@@ -7,7 +7,7 @@ services:
       # keeps working. Set WEBUI_PORT in .env if 7474 is taken on this host.
       - "${WEBUI_PORT:-7474}:7474"    # web UI — http://your-server-ip:${WEBUI_PORT:-7474}
     volumes:
-      - ${PLEX_LIBRARY_PATH}:/library:rw             # shared movie library mount (file deletion)
+      - ${PLEX_LIBRARY_PATH}:/library:rw             # shared media library mount (file deletion)
       - ${TAUTULLI_APPDATA}:/tautulli:ro             # optional: lets Auto Detect read the Tautulli API key + Plex token
       - ${RADARR_APPDATA}:/radarr:ro                 # optional: lets Auto Detect read the Radarr API key
       # Defaulted so an .env without SONARR_APPDATA still composes.
@@ -18,7 +18,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       # Run as a specific user instead of root (optional — works on any host).
-      # The mapped user needs write access to your movie files and /config.
+      # The mapped user needs write access to your media files and /config.
       # Unraid: 99/100 = nobody:users. Other Linux hosts: your own user's ids
       # (`id -u` / `id -g`, commonly 1000/1000).
       # - PUID=99

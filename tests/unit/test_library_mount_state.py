@@ -71,7 +71,7 @@ h = health_for(missing)
 joined = " ".join(h["errors"]).lower()
 check("missing library blocks", h["blocked"] is True, h["errors"])
 check("missing library says no library is mounted",
-      "no movie library at" in joined, h["errors"])
+      "no media library at" in joined, h["errors"])
 check("...and does NOT blame path alignment",
       "line up" not in joined, h["errors"])
 
@@ -84,13 +84,13 @@ check("empty library says mounted but empty",
 check("...and does NOT blame path alignment",
       "line up" not in joined, h["errors"])
 check("...and does not claim the mount is absent",
-      "no movie library at" not in joined, h["errors"])
+      "no media library at" not in joined, h["errors"])
 
 # ── Present: no library complaint at all ─────────────────────────────────────
 h = health_for(str(Path(BASE, "real")), sample="/data/movies/A Movie (2020).mkv")
 joined = " ".join(h["errors"]).lower()
 check("a real library raises no mount error",
-      "no movie library at" not in joined and "mounted but empty" not in joined, h["errors"])
+      "no media library at" not in joined and "mounted but empty" not in joined, h["errors"])
 check("...and does not block on the library",
       h["blocked"] is False, h["errors"])
 

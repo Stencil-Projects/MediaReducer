@@ -2409,14 +2409,14 @@
       <div class="modal-header">
         <div>
           <h5 class="modal-title" id="welcome-modal-title">Welcome to MediaReducer</h5>
-          <div style="font-size:.78rem;color:var(--text-muted);">Automatic movie library cleanup for Plex and Jellyfin</div>
+          <div style="font-size:.78rem;color:var(--text-muted);">Automatic media library cleanup for Plex and Jellyfin</div>
           <div class="welcome-version">v{{ app_version }} &middot; early alpha, expect bugs</div>
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <div class="welcome-warning welcome-warning--danger">
-          <strong>This app deletes movie files — there is no recycle bin.</strong>
+          <strong>This app deletes media files — there is no recycle bin.</strong>
           It starts paused and deletes nothing. Use <strong>Simulate</strong> until the
           output matches exactly what you expect before you turn on
           <strong>Automatic Cleanup</strong>.
@@ -2430,7 +2430,7 @@
         <h6 class="welcome-heading">Quick start</h6>
         <ol class="welcome-steps">
           <li>Open <strong>Configuration</strong> → <strong>Connections</strong>: pick your servers, use <strong>Auto Detect</strong>, then <strong>Check for Errors</strong>.</li>
-          <li><strong>Movie Library Paths</strong>: add the folders MediaReducer may manage and protect any collections.</li>
+          <li><strong>Media Library Paths</strong>: add the folders MediaReducer may manage and protect any collections.</li>
           <li>Arm at least one <strong>Space Threshold</strong> — all start off, and Monitor Only needs one — then tune scoring on the <strong>Filtering &amp; Scoring</strong> tab.</li>
           <li>Run <strong>Simulate</strong> from the Dashboard and read the log — <strong>Monitor Only</strong> switches on by itself once the scan finishes.</li>
           <li>Turn on <strong>Automatic Cleanup</strong> only when Simulate deletes exactly what you'd delete yourself.</li>

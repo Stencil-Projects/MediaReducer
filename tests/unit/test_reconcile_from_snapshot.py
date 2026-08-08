@@ -27,6 +27,11 @@ import db
 import engine as E
 import _tmpout
 
+# Deleting movies ships OFF — opt in, the way a user does before their first
+# cleanup. The switch has its own section at the end of this file; every
+# check before it is about the queue the reconcile builds when it is on.
+E.MOVIE_CLEANUP_ENABLED = True
+
 ok = True
 def check(name, cond):
     global ok

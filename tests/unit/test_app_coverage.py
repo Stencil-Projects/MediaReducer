@@ -199,8 +199,45 @@ with db.transaction(A.db_path()) as conn:
     db.replace_queue(conn, {})
 r = client.post("/api/queue/reset-delays", headers=HDR)
 d = r.get_json()
-check("empty queue: clean no-op, not an error",
+check("nothing marked: clean no-op, not an error",
       r.status_code == 200 and d.get("ok") and d.get("reset") == 0)
+
+# ── Season marks run the same clock, so a reset re-dates them too ────────────
+# Half the marked queue can be seasons. A reset that only touched the SQL queue
+# would leave them on their original dates while the movies moved, and with only
+# seasons marked the Config page would report nothing to reset at all.
+A._pending_raw = lambda: {}          # the hostile-input stub above is done with
+A._save_tv_cleanup_state({"marked": {
+    "Show|1": {"marked_at": _old, "delay_days": 1, "title": "Show", "season": 1,
+               "path": "/library/TV/Show", "size_bytes": 1, "score": 5},
+    "Show|2": {"marked_at": _old - 86400, "delay_days": 1, "title": "Show", "season": 2,
+               "path": "/library/TV/Show", "size_bytes": 1, "score": 6},
+}})
+_cfg_reset = {"OUTPUT_DIR": _OUT, "DELETE_DELAY_DAYS": 3,
+              "HEADROOM_GB": 500, "REDLINE_GB": None, "MAX_LIBRARY_GB": None}
+A.load_config = lambda: dict(_cfg_reset)
+check("marked_clocked_count counts season marks, so the reset button is reachable",
+      A._marked_clocked_count(A.load_config(), A.pending_delete_forecast()) == 2)
+
+_before = time.time()
+r = client.post("/api/queue/reset-delays", headers=HDR)
+d = r.get_json()
+check("reset-delays restarts season clocks with no movies marked",
+      r.status_code == 200 and d.get("ok") and d.get("reset") == 2)
+_marks = A._tv_cleanup_state()["marked"]
+check("season clocks re-stamped to now",
+      all(m["marked_at"] >= _before for m in _marks.values()))
+check("reset stamps the CURRENT delay onto each season mark",
+      all(m["delay_days"] == 3 for m in _marks.values()))
+
+# Redline-only marks no seasons at all, so that branch must not add a count the
+# reset can never act on.
+A.load_config = lambda: {"OUTPUT_DIR": _OUT, "DELETE_DELAY_DAYS": 3,
+                         "HEADROOM_GB": 0, "REDLINE_GB": 50, "MAX_LIBRARY_GB": None}
+check("redline-only reports no clocked marks",
+      A._marked_clocked_count(A.load_config(), A.pending_delete_forecast()) == 0)
+A._save_tv_cleanup_state({"marked": {}})
+A.load_config = lambda: dict(_cfg_reset)
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

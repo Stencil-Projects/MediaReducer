@@ -2,8 +2,9 @@
 """
 engine.py — the MediaReducer deletion engine.
 
-Monitors disk usage and monitored movie-library size and removes low-value
-movie files when configured thresholds are exceeded. Reads libraries from
+Monitors disk usage and monitored library size and removes low-value movie
+files when configured thresholds are exceeded. Seasons are the app's side of
+the same cleanup (app.py); this engine is the movie half of one shared order. Reads libraries from
 Plex/Tautulli, Jellyfin, or both; Plex and Jellyfin supply protected-collection
 metadata; Radarr forgets a movie the moment its copy in Radarr's own section is
 deleted. Pure Python 3 standard library — no pip installs.
@@ -247,9 +248,10 @@ def _redline_only_mode() -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Library size cap ──────────────────────────────────────────────────────────
-# Caps the total size of movie files under MONITOR_DIRS. Measured from disk using
-# MOVIE_EXTENSIONS, so dashboard storage, run triggers, and deletion targets share
-# one source of truth. Over the cap, cleanup shares the once-per-day window (and
+# Caps the total size of the media files under MONITOR_DIRS — movies and TV
+# episodes together, since both live under the monitored roots. Measured from
+# disk using MOVIE_EXTENSIONS, so dashboard storage, run triggers, and deletion
+# targets share one source of truth. Over the cap, cleanup shares the once-per-day window (and
 # the deletion delay) with the headroom trigger; only Redline is immediate.
 # Enforced whenever it is set; RetentionScore ordering bounds the blast radius
 # (lowest-value movies delete first). To size it, read "Library size: X.X GB"
@@ -274,8 +276,8 @@ DAILY_RUN_TIME = "00:00"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── Movie library ─────────────────────────────────────────────────────────────
-# In the container the movie files are bind-mounted at one fixed location,
+# ── Media library ─────────────────────────────────────────────────────────────
+# In the container the media files are bind-mounted at one fixed location,
 # /library, and nothing else of the host is mounted. That mount is both the only
 # place the script can read/delete and the deletion-safety boundary; no
 # whole-filesystem view to guard against, no Plex→disk path translation.
@@ -303,7 +305,7 @@ MOVIE_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv",
 MAX_STALENESS_MONTHS        = SCORING["RECENCY_DEFAULT_MONTHS"]  # recency fades to 0 over this window.
 
 # ── Filtering ─────────────────────────────────────────────────────────────────
-MOVIE_CLEANUP_ENABLED       = True           # Master per-type switch. When false, NO movie is ever
+MOVIE_CLEANUP_ENABLED       = False          # Master per-type switch. When false, NO movie is ever
                                              # eligible: scans still scan and score (the snapshot and
                                              # the Filtering & Scoring table stay live), but the
                                              # deletion plan is empty and cleanup deletes nothing.
@@ -2163,7 +2165,7 @@ def _load_config_from_file():
     # key existed keeps deleting movies rather than silently going inert. The
     # plan-stamp copy carries the effective bool for the same reason: an absent
     # key must compare equal to an explicit true.
-    MOVIE_CLEANUP_ENABLED = _coerce_config_bool(_c["MOVIE_CLEANUP_ENABLED"]) if "MOVIE_CLEANUP_ENABLED" in _c else True
+    MOVIE_CLEANUP_ENABLED = _coerce_config_bool(_c["MOVIE_CLEANUP_ENABLED"]) if "MOVIE_CLEANUP_ENABLED" in _c else False
     _PLAN_CONFIG_RAW["MOVIE_CLEANUP_ENABLED"] = MOVIE_CLEANUP_ENABLED
 
     # SCORE_BALANCE is the only scoring knob; unknown keys are ignored.
@@ -4472,8 +4474,9 @@ def _path_is_within(child, parent):
 
 
 def get_library_size_gb():
-    """Monitored library size in GB, summed from disk over movie files under the
-    monitored roots. None on error; empty MONITOR_DIRS returns 0.0.
+    """Monitored library size in GB, summed from disk over the media files under
+    the monitored roots — movies and TV episodes alike, which is what the Library
+    Size Cap measures. None on error; empty MONITOR_DIRS returns 0.0.
 
     Uses allocated bytes (block counts) where available, so it tracks `du`. Reads
     off disk rather than Tautulli's get_library_media_info, whose cached media-info
@@ -4876,7 +4879,7 @@ def build_candidates():
         # no store write has happened yet, so the last good snapshot and deletion
         # plan are preserved for when storage comes back.
         _abort_api_failure(
-            f"No movie library is mounted at {LIBRARY_ROOT}, so the storage may be offline. "
+            f"No media library is mounted at {LIBRARY_ROOT}, so the storage may be offline. "
             "Nothing was deleted and your saved plan is untouched. Check the mount, then "
             "run again.")
 

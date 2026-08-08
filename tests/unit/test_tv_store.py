@@ -153,6 +153,45 @@ check("a series nested below the monitored dir resolves by its trailing run",
       _nested[0]["tv_in_scope"] == 1
       and _nested[0]["path"] == str(_TVDIR / "Anime" / "Nested Show"), _nested[0]["path"])
 
+# A name is not an identity. Two monitored libraries of the same shows — a
+# 1080p tree beside a 4K one, an archive beside a live one — carry the same
+# folder name under both, and the media server's own path is in its container
+# namespace, so the name is all the resolver has to go on. Taking whichever
+# monitored dir came first would hand the deletion pass the copy the server was
+# NOT talking about: seasons removed from one library, scored on the other's
+# plays and sizes. Ambiguous resolves to nothing, and says so on the row.
+_ALT = Path(_OUT) / "library" / "TV-4K"
+(_ALT / "Twin Show").mkdir(parents=True)
+(_TVDIR / "Twin Show").mkdir(parents=True)
+# Rebuilt per resolve: the resolver REPLACES row["path"] with what it found
+# (or None), exactly as a refresh does, so a re-resolve of the same object
+# would be judging its own previous answer.
+def _twin_row():
+    return [A._new_tv_row(title="Twin Show", year=2020, path="/data/tv-4k/Twin Show",
+                          seasons=[_season(1, 4, 2_000_000_000)],
+                          added_at=1_600_000_000, status="ended",
+                          jf_source_id="jellyfin:t1")]
+_twin = _twin_row()
+A._resolve_tv_scope(_twin, {**CFG, "MONITOR_DIRS": [str(_TVDIR), str(_ALT)]})
+check("a folder name found under two monitored dirs resolves to neither",
+      _twin[0]["tv_in_scope"] == 0 and _twin[0]["path"] is None, _twin[0]["path"])
+check("...and the row says it was a conflict, not an unmonitored show",
+      len(_twin[0].get("tv_scope_conflict") or []) == 2, _twin[0].get("tv_scope_conflict"))
+# Unique again once only one library holds it — the guard is about ambiguity,
+# not about having more than one monitored directory.
+shutil.rmtree(_TVDIR / "Twin Show")
+_twin = _twin_row()
+A._resolve_tv_scope(_twin, {**CFG, "MONITOR_DIRS": [str(_TVDIR), str(_ALT)]})
+check("...and it resolves once the name is unambiguous again",
+      _twin[0]["tv_in_scope"] == 1 and _twin[0]["path"] == str(_ALT / "Twin Show"),
+      _twin[0]["path"])
+# The same folder reached through two OVERLAPPING monitored entries is one
+# place, not a conflict — otherwise a nested monitored dir would disable TV.
+_twin = _twin_row()
+A._resolve_tv_scope(_twin, {**CFG, "MONITOR_DIRS": [str(_ALT), str(_ALT.parent)]})
+check("the same folder via overlapping monitored dirs is not a conflict",
+      _twin[0]["tv_in_scope"] == 1, _twin[0])
+
 # ── The deploy sequence: a code-change wipe takes TV rows too ───────────────
 # ensure_code_current clears every snapshot row on an engine-checksum change,
 # TV included. The Simulate that rebuilds the movie rows triggers a TV refresh
