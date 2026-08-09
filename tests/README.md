@@ -46,6 +46,7 @@ log path named in the failure line is actually there to read.
 | `test_service_port` | The listening port: 7474 by default, `MEDIAREDUCER_PORT` when set, refused rather than ignored when it is not a usable port. The CLI default and the Docker healthcheck follow the same variable |
 | `test_library_mount_state` | A missing or empty `/library` says so, instead of blaming Plex path alignment for a mount that is not there. Both states still block |
 | `test_media_path_check` | The configuration check's media-path layer: the app-side fingerprint resolver mirroring the engine's, sampled sizes verified against the disk, a stale size or two passing, a MAJORITY of size mismatches or unmatched samples failing the check as the wrong library (a lone stale size or ghost entry warning instead), folder-shaped samples excluded from the check, and the explained variant's reasons (what the debug buttons print) |
+| `test_basic_hardening` | The baseline, checked rather than assumed: config.json (a Plex token, three API keys, any webhook URLs) is written owner-only rather than at the default world-readable umask; every response refuses framing and sniffing; the mutating-request header gate is matched on its own words, since an empty body 400s either way and a status check alone would pass with the gate gone; both path-taking routes stay inside their root; no shell, no Werkzeug debugger |
 | `test_appdata_mounts` | What the `/tautulli` and `/radarr` mounts contribute. Ports are never read from appdata; a mounted config with no key in it is not "verified" |
 
 **Deletion safety**
@@ -192,7 +193,22 @@ dead port so an accidental network fetch fails loudly.
 | `e2e_page_notes` | Page-level notes: still-in-effect ones pinned with no X, already-done ones dismissible underneath — and dismissed means gone |
 | `e2e_startup_mode_option` | The checkbox living inside the click-to-select Automatic Cleanup card: ticking it must not also arm the deleting mode |
 | `e2e_last_run_colon` | The Last run clock's colon ticks while a run is active and holds still when idle |
+| `e2e_config_rhythm` | Every group on Configuration sits at one rhythm: same gap from rule to heading, same gap from heading to fields, measured rather than asserted from the CSS. Spacing had been written per instance in Bootstrap utilities and drifted to three divider weights and two heading gaps — one of them depending on whether the heading shared a grid column with its first field. Also holds the line: no divider may carry its own margin utility, and no heading may skip the shared class |
 | `e2e_slider_scroll_guard` | Scrolling a finger down a slider-heavy page never moves a slider. Sweeps every page for `input[type=range]` rather than naming them, so a slider added later is covered the day it lands: each must carry `touch-action: pan-y`, snap back (and re-fire `input`) on a vertical gesture, and still follow a horizontal drag |
+
+## Scenarios (`tests/scenarios/`)
+
+Part of the `--e2e` tier, so every push runs it. 29 fixed scenarios, each a
+whole world — movies and multi-season shows on disk, a mock Jellyfin serving
+exactly what the disk holds, a config — driven through real Simulate and
+Cleanup runs, with the deletion invariants checked after each one and an
+explicit expectation of what should have happened.
+
+Fixed, not random: two runs of the same commit must cover the same ground, or a
+failure cannot be reproduced and a merge cannot be gated on it. See
+`tests/scenarios/README.md`, which also lists the four ways an earlier version
+of this reported a clean sweep while testing nothing. It found the
+manual-Cleanup delay asymmetry that `test_tv_cleanup` now guards.
 
 ## Environment
 

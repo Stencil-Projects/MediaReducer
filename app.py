@@ -97,6 +97,52 @@ DEFAULT_CFG_PATH = APP_DIR / "default_config.json"
 CONFIG_PATH      = Path(os.environ.get("MEDIAREDUCER_CONFIG", "/config/config.json"))
 
 
+# ── Appearance: per browser, not per install ─────────────────────────────────
+# The one class of setting that says nothing about the library — only how THIS
+# browser should draw the page. Two people on one install can disagree about
+# them without either being wrong, and a phone and a desktop usually do, so
+# they live in cookies rather than config.json. Nothing here reaches the
+# engine, no save is involved, and Reset MediaReducer leaves them alone.
+APPEARANCE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+
+
+def _is_firefox_mobile(ua: str) -> bool:
+    """Gecko on a phone or tablet.
+
+    It gets a different default because backdrop-filter costs it far more than
+    it costs Blink: a page carrying dozens of blurred surfaces scrolls visibly
+    badly there. Firefox for iOS is deliberately NOT matched — Apple requires
+    WebKit under it, so "FxiOS" is Firefox in name only and does not share the
+    cost. Matching on the marketing name would turn the blur off for a browser
+    that renders it fine."""
+    ua = ua or ""
+    return "Firefox/" in ua and ("Android" in ua or "Mobile;" in ua)
+
+
+def _appearance_flags(req) -> dict:
+    """How to stamp <html> for this request's browser.
+
+    `reduce_effects` and `glass_pref_off` are what the two Advanced toggles say
+    — a cookie each, absent until someone touches them. `no_glass` is what the
+    stylesheet actually reads: Reduce visual effects turns the blur off along
+    with everything else, so the OR happens here rather than in every rule.
+
+    With no cookie set, the glass defaults OFF on Firefox mobile. That is the
+    one place the default is worth changing rather than leaving someone to find
+    the setting after deciding the app is slow."""
+    def _flag(name):
+        v = (req.cookies.get(name) or "").strip().lower()
+        return True if v == "off" else False if v == "on" else None
+
+    reduce_effects = _flag("mr_effects") or False
+    glass_pref_off = _flag("mr_glass")
+    if glass_pref_off is None:
+        glass_pref_off = _is_firefox_mobile(req.headers.get("User-Agent", ""))
+    return {"reduce_effects": bool(reduce_effects),
+            "glass_pref_off": bool(glass_pref_off),
+            "no_glass": bool(glass_pref_off or reduce_effects)}
+
+
 def _root_from_env(var: str, default: str) -> str:
     """Deployment root, relocatable for bare-metal installs. The engine inherits
     this process's environment and reads the SAME vars, so the two always agree.
@@ -269,6 +315,26 @@ _COMPRESS_MIN_BYTES = 1024
 
 
 @app.after_request
+def _security_headers(response):
+    """The three headers any app should send, whether or not it faces the net.
+
+    X-Frame-Options is the one that earns its place here. The mutating-request
+    header (see above) stops another origin SCRIPTING a write, but it does
+    nothing about framing: a page that embeds MediaReducer invisibly and steers
+    a real click is clicking as you, and the header this app requires is set by
+    its own JavaScript, so it rides along. With one-click Cleanup and no login,
+    refusing to be framed is the cheap half of that problem solved.
+
+    nosniff stops a browser second-guessing a declared content type — the
+    archived-log route hands back files whose names came from disk. no-referrer
+    keeps a LAN hostname out of the Referer header on any outbound link."""
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+
+@app.after_request
 def _cache_vendor_assets(response):
     """Let the browser keep the vendored Bootstrap/Inter files forever.
 
@@ -414,7 +480,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.12"
+APP_VERSION = "1.0.0-alpha.13"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -674,7 +740,7 @@ def _config_file_issues(saved: dict) -> list[dict]:
                 "USE_JELLYFIN", "KEEP_INTERRUPTED_LOGS", "DEBUG_MODE",
                 "REDLINE_ONLY_MODE", "PAUSE_CLEANUP_ON_STARTUP",
                 "MOVIE_CLEANUP_ENABLED", "TV_CLEANUP_ENABLED",
-                "SONARR_CLEANUP_ENABLED", "REDUCE_VISUAL_EFFECTS"):
+                "SONARR_CLEANUP_ENABLED"):
         if key in saved and not isinstance(saved[key], bool):
             bad(key, "must be true or false")
     # "off" = the scheduler is fully paused (no ticks do anything); "paused" =
@@ -950,6 +1016,17 @@ def _atomic_write_json(path: Path, data, *, indent: int | None = None) -> None:
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         tmp.write_text(json.dumps(data, indent=indent), encoding="utf-8")
+        # Owner-only, before the rename rather than after: config.json holds a
+        # Plex token, three API keys and any notification webhook URLs in clear
+        # text, and the default umask leaves it world-readable — which on a NAS
+        # means every other container sharing appdata can read them. The mode
+        # rides the tmp file, so os.replace carries it over and an existing
+        # install is tightened by its next save. chmod can fail on a filesystem
+        # with no POSIX modes (a Windows bind mount); the write still stands.
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
         tmp.replace(path)
     finally:
         tmp.unlink(missing_ok=True)
@@ -1709,9 +1786,10 @@ def inject_display_time_settings():
         "api_connection_error": _api_connection_error(cfg),
         "debug_mode": bool(cfg.get("DEBUG_MODE")),
         # Stamped on <html> by base.html so the very first paint is already
-        # plain — a page that animated once and then settled would defeat the
-        # point of asking for no animation.
-        "reduce_effects": bool(cfg.get("REDUCE_VISUAL_EFFECTS")),
+        # right — a page that animated once and then settled would defeat the
+        # point of asking for no animation, and glass that painted once and
+        # then vanished would be a flash of the thing being turned off.
+        **_appearance_flags(request),
         "welcome_needed": _welcome_guide_needed(cfg),
         # First-launch only: adopt the browser's time zone (client posts it to
         # /api/timezone/init). True only on a brand-new install still on "auto"
@@ -2370,8 +2448,15 @@ def run_script(mode_override: str | None = None, manual: bool = False,
                 _tv_pass_cfg = load_config()
                 _tv_exec = _tv_pass_plan_for_run(_tv_pass_cfg, _effective_mode)
                 if _tv_exec is not None:
+                    # `manual` rides along: a Dashboard Cleanup prunes every
+                    # breached target NOW, which is this function's own contract
+                    # and what the movie side has always done. Without it the
+                    # season side sat out its delay while the movies went, and
+                    # since the seasons' share is subtracted from the movie
+                    # target first, the run freed less than it was asked for.
                     _tv_report = _run_tv_cleanup_pass(_tv_pass_cfg,
-                                                      execute=_tv_exec)
+                                                      execute=_tv_exec,
+                                                      immediate=manual)
                 else:
                     _stamp_tv_share(0)
             except Exception as e:
@@ -4593,10 +4678,15 @@ def _tv_pass_plan_for_run(cfg: dict, effective_mode: str | None):
     return _is_cleanup_mode(effective_mode)
 
 
-def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
+def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -> dict:
     """The run's season side — fired with every engine run: refresh facts fail-closed,
     reconcile the marks with the fresh take prefix, and (execute=True only)
     delete the marked seasons whose delay has elapsed, worst-kept first.
+    immediate=True skips the deletion delay, for the one run that is allowed to:
+    a manual Cleanup. The delay paces the AUTOMATIC schedule — it buys time to
+    change your mind about what a daily run will take — and a button press is
+    the user saying the target matters now.
+
     Returns the report it also persists as the state's last_pass."""
     today = time.strftime("%Y-%m-%d")
     report = {"at": time.time(), "date": today,
@@ -4702,11 +4792,12 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool) -> dict:
             # Same clock as a marked movie (shared.delete_on_str): marked
             # today, deletable at the earliest by tomorrow's pass. An
             # unusable stamp ("") holds the season — fail closed, never due.
-            due_on = shared.delete_on_str(m.get("marked_at") or now,
-                                          m.get("delay_days") or delay)
-            if not due_on or today < due_on:
-                report["held_by_delay"] += 1
-                continue
+            if not immediate:
+                due_on = shared.delete_on_str(m.get("marked_at") or now,
+                                              m.get("delay_days") or delay)
+                if not due_on or today < due_on:
+                    report["held_by_delay"] += 1
+                    continue
             if _delete_tv_season(cfg, e, report):
                 del marked[k]
         # The share was stamped from PRE-deletion disk numbers; the engine
@@ -10135,7 +10226,6 @@ def api_save_config():
             return jsonify({"ok": False, "error": "Keep run logs for (days) must be a whole number (0 = keep forever)."}), 400
         cfg["KEEP_INTERRUPTED_LOGS"] = bool(cfg.get("KEEP_INTERRUPTED_LOGS"))
         cfg["DEBUG_MODE"] = bool(cfg.get("DEBUG_MODE"))
-        cfg["REDUCE_VISUAL_EFFECTS"] = bool(cfg.get("REDUCE_VISUAL_EFFECTS"))
 
         # Notifications (outbound alerting). A partial/scripted POST that omits
         # these keeps whatever was saved; bad service URLs never block a save —

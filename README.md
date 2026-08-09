@@ -268,11 +268,14 @@ Optional outbound alerts — see [Notifications](#notifications).
 IMDb dataset settings, display/time settings, log retention, cache tools, debug
 mode, the headroom safety cap, and **Reset MediaReducer**.
 
-**Reduce visual effects** (off by default) strips the decorative layer: no page
-entrance animation, no hover/press fades, no sliding tab underline or click
-ripple, no pulsing run pill, no progress-bar stripes. Nothing that carries
-information goes with it. Your browser's own "reduce motion" setting already
-does most of this.
+Two appearance settings, stored **per browser** in cookies rather than in the
+config, so your phone and your desktop can differ. Both apply on Save, like
+everything else here.
+
+- **Reduce visual effects** — no animations, transitions or background blur.
+- **Disable background blur** — the frosted glass on its own. Worth turning off
+  if scrolling feels slow; it starts off on Firefox for Android, where it costs
+  the most.
 
 ## Filtering & Scoring
 

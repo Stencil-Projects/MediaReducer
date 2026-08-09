@@ -49,40 +49,55 @@
     border-color: var(--text-danger);
     box-shadow: 0 0 0 2px var(--bg-danger);
   }
+  /* ── One rhythm for every group on the page ──────────────────────────────
+     A group is a rule, a heading, then its fields, and all three gaps are set
+     here rather than per-instance. They had been left to Bootstrap utilities
+     and drifted: three different divider weights (my-2, my-3, my-4) and two
+     different heading gaps, one of which depended on something invisible in
+     the markup — whether the heading shared a grid column with its first
+     field. That is why Logging sat twice as far from its fields as IMDb
+     Ratings Data did. Setting it centrally means a group added later cannot
+     land at its own spacing. */
   .config-divider {
     /* The subtler --border weight, matching the field-group dividers, so every
        divider on the page reads as one style. */
     border-color: var(--border);
     opacity: 1;
+    margin: 1.5rem 0;
   }
-  /* Inside a grid row, a divider followed by a heading in the SAME column sat
-     lopsided: 24px of air above it, 8px below. Every other divider there is
-     followed by a new COLUMN, which is a grid item — its margin cannot collapse
-     with the rule's, so the row's vertical gutter lands on top of the rule's own
-     margin-bottom. A heading sharing the column is an ordinary sibling: its
-     margin collapses with that margin-bottom instead of stacking on it. So the
-     gutter is added back AND the rule's margin restated, since only the larger
-     of the two survives the collapse.
-     Scoped to the grid: a divider and heading standing on their own (the Time
-     one, under Connections) never met a gutter and were even already — the
-     unscoped version of this rule pushed THAT pair out by 8px instead. */
-  .col-12 > .config-divider + h6 {
-    margin-top: calc(var(--bs-gutter-y, 1rem) + .5rem);   /* .5rem = the my-2 */
+  h6.config-group-title {
+    margin: 0 0 .5rem;
+  }
+  /* The two corrections a grid needs, both for the same reason: a row's gutter
+     is padding on the COLUMN, so it stacks with whatever margin is already
+     there instead of collapsing into it. Above a rule that opens a column, and
+     below a column holding nothing but the heading, that doubles the gap —
+     so each takes the gutter back out. Non-grid groups (Time, the cleanup
+     boxes) meet no gutter and are left alone. */
+  .col-12 > .config-divider:first-child {
+    margin-top: calc(1.5rem - var(--bs-gutter-y, 1rem));
+  }
+  .config-group-head {
+    /* The whole gutter, not the difference: it is padding on the NEXT column,
+       so it stacks under this column's own margin rather than replacing it.
+       Removing it leaves the heading's .5rem as the only gap, which is what
+       every heading elsewhere on the page has. */
+    margin-bottom: calc(-1 * var(--bs-gutter-y, 1rem));
   }
   .config-section-title {
     font-weight: 600;
   }
   .config-small-muted {
-    font-size: .82rem;
+    font-size: var(--fs-md);
     color: var(--text-muted);
   }
   .config-code-muted {
-    font-size: .76rem;
+    font-size: var(--fs-sm);
     color: var(--text-muted);
   }
   .config-details-summary {
     cursor: pointer;
-    font-size: .85rem;
+    font-size: var(--fs-lg);
     color: var(--text-muted);
     margin-bottom: 16px;
   }
@@ -129,7 +144,7 @@
     transition: height .32s ease;
   }
   .config-status-list {
-    font-size: .82rem;
+    font-size: var(--fs-md);
     color: var(--text-secondary);
   }
   .config-form-width-xs { max-width: 120px; }
@@ -208,7 +223,7 @@
     font-weight: 600;
   }
   .run-mode-desc {
-    font-size: .78rem;
+    font-size: var(--fs-sm);
     color: var(--text-muted);
     display: block;
     margin-top: 2px;
@@ -222,7 +237,7 @@
     padding-top: 10px;
     border-top: 1px solid var(--border);
   }
-  .run-mode-option .form-check-label { font-size: .82rem; }
+  .run-mode-option .form-check-label { font-size: var(--fs-md); }
   .run-mode-option .form-text { margin-top: 3px; }
   /* Ghosted with the rest of the card when the mode itself cannot be picked:
      a setting for a mode you cannot select has nothing to act on. */
@@ -244,12 +259,12 @@
   }
   .mode-spec-k {
     display: block;
-    font-size: .62rem; font-weight: 700; letter-spacing: .06em;
+    font-size: var(--fs-3xs); font-weight: 700; letter-spacing: .06em;
     text-transform: uppercase; color: var(--text-muted);
   }
   .mode-spec-v {
     display: block;
-    font-size: .82rem; font-weight: 600; color: var(--text-secondary);
+    font-size: var(--fs-md); font-weight: 600; color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
   }
   .mode-spec-v.is-off { color: var(--text-muted); font-weight: 500; }
@@ -282,12 +297,12 @@
   }
   .ts-storage { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .ts-free { font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .ts-free .unit { font-size: .9rem; font-weight: 400; color: var(--text-muted); }
-  .ts-disk-sub { font-size: .74rem; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .ts-free .unit { font-size: var(--fs-xl); font-weight: 400; color: var(--text-muted); }
+  .ts-disk-sub { font-size: var(--fs-xs); color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
   .ts-lib { text-align: right; }
-  .ts-lib-value { font-size: .95rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .ts-lib-value .unit { font-size: .72rem; font-weight: 400; color: var(--text-muted); }
-  .ts-lib-label { display: block; font-size: .6rem; font-weight: 600; letter-spacing: .06em;
+  .ts-lib-value { font-size: var(--fs-2xl); font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .ts-lib-value .unit { font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
+  .ts-lib-label { display: block; font-size: var(--fs-3xs); font-weight: 600; letter-spacing: .06em;
                   text-transform: uppercase; color: var(--text-muted); margin-top: 1px; }
   /* The bar sits between the figures and the per-threshold lines, so it needs
      no top margin of its own here. */
@@ -295,15 +310,15 @@
   .ts-rows { display: grid; gap: 12px; }
   .ts-row { display: grid; gap: 5px; }
   .ts-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-  .ts-name { font-size: .78rem; font-weight: 600; color: var(--text-primary); }
+  .ts-name { font-size: var(--fs-sm); font-weight: 600; color: var(--text-primary); }
   .ts-state {
-    font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+    font-size: var(--fs-xs); font-weight: 700; letter-spacing: .02em;
     color: var(--text-muted); white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
   .ts-row.is-near  .ts-state { color: var(--text-warning); }
   .ts-row.is-over  .ts-state { color: var(--text-danger); }
-  .ts-note { font-size: .74rem; line-height: 1.5; color: var(--text-muted); }
+  .ts-note { font-size: var(--fs-xs); line-height: 1.5; color: var(--text-muted); }
   .ts-note b { color: var(--text-secondary); font-weight: 600; font-variant-numeric: tabular-nums; }
   .ts-row.is-off .ts-name, .ts-row.is-off .ts-note { color: var(--text-muted); }
   .ts-row.is-off .ts-name { font-weight: 500; }
@@ -318,10 +333,10 @@
   .server-req { color: var(--text-muted); font-weight: 400; font-size: .85em; }
   .collections-list { display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto;
     border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--surface-2); }
-  .collection-item { display: flex; align-items: center; gap: 9px; padding: 4px 2px; margin: 0; cursor: pointer; font-size: .9rem; }
+  .collection-item { display: flex; align-items: center; gap: 9px; padding: 4px 2px; margin: 0; cursor: pointer; font-size: var(--fs-xl); }
   .collection-item .form-check-input { margin: 0; flex-shrink: 0; }
   .collection-name { color: var(--text-primary); }
-  .collection-missing { color: var(--text-muted); font-size: .76rem; font-style: italic; margin-left: auto; white-space: nowrap; }
+  .collection-missing { color: var(--text-muted); font-size: var(--fs-sm); font-style: italic; margin-left: auto; white-space: nowrap; }
   .collections-empty { margin: 0; }
   .library-browser-row {
     background: var(--surface-2);
@@ -353,7 +368,7 @@
   }
   .secret-toggle {
     min-width: 4.25rem;
-    font-size: .78rem;
+    font-size: var(--fs-sm);
   }
   /* Secret fields render as type=text (so password managers don't offer to save
      them) but masked via -webkit-text-security; .secret-shown reveals. Browsers
@@ -408,7 +423,7 @@
     background: var(--bg-danger) !important;
   }
   .mount-card-optional {
-    font-size: .7rem;
+    font-size: var(--fs-xs);
     color: var(--text-muted);
     margin-left: 6px;
   }
@@ -441,7 +456,7 @@
   }
   .delay-redline-advisory[hidden] { display: none; }
   #library-browser-current {
-    font-size: .78rem;
+    font-size: var(--fs-sm);
     color: var(--text-muted);
     font-family: monospace;
   }
@@ -492,9 +507,8 @@
 
 <div id="invalid-config-banner" class="config-card config-card-danger p-3 mb-4" hidden>
   <div class="input-label">⚠ Invalid config file</div>
-  <div class="form-text">config.json was edited outside MediaReducer and some values break the rules
-    the GUI enforces. Everything below is locked — including API connections — until the invalid
-    values are reset to their defaults, or MediaReducer is reset.</div>
+  <div class="form-text">config.json was edited outside MediaReducer and some values break its
+    rules. Everything below stays locked until they are reset.</div>
   <ul id="invalid-config-list" class="form-text"></ul>
   <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
     <button type="button" class="btn btn-sm btn-danger-action" id="btn-reset-invalid" onclick="onResetInvalidClick()">Reset invalid values to defaults</button>
@@ -603,8 +617,8 @@
           </div>
         </div>
 
-        <hr class="config-divider my-3">
-        <h6 class="mb-2">Time</h6>
+        <hr class="config-divider">
+        <h6 class="config-group-title">Time</h6>
         <div class="row g-3">
           <div class="col-md-4">
             <label class="input-label" for="DAILY_RUN_TIME">Daily run time</label>
@@ -689,7 +703,7 @@
           </div>
         </div>
 
-        <h6 class="mb-2">Server software</h6>
+        <h6 class="config-group-title">Server software</h6>
         <div class="server-software-row mb-4 {{ 'connection-highlight' if 'SERVER_SOFTWARE' in connection_highlights else '' }}" id="server-software-row">
           <div class="form-check">
             <input class="form-check-input" type="checkbox" id="USE_PLEX" name="USE_PLEX"
@@ -706,11 +720,10 @@
           No server selected — MediaReducer stays idle until Plex or Jellyfin is enabled and its API connects.
         </div>
 
-        <h6 class="mb-2">Appdata mounts</h6>
+        <h6 class="config-group-title">Appdata mounts</h6>
         <div class="form-text mb-2">
           Let <strong>Auto Detect</strong> read API keys from each service's config.
-          Nothing else uses them — skip one and you type that key in yourself. URLs
-          always use the service's documented port.
+          Skip one and you type that key in yourself.
         </div>
         <!-- Both are optional: the label marks that the MOUNT can be skipped,
              not that the service is. There is no Jellyfin card — Jellyfin issues
@@ -789,7 +802,7 @@
         </div>
 
         <div class="mt-3 debug-mode-control{{ ' d-none' if not config.DEBUG_MODE else '' }}">
-          <h6 class="mb-2">API debug</h6>
+          <h6 class="config-group-title">API debug</h6>
           <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
             <button type="button" class="btn btn-sm btn-outline-warning pr-debug-btn" id="btn-debug-tautulli-movies"
                     onclick="prRunDebug('/api/debug/tautulli/movies', 'Tautulli movie data', this)"
@@ -849,14 +862,14 @@
         </div>
         </div>
 
-        <hr class="config-divider my-4">
+        <hr class="config-divider">
         <!-- Always protect — scanned collection/box-set pickers, side by side
              on wide screens. Groups never hide: a disconnected server's group
              is ghosted until its API connects. -->
         <div class="row g-4">
           <div class="col-lg-6">
             <div id="plex-protect-group" class="saved-server-plex{{ ' connection-ghost' if not plex_connected else '' }}">
-              <h6 class="mb-2">Always protect — Plex collections</h6>
+              <h6 class="config-group-title">Always protect — Plex collections</h6>
               <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
                 <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-scan-plex" onclick="scanCollections('plex')" {{ 'disabled' if not plex_connected else '' }}>Scan Plex collections</button>
                 <button type="button" class="btn btn-sm btn-outline-warning pr-debug-btn debug-mode-control{{ ' d-none' if not config.DEBUG_MODE else '' }}" id="btn-debug-plex" onclick="debugPlexCollections()" title="Debug: what Plex reports inside the selected collections" {{ 'disabled' if not plex_connected else '' }}>Debug collections</button>
@@ -869,7 +882,7 @@
           </div>
           <div class="col-lg-6">
             <div id="jellyfin-protect-group" class="saved-server-jellyfin{{ ' connection-ghost' if not jellyfin_connected else '' }}">
-              <h6 class="mb-2">Always protect — Jellyfin collections</h6>
+              <h6 class="config-group-title">Always protect — Jellyfin collections</h6>
               <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
                 <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-scan-jellyfin" onclick="scanCollections('jellyfin')" {{ 'disabled' if not jellyfin_connected else '' }}>Scan Jellyfin collections</button>
                 <button type="button" class="btn btn-sm btn-outline-warning pr-debug-btn debug-mode-control{{ ' d-none' if not config.DEBUG_MODE else '' }}" id="btn-debug-jellyfin" onclick="debugJellyfinCollections()" title="Debug: what Jellyfin reports inside the selected collections" {{ 'disabled' if not jellyfin_connected else '' }}>Debug collections</button>
@@ -883,13 +896,13 @@
         </div>
 
         <div>
-        <hr class="config-divider my-4">
+        <hr class="config-divider">
         {% set cached_radarr_section_id = config.get('_RADARR_DETECTED_SECTION_ID') %}
         {% set cached_radarr_section_name = config.get('_RADARR_DETECTED_SECTION_NAME') %}
         {% set cached_radarr_section_method = config.get('_RADARR_DETECTED_SECTION_METHOD') %}
         {% set cached_radarr_section_method_label = config.get('_RADARR_DETECTED_SECTION_METHOD_LABEL') %}
         <div id="optional-cleanup-box" class="optional-cleanup-box {{ 'connection-ghost' if not radarr_connected else '' }}">
-          <h6 class="mb-2">Optional Radarr cleanup</h6>
+          <h6 class="config-group-title">Optional Radarr cleanup</h6>
           <div class="config-form-width-xl">
             <label class="filter-score-toggle-row" for="section-enabled">
               <input class="form-check-input" type="checkbox" id="section-enabled"
@@ -904,7 +917,7 @@
         </div>
 
         <div id="sonarr-cleanup-box" class="optional-cleanup-box {{ 'connection-ghost' if not sonarr_connected else '' }}">
-          <h6 class="mb-2">Optional Sonarr cleanup</h6>
+          <h6 class="config-group-title">Optional Sonarr cleanup</h6>
           <div class="config-form-width-xl">
             <label class="filter-score-toggle-row" for="sonarr-cleanup-enabled">
               <input class="form-check-input" type="checkbox" id="sonarr-cleanup-enabled"
@@ -1048,13 +1061,13 @@
           </div>
           <div id="cap-error" class="field-error">Enter a Library Size Cap value before saving, or uncheck this option.</div>
           <div id="cap-paths-note" class="form-text" {{ 'hidden' if thresholds_have_library else '' }}>{{ 'Save a monitored directory first.' if selected_media_apis_ready else ('Fix the /config read/write problem first.' if not filesystem_ready else ('Connect or uncheck the selected media server first.' if (use_plex or use_jellyfin) else 'Select Plex or Jellyfin under Server software first.')) }}</div>
-          <div class="form-text">Optional. Caps the combined size of your monitored movies and TV; the daily cleanup trims back under it. Refresh the measurement with &#8635; on the Dashboard.</div>
+          <div class="form-text">Optional. Caps the combined size of your monitored movies and TV; the daily cleanup trims back under it.</div>
         </div>
 
-        <hr class="config-divider my-4">
+        <hr class="config-divider">
 
         <div>
-          <h6 class="mb-2">Deletion delay</h6>
+          <h6 class="config-group-title">Deletion delay</h6>
           <p class="section-desc mb-3">A grace period before a marked movie or season is deleted — time to protect it or change the rules first.</p>
           <div class="input-group gb-input-group mb-2" id="delete-delay-field">
             <input type="number" class="form-control" id="DELETE_DELAY_DAYS" name="DELETE_DELAY_DAYS"
@@ -1065,7 +1078,7 @@
             <span class="input-group-text">days</span>
           </div>
           <div id="delete-delay-error" class="field-error">Must be a whole number of days, 1–365.</div>
-          <div class="form-text">How long a mark waits before it can be deleted. Redline and manual Cleanups skip it. Changes apply to future marks only — existing marks keep their original delay.</div>
+          <div class="form-text">How long a mark waits before it can be deleted. Redline and manual Cleanups skip it. Existing marks keep their original delay.</div>
           <div id="delay-redline-only-note" class="form-text redline-only-note" {{ '' if (has_monitor_dirs and not headroom_enabled and not library_cap_enabled) else 'hidden' }}>Not used in redline-only mode — Redline deletes immediately at the floor.</div>
           <div id="delay-redline-advisory" class="form-text delay-redline-advisory" hidden></div>
           <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="btn-reset-delays" onclick="resetMarkDelays()">Reset marked delays</button>
@@ -1153,7 +1166,7 @@
           <div class="form-check">
             <input class="form-check-input" type="checkbox" id="NOTIFY_ON_ERROR" name="NOTIFY_ON_ERROR" {{ 'checked' if config.NOTIFY_ON_ERROR else '' }}>
             <label class="form-check-label" for="NOTIFY_ON_ERROR">Failed runs and errors</label>
-            <div class="form-text mt-0">Alert when a run stops dead, and list what went wrong on runs that finished with errors. Off means a failed run sends nothing at all, and a finished one doesn't mention its errors.</div>
+            <div class="form-text mt-0">Alerts when a run stops dead, and lists what went wrong on runs that finished with errors.</div>
           </div>
 
           <div class="notify-subhead">Where to send</div>
@@ -1266,7 +1279,7 @@
           <div class="col-lg-8">
             <div class="row g-3">
               <div class="col-12">
-                <h6 class="mb-2">IMDb Ratings Data</h6>
+                <h6 class="config-group-title">IMDb Ratings Data</h6>
                 <label class="input-label" for="IMDB_RATINGS_URL">IMDb dataset URL</label>
                 <input type="url" class="form-control" id="IMDB_RATINGS_URL"
                        name="IMDB_RATINGS_URL" value="{{ config.IMDB_RATINGS_URL }}"
@@ -1289,9 +1302,9 @@
                   Download Latest IMDb Ratings
                 </button>
               </div>
-              <div class="col-12">
-                <hr class="config-divider my-2">
-                <h6 class="mb-0">Logging</h6>
+              <div class="col-12 config-group-head">
+                <hr class="config-divider">
+                <h6 class="config-group-title">Logging</h6>
               </div>
               <div class="col-sm-5 col-md-4">
                 <label class="input-label" for="LOG_RETENTION_DAYS">Keep run logs for</label>
@@ -1320,19 +1333,34 @@
                   <span id="clear-logs-status" class="form-text"></span>
                 </div>
               </div>
-              <div class="col-12">
-                <hr class="config-divider my-2">
+              <!-- Appearance. Stored per browser in a cookie rather than in
+                   config.json, so nothing here reaches the engine — but it
+                   still lands on Save, like every other control on this page. -->
+              <div class="col-12 config-group-head">
+                <hr class="config-divider">
+                <h6 class="config-group-title">Appearance</h6>
               </div>
               <div class="col-12">
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" id="REDUCE_VISUAL_EFFECTS"
-                         name="REDUCE_VISUAL_EFFECTS" {{ 'checked' if config.REDUCE_VISUAL_EFFECTS else '' }}>
+                         {{ 'checked' if reduce_effects else '' }}
+                         onchange="_onAppearanceToggled()">
                   <label class="form-check-label" for="REDUCE_VISUAL_EFFECTS">Reduce visual effects</label>
                 </div>
-                <div class="form-text">Pages switch without the entrance animation, buttons change color on hover and press without fading, the header tabs drop their sliding underline and click ripple, and the progress bar loses its stripes. Nothing that carries information is hidden — colors, the underline on the current tab, and the percentage all stay. Applies on save.</div>
+                <div class="form-text">No animations, transitions or background blur. This browser only.</div>
               </div>
               <div class="col-12">
-                <hr class="config-divider my-2">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="DISABLE_GLASS_BLUR"
+                         {{ 'checked' if glass_pref_off else '' }}
+                         onchange="_onAppearanceToggled()">
+                  <label class="form-check-label" for="DISABLE_GLASS_BLUR">Disable background blur</label>
+                </div>
+                <div class="form-text" id="glass-blur-help">The frosted glass behind the header and buttons. Turn it off if scrolling feels slow. This browser only.</div>
+              </div>
+              <div class="col-12 config-group-head">
+                <hr class="config-divider">
+                <h6 class="config-group-title">Troubleshooting</h6>
               </div>
               <div class="col-12">
                 <div class="d-flex align-items-center gap-3 flex-wrap">
@@ -1344,7 +1372,7 @@
                   <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-create-report"
                           onclick="createDebugReport()">Download report</button>
                 </div>
-                <div class="form-text mt-1">Debug mode reveals troubleshooting buttons across the app after saving. The report is a sanitized diagnostic snapshot — identifying details are hashed.</div>
+                <div class="form-text mt-1">Reveals troubleshooting buttons across the app after saving. The report is sanitized — identifying details are hashed.</div>
                 <div id="debug-report-status" class="form-text"></div>
               </div>
             </div>
@@ -1397,9 +1425,8 @@
               <div class="config-card config-card-danger p-3" data-run-lock-exempt>
               <div class="input-label">⚠ Force stop a run</div>
               <div class="form-text">
-                For a run the dashboard's <strong>Stop</strong> can't end. Kills the engine
-                outright: the run's log isn't archived and a deletion in progress may go
-                unrecorded. Try Stop first.
+                For a run <strong>Stop</strong> can't end. Kills the engine outright: the log
+                isn't archived and a deletion in progress may go unrecorded. Try Stop first.
               </div>
               <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
                 <button type="button" class="btn btn-sm btn-danger-action" id="btn-force-stop"
@@ -2175,7 +2202,6 @@ function _canonicalConfig(cfg) {
     IMDB_RATINGS_MAX_AGE_DAYS: _numOrNull(cfg.IMDB_RATINGS_MAX_AGE_DAYS),
     LOG_RETENTION_DAYS: (cfg.LOG_RETENTION_DAYS ?? 30),
     KEEP_INTERRUPTED_LOGS: !!cfg.KEEP_INTERRUPTED_LOGS,
-    REDUCE_VISUAL_EFFECTS: !!cfg.REDUCE_VISUAL_EFFECTS,
     DEBUG_MODE: !!cfg.DEBUG_MODE,
     TIME_ZONE: _str(cfg.TIME_ZONE || 'auto'),
     DISPLAY_TIME_FORMAT: _str(cfg.DISPLAY_TIME_FORMAT || '12h'),
@@ -2250,7 +2276,7 @@ function _configsMatch(a, b) {
 
 const SECTION_DEFAULT_FIELDS = {
   space: ['HEADROOM_GB', 'REDLINE_GB', 'REDLINE_ONLY_MODE', 'MAX_LIBRARY_GB', 'DELETE_DELAY_DAYS'],
-  advanced: ['IMDB_RATINGS_URL', 'IMDB_RATINGS_MAX_AGE_DAYS', 'LOG_RETENTION_DAYS', 'KEEP_INTERRUPTED_LOGS', 'REDUCE_VISUAL_EFFECTS', 'DEBUG_MODE', 'MAX_HEADROOM_PCT'],
+  advanced: ['IMDB_RATINGS_URL', 'IMDB_RATINGS_MAX_AGE_DAYS', 'LOG_RETENTION_DAYS', 'KEEP_INTERRUPTED_LOGS', 'DEBUG_MODE', 'MAX_HEADROOM_PCT'],
   notifications: _NOTIFY_KEYS,
 };
 
@@ -2268,6 +2294,79 @@ function _spaceThresholdsLocked() {
 function _setDisabled(id, disabled) {
   const el = document.getElementById(id);
   if (el) el.disabled = !!disabled;
+}
+
+// ── Appearance ───────────────────────────────────────────────────────────────
+// Stored per browser in a cookie rather than in config.json, but it still goes
+// through Save. It COULD apply on the tick — nothing here needs the server —
+// and it did for a while. It reads wrong: every other control on this page
+// waits for Save, so one pair that does not makes the button look like it
+// missed them, and leaves no way to change your mind but change it back.
+// So these arm Save and Revert like everything else, and land with them.
+// Kept in step with the markup above, so restoring it reads identically.
+const _GLASS_HELP = 'The frosted glass behind the header and buttons. '
+  + 'Turn it off if scrolling feels slow. This browser only.';
+
+// What this page was RENDERED with — the saved state, in the same sense
+// _savedConfig is. Both are what Revert goes back to and what dirty compares
+// against; a save replaces them.
+let _savedAppearance = {
+  effectsOff: {{ 'true' if reduce_effects else 'false' }},
+  glassOff: {{ 'true' if glass_pref_off else 'false' }},
+};
+const _appearanceForm = () => ({
+  effectsOff: !!document.getElementById('REDUCE_VISUAL_EFFECTS')?.checked,
+  glassOff: !!document.getElementById('DISABLE_GLASS_BLUR')?.checked,
+});
+function _appearanceDirty() {
+  const now = _appearanceForm();
+  return now.effectsOff !== _savedAppearance.effectsOff
+      || now.glassOff !== _savedAppearance.glassOff;
+}
+// Ticking only moves the form: the ghosting follows at once (it describes the
+// pending state, not the live one) and Save arms. Nothing is applied yet.
+function _onAppearanceToggled() {
+  _applyGlassBlurAvailability();
+  markDirty();
+}
+// Save landed. Write the cookies so the next load is stamped this way, and
+// apply it to the page already on screen so the save is visible.
+function commitAppearanceSettings() {
+  const now = _appearanceForm();
+  window.prSetAppearanceCookie('mr_effects', now.effectsOff);
+  window.prSetAppearanceCookie('mr_glass', now.glassOff);
+  window.prApplyAppearance(now);
+  _savedAppearance = now;
+}
+function revertAppearanceSettings() {
+  const cb = (id, on) => { const el = document.getElementById(id); if (el) el.checked = on; };
+  cb('REDUCE_VISUAL_EFFECTS', _savedAppearance.effectsOff);
+  cb('DISABLE_GLASS_BLUR', _savedAppearance.glassOff);
+  _applyGlassBlurAvailability();
+}
+
+// Reduce visual effects already turns the blur off, so the standalone switch
+// has nothing left to say while it is on — ghost it rather than leave a live
+// control that changes nothing. Its own checked state is deliberately left
+// alone: it is this browser's preference for when the broader setting goes
+// back off, and silently rewriting it would lose that.
+function _applyGlassBlurAvailability() {
+  const covered = !!document.getElementById('REDUCE_VISUAL_EFFECTS')?.checked;
+  // The run lock owns `disabled` while it holds; unghosting here would hand
+  // back a control the lock had taken away.
+  if (!covered && document.getElementById('DISABLE_GLASS_BLUR')?.dataset.runLocked) return;
+  _setDisabled('DISABLE_GLASS_BLUR', covered);
+  const help = document.getElementById('glass-blur-help');
+  if (help) {
+    help.textContent = covered
+      ? 'Already off - Reduce visual effects includes it.'
+      : _GLASS_HELP;
+  }
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _applyGlassBlurAvailability, { once: true });
+} else {
+  _applyGlassBlurAvailability();
 }
 
 function _applySpaceThresholdLock() {
@@ -2393,7 +2492,7 @@ function _optionalEnabledInvalidDirty() {
 
 function _hasUnsavedChanges() {
   try {
-    return !_configsMatch(getFormConfig(), _savedConfig) || !_monitorDirRowsMatchConfig(_savedConfig) || _optionalEnabledInvalidDirty();
+    return !_configsMatch(getFormConfig(), _savedConfig) || !_monitorDirRowsMatchConfig(_savedConfig) || _optionalEnabledInvalidDirty() || _appearanceDirty();
   } catch { return _dirty; }
 }
 
@@ -2643,7 +2742,6 @@ function populateForm(cfg) {
   sv('IMDB_RATINGS_MAX_AGE_DAYS', cfg.IMDB_RATINGS_MAX_AGE_DAYS);
   sv('LOG_RETENTION_DAYS', cfg.LOG_RETENTION_DAYS ?? 30);
   sc('KEEP_INTERRUPTED_LOGS', cfg.KEEP_INTERRUPTED_LOGS);
-  sc('REDUCE_VISUAL_EFFECTS', cfg.REDUCE_VISUAL_EFFECTS);
   sc('DEBUG_MODE', cfg.DEBUG_MODE);
   sv('TIME_ZONE', cfg.TIME_ZONE || 'auto');
   sv('DISPLAY_TIME_FORMAT', cfg.DISPLAY_TIME_FORMAT || '12h');
@@ -2731,7 +2829,6 @@ function getFormConfig() {
     IMDB_RATINGS_MAX_AGE_DAYS:    Math.max(1, parseInt(v('IMDB_RATINGS_MAX_AGE_DAYS')) || 7),
     LOG_RETENTION_DAYS:           Math.max(0, parseInt(v('LOG_RETENTION_DAYS')) || 0),
     KEEP_INTERRUPTED_LOGS:        chk('KEEP_INTERRUPTED_LOGS'),
-    REDUCE_VISUAL_EFFECTS:        chk('REDUCE_VISUAL_EFFECTS'),
     DEBUG_MODE:                   chk('DEBUG_MODE'),
     TIME_ZONE:                    (v('TIME_ZONE').trim() || 'auto'),
     DAILY_RUN_TIME:               (v('DAILY_RUN_TIME').trim() || '00:00'),
@@ -4978,6 +5075,7 @@ async function saveConfig() {
         populateForm(savedConfig);
       }
       if (d.connection_health) _applyConfigHealth(d.connection_health);
+      commitAppearanceSettings();
       _applyConfigRuntimeLocks();
       const _savedTz = _savedConfig.TIME_ZONE || 'auto';
       window.PR_SERVER_TIME_ZONE = _savedTz === 'auto' ? window.PR_HOST_TIME_ZONE : _savedTz;
@@ -5056,6 +5154,16 @@ async function saveConfig() {
 }
 
 
+// Reduce visual effects is stamped on <html> by the server, so the page a save
+// came from is still running the OLD mode: the stylesheet that strips the
+// decoration keys off that attribute, and the effects it removes by not
+// binding them at all (the tab indicator, the click ripple) were decided at
+// load. Half of it could be applied live and half could not, which is worse
+// than either — so reload, and let the page come back rendered the one way.
+//
+// Compared against what the DOM is actually rendered as, not against the
+// previously saved value: two saves in a row would otherwise compare against a
+// value the page was never rendered with, and skip the reload it still needs.
 function _imdbUrlDirty() {
   const current = document.getElementById('IMDB_RATINGS_URL')?.value?.trim() || '';
   const saved = String(_savedConfig?.IMDB_RATINGS_URL || '').trim();
@@ -5218,6 +5326,7 @@ async function clearCache() {
 
 function revertForm() {
   populateForm(_savedConfig);
+  revertAppearanceSettings();
   clearDirty();
   _applyConfigRuntimeLocks();
 }

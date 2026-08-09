@@ -289,6 +289,41 @@ with _db.connect(A.db_path()) as _conn:
 check("the share is re-stamped minus the freed bytes after a deletion",
       _share and int(_share["bytes"]) == 10 * GB - 3000, _share)
 
+# ── A manual Cleanup skips the delay for seasons, as it does for movies ─────
+# The delay paces the AUTOMATIC schedule. run_script's own contract says so
+# ("the deletion delay and once-per-day window pace automatic runs only"), the
+# Config page says so, and the movie side has always behaved that way — a manual
+# Cleanup deletes straight from the marked queue.
+#
+# The season side did not, and the cost was worse than the inconsistency: the
+# seasons' share of the deficit is subtracted from the movie target BEFORE the
+# engine runs, so a manual Cleanup reserved space for seasons that then sat out
+# their delay, and the run freed less than it was asked for while reporting
+# success. Found by a randomized end-to-end scenario: 43 movies deleted, 0 of 3
+# eligible seasons, 94 GB of the target quietly unmet.
+reset_files()
+reset_state()
+A._run_tv_cleanup_pass(CFG, execute=True)               # marks S1, not yet due
+held = A._run_tv_cleanup_pass(CFG, execute=True)
+check("a scheduled cleanup still holds an undue season",
+      held["held_by_delay"] == 1 and not held["deleted_seasons"]
+      and (S1 / "ep1.mkv").exists(), held)
+
+r = A._run_tv_cleanup_pass(CFG, execute=True, immediate=True)
+check("...and a manual one deletes it now",
+      r["held_by_delay"] == 0 and len(r["deleted_seasons"]) == 1
+      and not (S1 / "ep1.mkv").exists(), r)
+check("...and the mark goes with it", MARK_KEY not in A._tv_cleanup_state()["marked"])
+
+# immediate is about the DELAY only. Everything else that holds a season back
+# still does — otherwise "delete now" would quietly mean "delete anything".
+reset_files()
+reset_state()
+A._run_tv_cleanup_pass(CFG, execute=True)
+r = A._run_tv_cleanup_pass(dict(CFG, MAX_LIBRARY_GB=100), execute=True, immediate=True)
+check("a manual cleanup still respects a season the plan stopped taking",
+      not r["deleted_seasons"] and (S1 / "ep1.mkv").exists(), r)
+
 # ── Stop means stop, even mid-pass ──────────────────────────────────────────
 # The engine-kill can't reach this app-side loop; the stop event must.
 reset_files()

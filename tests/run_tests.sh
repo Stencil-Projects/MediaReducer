@@ -209,6 +209,7 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_reduced_effects node tests/e2e/e2e_reduced_effects.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_nothing_eligible node tests/e2e/e2e_nothing_eligible.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_slider_scroll_guard node tests/e2e/e2e_slider_scroll_guard.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_config_rhythm node tests/e2e/e2e_config_rhythm.mjs
 
       # A Debug-mode dashboard (its own app + isolated OUTPUT_DIR): the Cleanup
       # button morphs to Debug Cleanup, which must stay enabled through status
@@ -247,6 +248,11 @@ PY
       # Page transitions: navigates between the real tabs, so it needs every
       # page served but no particular data.
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_nav_transition node tests/e2e/e2e_nav_transition.mjs
+
+      # Scenario suite: whole libraries built on disk, driven through real
+      # Simulate/Cleanup runs against their own app and mock on their own ports.
+      # Fixed scenarios, not random, so every push covers the same ground.
+      MR_SCENARIO_PORT=$((PORT+40)) run scenarios python3 tests/scenarios/run.py "$TMP/scenarios"
     else
       echo "SKIP browser tests — playwright not installed (set PLAYWRIGHT_MODULE, or run: npm i playwright)"
     fi

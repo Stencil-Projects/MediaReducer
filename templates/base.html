@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-bs-theme="dark"{{ ' data-effects="off"'|safe if reduce_effects else '' }}>
+<html lang="en" data-bs-theme="dark"{{ ' data-effects="off"'|safe if reduce_effects else '' }}{{ ' data-glass="off"'|safe if no_glass else '' }}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -130,6 +130,29 @@
       --term-text: #d7d1c7;
       --shadow:    0 18px 42px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04);
       --glass-blur: blur(16px) saturate(118%);
+
+      /* ── Type scale ───────────────────────────────────────────────────────
+         Every font size below 1rem comes from one of these. They were written
+         per rule before, and had drifted to 31 distinct sizes with seven of
+         them inside a single 0.8px band — differences too small to read as
+         hierarchy and just large enough to look unsteady. The steps are the
+         values that were already doing the most work, so most text does not
+         move; what moves, moves by well under a pixel.
+
+         rem, never px. The Filtering & Scoring page had been built in px,
+         which meant it alone ignored a reader's browser font-size setting
+         while every other page honoured it. */
+      --fs-3xs: .6rem;
+      --fs-2xs: .68rem;
+      --fs-xs:  .72rem;
+      --fs-sm:  .78rem;
+      --fs-md:  .82rem;
+      --fs-lg:  .85rem;
+      --fs-xl:  .88rem;
+      --fs-2xl: .95rem;
+      /* The log terminal's line box. One token because two places have to
+         agree on it exactly — see contain-intrinsic-size on .log-line. */
+      --log-line: 1.25rem;
 
       --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
       --font-mono: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
@@ -452,7 +475,7 @@
     .brand-text { display: inline-flex; flex-direction: column; line-height: 1.2; }
     .brand-mark { width: 39px; height: 39px; flex-shrink: 0; color: var(--text-warning); }
     .brand-name { font-size: 1.05rem; font-weight: 700; color: var(--text-warning); letter-spacing: -.01em; }
-    .brand-sub  { font-size: .58rem; font-weight: 500; color: var(--text-muted);
+    .brand-sub  { font-size: var(--fs-3xs); font-weight: 500; color: var(--text-muted);
                   letter-spacing: .08em; text-transform: uppercase; margin-top: 1px; }
 
     /* Header running badge — geometry from .pr-pill; here we add only the fade
@@ -496,7 +519,7 @@
       border-bottom-color: transparent;
     }
     .header-tabs a {
-      font-size: .78rem; font-weight: 500; color: var(--text-muted);
+      font-size: var(--fs-sm); font-weight: 500; color: var(--text-muted);
       text-decoration: none; padding: 7px 14px; white-space: nowrap;
       border-bottom: 2px solid transparent;
       transition: color .15s, border-color .15s;
@@ -629,7 +652,7 @@
     .card-header {
       background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 86%, white 6%), var(--surface-2));
       border-bottom: 1px solid var(--border);
-      border-radius: 16px 16px 0 0 !important; font-size: .88rem; font-weight: 600; padding: 12px 16px;
+      border-radius: 16px 16px 0 0 !important; font-size: var(--fs-xl); font-weight: 600; padding: 12px 16px;
     }
 
     /* ═══════ Stat cards ═══════ */
@@ -640,11 +663,11 @@
       background: linear-gradient(145deg, var(--surface-1), color-mix(in srgb, var(--surface-2) 70%, transparent));
       background-clip: padding-box;
     }
-    .stat-card .label { font-size: .68rem; font-weight: 500; color: var(--text-muted);
+    .stat-card .label { font-size: var(--fs-2xs); font-weight: 500; color: var(--text-muted);
                         text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; }
     .stat-card .value { font-size: 1.55rem; font-weight: 700; line-height: 1.15; }
     .stat-card .value .unit { font-size: 1rem; font-weight: 400; color: var(--text-muted); }
-    .stat-card .sub   { font-size: .78rem; color: var(--text-muted); margin-top: 3px; }
+    .stat-card .sub   { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 3px; }
     /* Storage bar: media library is the brand-colored segment of the used fill
        (rest of used neutral, free is the track), right-aligned by JS to the used
        edge. Markers show the Headroom/Redline free targets and the used edge if
@@ -669,7 +692,7 @@
     .disk-bar-mark--cap      { background: var(--text-accent);
                                box-shadow: 0 0 0 1px color-mix(in srgb, var(--page-bg) 78%, transparent); }
     .disk-bar-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px;
-                       font-size: .6rem; letter-spacing: .04em; text-transform: uppercase;
+                       font-size: var(--fs-3xs); letter-spacing: .04em; text-transform: uppercase;
                        color: var(--text-muted); }
     .disk-bar-legend .dbl-item { display: inline-flex; align-items: center; gap: 5px; }
     .disk-bar-legend .dbl-item[hidden] { display: none; }
@@ -685,7 +708,7 @@
     .pr-pill {
       display: inline-flex; align-items: center; justify-content: center; gap: 6px; vertical-align: middle;
       height: 32px; min-height: 32px; padding: 0 12px; border-radius: 10px; white-space: nowrap;
-      font-family: inherit; font-size: .74rem; font-weight: 600; line-height: 1;
+      font-family: inherit; font-size: var(--fs-xs); font-weight: 600; line-height: 1;
       letter-spacing: .01em; text-transform: none;
       border: 1px solid transparent;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
@@ -700,7 +723,7 @@
     @media (max-width: 640px) {
       .pr-pill {
         height: 24px; min-height: 24px; padding: 0 9px;
-        font-size: .68rem; border-radius: 8px; gap: 5px;
+        font-size: var(--fs-2xs); border-radius: 8px; gap: 5px;
       }
       .pr-pill-dot { width: 6px; height: 6px; }
       a.pr-pill, .pr-pill[onclick], .pr-pill[role="button"] { position: relative; }
@@ -767,7 +790,7 @@
     .log-term {
       background: var(--term-bg); color: var(--term-text);
       font-family: var(--font-mono);
-      font-size: .76rem; line-height: 1.6; min-height: 200px; height: 440px;
+      font-size: var(--fs-sm); line-height: var(--log-line); min-height: 200px; height: 440px;
       overflow-y: auto; overflow-x: hidden;
       padding: 14px 16px; margin: 0; border-radius: 0 0 16px 16px;
       border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
@@ -792,21 +815,27 @@
          556ms, and the 900-line live tail (re-rendered every 750ms during a
          run) from 58ms to 5.7ms.
 
-         19.5px is this font-size times this line-height, so the scrollbar is
-         right for an ordinary single-line entry; `auto` lets the browser learn
-         the real height of a wrapped one. Verified that "jump to latest" still
-         lands exactly at the bottom and that selecting the log still copies
-         every line, since off-screen content stays in the DOM.
+         The placeholder is the line box itself, --log-line, the same token
+         the terminal sets line-height from. It has to match EXACTLY: this was
+         a literal 19.5px, and when the terminal's font-size joined the shared
+         scale the two fell out of step by half a pixel — which over 8,000
+         lines put "jump to latest" 3,647px above the real bottom. Deriving it
+         (font-size x 1.6) still missed by 126px, because a line box is rounded
+         to 1/64px and the calculation is not. One shared token cannot drift.
+         `auto` still lets the browser learn the real height of a WRAPPED line;
+         this only has to be right for an ordinary single-line entry.
+         Selecting the log still copies every line, since off-screen content
+         stays in the DOM.
 
          Ignored by browsers that don't support it, which then behave as before. */
       content-visibility: auto;
-      contain-intrinsic-size: auto 19.5px;
+      contain-intrinsic-size: auto var(--log-line);
     }
 
     /* ═══════ Accordion ═══════ */
     .accordion-button {
       background: linear-gradient(135deg, color-mix(in srgb, var(--surface-2) 88%, var(--bg-accent) 12%), var(--surface-2));
-      color: var(--text-primary); font-weight: 600; font-size: .88rem;
+      color: var(--text-primary); font-weight: 600; font-size: var(--fs-xl);
     }
     .accordion-button:not(.collapsed) {
       background: linear-gradient(135deg, color-mix(in srgb, var(--surface-3) 78%, var(--bg-accent-strong) 22%), var(--surface-3));
@@ -881,7 +910,7 @@
       border: 1px solid color-mix(in srgb, var(--text-danger) 78%, transparent);
       background: var(--bg-danger);
       color: var(--text-danger);
-      font-size: .72rem;
+      font-size: var(--fs-xs);
       line-height: 1;
       font-weight: 800;
       box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg-danger) 65%, transparent);
@@ -900,7 +929,7 @@
        inside sub-panels. */
     .form-control {
       background: color-mix(in srgb, var(--surface-3) 92%, transparent); border-color: var(--border);
-      color: var(--text-primary); font-size: .85rem; border-radius: 10px;
+      color: var(--text-primary); font-size: var(--fs-lg); border-radius: 10px;
     }
     .form-control:focus {
       background: var(--surface-3); border-color: var(--border-accent);
@@ -911,7 +940,7 @@
     .app-select {
       display: block; width: 100%;
       appearance: none; -webkit-appearance: none; -moz-appearance: none;
-      font-size: .85rem; line-height: 1.5;
+      font-size: var(--fs-lg); line-height: 1.5;
       padding: .375rem 2.1rem .375rem .75rem;
       color: var(--text-primary);
       background-color: var(--surface-2);
@@ -930,7 +959,7 @@
        sit inline beside .btn-sm buttons instead of filling a form row. */
     .app-select-inline {
       display: inline-block; width: auto; min-height: 32px;
-      font-size: .78rem; font-weight: 600;
+      font-size: var(--fs-sm); font-weight: 600;
       padding: .3rem 1.9rem .3rem .7rem;
       background-position: right .6rem center;
     }
@@ -1030,7 +1059,7 @@
     }
     .form-check-input:checked { background-color: var(--text-accent); border-color: var(--text-accent); }
     .form-range::-webkit-slider-thumb { background: var(--text-accent); }
-    .form-text  { color: var(--text-muted); font-size: .78rem; }
+    .form-text  { color: var(--text-muted); font-size: var(--fs-sm); }
     /* Filesystem paths in help text are one unbreakable token — wrap anywhere
        rather than pushing a narrow phone screen sideways. */
     code { overflow-wrap: anywhere; }
@@ -1061,7 +1090,7 @@
       padding: 0 12px;
       border-radius: 10px;
       font-family: inherit;
-      font-size: .74rem;
+      font-size: var(--fs-xs);
       font-weight: 600;
       line-height: 1;
       letter-spacing: .01em;
@@ -1125,7 +1154,7 @@
       min-height: 32px;
       padding: 0 12px;
       border-radius: 10px;
-      font-size: .74rem;
+      font-size: var(--fs-xs);
     }
     .btn-success {
       --bs-btn-color: var(--text-accent);
@@ -1305,22 +1334,22 @@
        still win on specificity and keep their larger tap targets. */
     @media (max-width: 520px) {
       .btn:not(.btn-close), .btn-sm:not(.btn-close) {
-        min-height: 28px; padding: 0 9px; font-size: .68rem;
+        min-height: 28px; padding: 0 9px; font-size: var(--fs-2xs);
       }
       .btn-icon { width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0 !important; }
       .app-select-inline {
-        min-height: 28px; font-size: .7rem;
+        min-height: 28px; font-size: var(--fs-xs);
         padding: .2rem 1.6rem .2rem .55rem;
         background-position: right .5rem center;
       }
     }
     @media (max-width: 390px) {
       .btn:not(.btn-close), .btn-sm:not(.btn-close) {
-        min-height: 26px; padding: 0 7px; font-size: .64rem;
+        min-height: 26px; padding: 0 7px; font-size: var(--fs-2xs);
       }
       .btn-icon { width: 26px; height: 26px; min-width: 26px; min-height: 26px; padding: 0 !important; }
       .app-select-inline {
-        min-height: 26px; font-size: .66rem;
+        min-height: 26px; font-size: var(--fs-2xs);
         padding: .15rem 1.45rem .15rem .5rem;
         background-position: right .45rem center;
       }
@@ -1399,13 +1428,13 @@
       display: flex; align-items: center; gap: 8px;
       padding: 10px 14px; border-bottom: 1px solid var(--border);
     }
-    .pr-debug-title { font-weight: 600; font-size: .9rem; margin-right: auto; }
+    .pr-debug-title { font-weight: 600; font-size: var(--fs-xl); margin-right: auto; }
     /* The dialog itself takes focus on open (for Escape and Tab), and that
        must not paint a focus ring on the whole panel. */
     .pr-debug-box:focus { outline: none; }
     .pr-debug-box pre {
       margin: 0; padding: 12px 14px; overflow: auto; flex: 1 1 auto;
-      font-size: .76rem; line-height: 1.5;
+      font-size: var(--fs-sm); line-height: 1.5;
       white-space: pre-wrap; word-break: break-word;
       color: var(--text-secondary);
     }
@@ -1419,7 +1448,7 @@
         width: 100%; height: 100%; max-height: none;
         border: none; border-radius: 0;
       }
-      .pr-debug-box pre { font-size: .68rem; padding: 10px 12px; }
+      .pr-debug-box pre { font-size: var(--fs-2xs); padding: 10px 12px; }
       .pr-debug-head { padding: 8px 12px; }
     }
 
@@ -1437,8 +1466,8 @@
     }
 
     /* ═══════ Misc ═══════ */
-    .section-desc { font-size: .83rem; color: var(--text-muted); margin-bottom: 18px; }
-    .input-label  { font-size: .81rem; color: var(--text-secondary); margin-bottom: 4px; display: block; }
+    .section-desc { font-size: var(--fs-md); color: var(--text-muted); margin-bottom: 18px; }
+    .input-label  { font-size: var(--fs-md); color: var(--text-secondary); margin-bottom: 4px; display: block; }
     .filter-score-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -1511,12 +1540,12 @@
     }
     .filter-score-toggle-row .form-check-label {
       color: var(--text-primary);
-      font-size: .95rem;
+      font-size: var(--fs-2xl);
       font-weight: 600;
       line-height: 1.2;
     }
     .filter-score-help {
-      font-size: .76rem;
+      font-size: var(--fs-sm);
       color: var(--text-muted);
       line-height: 1.35;
       margin-top: 8px;
@@ -1589,7 +1618,7 @@
       gap: 7px; height: 32px; padding: 0 12px;
       background: var(--surface-tint); color: var(--text-secondary);
       border: 1px solid var(--border); border-radius: 10px;
-      font-size: .74rem; font-weight: 600; letter-spacing: .01em;
+      font-size: var(--fs-xs); font-weight: 600; letter-spacing: .01em;
       cursor: pointer; transition: background-color .15s, color .15s, border-color .15s, box-shadow .15s;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.20);
     }
@@ -1614,7 +1643,7 @@
       .site-header .about-toggle { position: absolute; top: 9px; right: 70px; }
     }
     /* "About & quick start" reuses the theme-toggle skin so the header controls match. */
-    .about-toggle { margin-left: auto; width: 32px; padding: 0; font-size: .85rem; }
+    .about-toggle { margin-left: auto; width: 32px; padding: 0; font-size: var(--fs-lg); }
     .about-toggle + .theme-toggle { margin-left: 0; }
 
 
@@ -1719,7 +1748,7 @@
       box-sizing: border-box;
       color: var(--text-primary);
       padding: 10px 16px; border-radius: 8px; margin-top: 8px;
-      font-size: .84rem; box-shadow: var(--shadow); min-width: 220px;
+      font-size: var(--fs-lg); box-shadow: var(--shadow); min-width: 220px;
       max-width: min(420px, calc(100vw - 48px));
       border: 1px solid var(--border-strong);
       background: var(--toast-info-bg);
@@ -1761,7 +1790,7 @@
     .field-error {
       display: none;
       color: var(--text-danger);
-      font-size: .78rem;
+      font-size: var(--fs-sm);
       margin-top: 4px;
     }
     .field-error.show { display: block; }
@@ -1774,7 +1803,7 @@
       color: var(--text-warning);
       border-radius: 8px;
       padding: 10px 12px;
-      font-size: .8rem;
+      font-size: var(--fs-md);
     }
     /* A note that reports something ALREADY DONE can be dismissed; one that
        reports a condition still in effect cannot, because hiding it would not
@@ -1789,7 +1818,7 @@
       color: var(--text-accent);
       border-radius: 8px;
       padding: 10px 12px;
-      font-size: .8rem;
+      font-size: var(--fs-md);
     }
     /* Page-level notes, above the sections they concern. The pinned ones come
        first and the dismissible ones sit underneath — enforced here by `order`
@@ -1873,6 +1902,33 @@
           linear-gradient(var(--surface-1), var(--surface-1)),
           linear-gradient(var(--page-bg), var(--page-bg));
       }
+    }
+
+    /* The same drop, on the app's own switch, because the glass is not only
+       decoration — it is the most expensive thing on the page to scroll past.
+       A backdrop-filter makes the compositor re-read what is behind an element
+       and re-blur it every frame it moves, and this design puts one on both
+       stuck bars AND on every button, so a long page (Config) can be dragging
+       dozens of them down the screen at once. Firefox for Android is where
+       dropping it is worth the most.
+
+       Its own attribute, because it is worth having on its own: the blur is
+       the one piece of the decoration that costs frames rather than taste, so
+       it can go while the animations stay. Reduce visual effects stamps this
+       too (the server ORs them), so the rules below only ever need to read the
+       one attribute. Same compensation as above: the tints get composited over
+       --page-bg so the colors and the layout do not move, only the blur goes. */
+    :root[data-glass="off"] *,
+    :root[data-glass="off"] *::before,
+    :root[data-glass="off"] *::after {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    :root[data-glass="off"] .site-header,
+    :root[data-glass="off"] .page-title-bar::before {
+      background-image:
+        linear-gradient(var(--surface-1), var(--surface-1)),
+        linear-gradient(var(--page-bg), var(--page-bg));
     }
 
     @media print {
@@ -2415,7 +2471,7 @@
       <div class="modal-header">
         <div>
           <h5 class="modal-title" id="welcome-modal-title">Welcome to MediaReducer</h5>
-          <div style="font-size:.78rem;color:var(--text-muted);">Automatic media library cleanup for Plex and Jellyfin</div>
+          <div style="font-size: var(--fs-sm);color:var(--text-muted);">Automatic media library cleanup for Plex and Jellyfin</div>
           <div class="welcome-version">v{{ app_version }} &middot; early alpha, expect bugs</div>
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -2463,11 +2519,11 @@
   /* Quieter than the tagline above it: a version is for quoting in a bug
      report, not for reading first. */
   .welcome-version {
-    margin-top: 3px; font-size: .72rem; color: var(--text-muted); opacity: .85;
+    margin-top: 3px; font-size: var(--fs-xs); color: var(--text-muted); opacity: .85;
   }
   .welcome-warning {
     border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
-    font-size: .84rem; line-height: 1.55;
+    font-size: var(--fs-lg); line-height: 1.55;
   }
   .welcome-warning--danger {
     background: var(--bg-danger); color: var(--text-danger);
@@ -2478,12 +2534,12 @@
     border: 1px solid var(--border-warning);
   }
   .welcome-heading {
-    margin: 18px 0 8px; font-size: .78rem; font-weight: 700;
+    margin: 18px 0 8px; font-size: var(--fs-sm); font-weight: 700;
     letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted);
   }
-  .welcome-steps { margin: 0 0 4px; padding-left: 20px; line-height: 1.75; font-size: .88rem; }
+  .welcome-steps { margin: 0 0 4px; padding-left: 20px; line-height: 1.75; font-size: var(--fs-xl); }
   .welcome-steps li + li { margin-top: 2px; }
-  .welcome-about { margin: 0; font-size: .86rem; line-height: 1.6; color: var(--text-secondary); }
+  .welcome-about { margin: 0; font-size: var(--fs-xl); line-height: 1.6; color: var(--text-secondary); }
 </style>
 
 <!-- Shared confirmation dialog for the actions that delete, or that arm
@@ -2693,7 +2749,12 @@ function prSetTheme(theme, opts) {
   // page, one frame sooner, never a seamed one.
   const wantsFade = !!(opts && opts.animate)
     && typeof document.startViewTransition === 'function'
-    && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    // Reduce visual effects covers this too: the cross-fade is the largest
+    // animation the app runs — a snapshot of the whole page fading over
+    // another — and it is decoration. The palette still lands in one frame,
+    // which is the part that keeps the page from wearing both themes at once.
+    && document.documentElement.getAttribute('data-effects') !== 'off';
   if (wantsFade) {
     const vt = document.startViewTransition(apply);
     vt.finished.then(settle, settle);
@@ -3253,13 +3314,40 @@ window.prSetConfigTabError = function (on) {
 // plain interface (Advanced -> Reduce visual effects)? The CSS blanket stops
 // them animating, but these two BUILD things — a bar element, a wave overlay —
 // and the honest way to not have an effect is to not create it.
-const PR_EFFECTS_OFF = document.documentElement.getAttribute('data-effects') === 'off';
+// Appearance lives in a cookie per browser, not in config.json: it says how
+// THIS browser draws the page, and a phone and a desktop rarely want the same
+// answer. The server reads the cookie to stamp <html> before the first paint;
+// these apply the change to the page already on screen, so nothing reloads.
+function prSetAppearanceCookie(name, off) {
+  try {
+    document.cookie = name + '=' + (off ? 'off' : 'on')
+      + ';path=/;max-age=' + (60 * 60 * 24 * 365) + ';samesite=lax';
+  } catch (_) {}
+}
+// The stylesheet does the rest off these two attributes. Reduce visual effects
+// covers the glass, same OR the server applies, so the page cannot end up
+// showing blur that the next load would drop.
+function prApplyAppearance({ effectsOff, glassOff }) {
+  const root = document.documentElement;
+  if (effectsOff) root.setAttribute('data-effects', 'off');
+  else root.removeAttribute('data-effects');
+  if (effectsOff || glassOff) root.setAttribute('data-glass', 'off');
+  else root.removeAttribute('data-glass');
+  // Everything CSS can express is already done. These two are effects that
+  // exist by being BUILT, so turning the setting back on has to build them —
+  // they were skipped entirely on a page that loaded with effects off. Both
+  // are no-ops once they have run.
+  if (!effectsOff) { initTabNavFeedback(); initTabIndicator(); }
+}
+const prEffectsOff = () => document.documentElement.getAttribute('data-effects') === 'off';
 
 // Tab click feedback: mark the clicked tab while its navigation is in flight
 // (see .is-navigating). Skipped for the current page and for modified clicks
 // (new-tab etc., which don't navigate this document).
-(function initTabNavFeedback() {
-  if (PR_EFFECTS_OFF) return;
+let _tabNavFeedbackBound = false;
+function initTabNavFeedback() {
+  if (prEffectsOff() || _tabNavFeedbackBound) return;
+  _tabNavFeedbackBound = true;
   document.querySelectorAll('.header-tabs a').forEach((a) => {
     const dest = () => (a.getAttribute('href') || '').split('#')[0];
     // The wave starts the moment the pointer goes DOWN — click fires on
@@ -3341,13 +3429,15 @@ const PR_EFFECTS_OFF = document.documentElement.getAttribute('data-effects') ===
         a.style.removeProperty('--pr-wave-offset');
       });
   });
-})();
+}
 
 // Sliding tab underline: on hover-capable pointers the active tab's blue bar
 // glides to the hovered tab and returns when the pointer leaves the tab row.
-(function initTabIndicator() {
-  if (PR_EFFECTS_OFF) return;
+let _tabIndicatorBuilt = false;
+function initTabIndicator() {
+  if (prEffectsOff() || _tabIndicatorBuilt) return;
   if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+  _tabIndicatorBuilt = true;
   const tabs = document.querySelector('.header-tabs');
   if (!tabs || !tabs.querySelector('a')) return;
   const bar = document.createElement('span');
@@ -3375,7 +3465,12 @@ const PR_EFFECTS_OFF = document.documentElement.getAttribute('data-effects') ===
   window.addEventListener('resize', () => moveTo(activeTab(), true));
   // Fonts can settle after first paint and shift the tab widths.
   window.addEventListener('load', () => moveTo(activeTab(), true));
-})();
+}
+
+// Build them for a page that loaded with effects ON; prApplyAppearance builds
+// them later for a page that did not.
+initTabNavFeedback();
+initTabIndicator();
 
 (function pollHeaderRunBadge() {
   async function tick() {
