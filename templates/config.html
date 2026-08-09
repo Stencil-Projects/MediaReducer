@@ -1410,7 +1410,7 @@
               </div>
               <div class="config-card config-card-danger p-3">
               <div class="input-label">⚠ Reset MediaReducer</div>
-              <div class="form-text">Wipes settings, cache, and the library snapshot. Logs and deletion history are kept. This can't be undone.</div>
+              <div class="form-text">Wipes settings, appearance, cache, and the library snapshot. Logs and deletion history are kept. This can't be undone.</div>
               <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
                 <button type="button" class="btn btn-sm btn-danger-action btn-morph" id="btn-reset-all" onclick="onResetClick()"><span class="btn-morph-label">Reset to first-time setup</span></button>
                 <span id="reset-status" class="form-text"></span>
@@ -3829,7 +3829,7 @@ async function onResetInvalidClick() {
   if (btn) btn.disabled = false;
 }
 async function onBannerFullResetClick() {
-  if (!window.confirm('Reset MediaReducer to first-time setup? Settings, cache, and the library snapshot are wiped. Logs are kept.')) return;
+  if (!window.confirm('Reset MediaReducer to first-time setup? Settings, appearance, cache, and the library snapshot are wiped. Logs are kept.')) return;
   if (await _bannerPost('/api/config/reset', 'message')) window.location.href = '/';
 }
 function _applyConfigHealth(d) {

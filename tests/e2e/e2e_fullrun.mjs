@@ -15,6 +15,9 @@ const check = (name, cond, extra = '') => {
   ok = ok && cond;
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// "The app is busy with its own work", as distinct from a real answer about
+// this run. Kept beside the scenarios harness's BUSY_RE, which says the same.
+const BUSY = /try again in a moment|already (?:in progress|active)/i;
 
 async function status() {
   const r = await fetch(`${BASE}/api/status`, { cache: 'no-store' });
@@ -22,10 +25,27 @@ async function status() {
 }
 
 async function runSimulate() {
-  const r = await fetch(`${BASE}/api/run`, {
-    method: 'POST', headers: H, body: JSON.stringify({ mode: 'debug_sim' }),
-  });
-  const d = await r.json();
+  // "Try again in a moment" is the app's own startup storage refresh still
+  // running, not a verdict about this run — so it is retried until it clears
+  // rather than reported. Only the FIRST full-run test after boot ever meets
+  // it, which is what made this look like a bug in the Plex profile: on a
+  // machine slow enough to lose the race, e2e_fullrun_plex failed and the
+  // jellyfin and both profiles behind it passed, because by then the refresh
+  // was long finished.
+  let d = {};
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const r = await fetch(`${BASE}/api/run`, {
+      method: 'POST', headers: H, body: JSON.stringify({ mode: 'debug_sim' }),
+    });
+    d = await r.json();
+    // A refusal that is not about being busy is a real answer; keep it.
+    // Matched on the message, because this one arrives as a 200 with
+    // started:false. Exact rather than a bare /already/, which would also
+    // catch "Space limits are already satisfied" — a true no-op, and one this
+    // would then retry twenty times before reporting.
+    if (d.started || !BUSY.test(d.message || '')) break;
+    await sleep(1500);
+  }
   if (!d.started) return { started: false, message: d.message || '' };
   // Wait out the engine subprocess (bounded).
   for (let i = 0; i < 90; i++) {
@@ -52,14 +72,19 @@ check('run wrote a non-empty library snapshot',
   Array.isArray(snap.movies) && snap.movies.length > 0);
 check('snapshot carries a build time',
   Number(snap.built_at) > 0);
+// Everything below reads the snapshot. Substituting an empty list keeps a
+// missing one reporting as four more FAIL lines instead of a TypeError that
+// kills the script and hides them — the run that found this printed a stack
+// trace where the remaining checks should have been.
+const movies = Array.isArray(snap.movies) ? snap.movies : [];
 
 // Distinct viewers, end to end through the real Tautulli history endpoint. The
 // media-info rows the catalog is built from carry a play count and nothing
 // about who watched, so before the history sweep every played movie read as
 // exactly one viewer — the figure the retention score treats as "nobody but one
 // person cares about this". The fixture spreads plays over 1-4 users.
-const viewerCounts = new Set(snap.movies.map(m => Number(m.users) || 0));
-const played = snap.movies.filter(m => Number(m.plays) > 0);
+const viewerCounts = new Set(movies.map(m => Number(m.users) || 0));
+const played = movies.filter(m => Number(m.plays) > 0);
 check('the snapshot counts real distinct viewers, not one per played movie',
   [...viewerCounts].some(n => n > 1), [...viewerCounts].sort((a, b) => a - b).join(','));
 check('every played movie has at least one viewer',
@@ -67,7 +92,7 @@ check('every played movie has at least one viewer',
 // "Never watched" means no plays AND no last-played date: a play count of zero
 // beside a real date is still someone having watched it.
 check('a movie nobody has watched has no viewers',
-  snap.movies.filter(m => !Number(m.plays) && !Number(m.last_played))
+  movies.filter(m => !Number(m.plays) && !Number(m.last_played))
              .every(m => Number(m.users) === 0));
 
 const s1 = r1.status || await status();

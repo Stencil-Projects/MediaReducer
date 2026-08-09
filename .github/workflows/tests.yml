@@ -2,9 +2,15 @@ name: Tests
 
 # The suite needs no network, no secrets and no services: the media servers are
 # mock HTTP servers the harness starts itself.
+#
+# push is limited to main, because a commit on a branch WITH a pull request
+# open was being tested twice: push and pull_request are separate concurrency
+# groups, so neither cancelled the other and both ran to the end. Branch work
+# is covered by the pull_request run, main by the merge, and workflow_dispatch
+# covers a branch with no pull request yet.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
   # So a release can gate on it: publish.yml runs this first and only builds an
@@ -21,9 +27,37 @@ permissions:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    # Minutes are billed on private repositories and free on public ones, so
+    # the private dev repo runs on a self-hosted runner and the public one
+    # stays on GitHub's.
+    #
+    # This has to be an expression rather than a plain `self-hosted`, because
+    # the dev repo's publish script mirrors this directory into the public
+    # repo. Hardcoded, every public run — and every outside contributor's pull
+    # request — would queue for 24 hours waiting for a runner that repo does
+    # not have, and then expire. The fallback is the load-bearing half.
+    runs-on: ${{ github.repository == 'Stencil923/MediaReducer-Dev' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
+      # First, before anything is checked out or installed. runs-on is an
+      # expression, so the file states an intention and only the runner can
+      # confirm it resolved that way. Recorded in the summary because the
+      # alternative is noticing on a billing page weeks later, by which point
+      # nobody opens the run that caused it.
+      #
+      # Failing here rather than warning: the private repo taking a hosted
+      # runner means it is being billed, and it can only happen if this
+      # expression was edited. First step, so that costs seconds, not a suite.
+      - name: Say which runner this landed on
+        run: |
+          echo "Ran on \`${{ runner.name }}\` — ${{ runner.environment }}, ${{ runner.os }}/${{ runner.arch }}" \
+            >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ github.repository }}" = "Stencil923/MediaReducer-Dev" ] \
+             && [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "This repo is meant to run on the self-hosted runner, and this job took a billed one."
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
 
       # 3.11 matches the Dockerfile, so CI runs the interpreter the image ships.
@@ -41,9 +75,12 @@ jobs:
       - name: Install Python dependencies
         # pyflakes is not a runtime dependency. test_no_undefined_names skips
         # itself without it, so install it here or that test quietly does nothing.
+        # pyyaml arrives anyway as an apprise dependency, and test_container_hardening
+        # reads docker-compose.yml with it; named here so that test does not rest
+        # on someone else's dependency list.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyflakes
+          pip install -r requirements.txt pyflakes pyyaml
 
       - name: Install Playwright
         # Pinned like requirements.txt: a browser-automation library that moves

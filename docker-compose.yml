@@ -15,6 +15,13 @@ services:
       # The fallback below is an UNRAID default — set the var in .env on any
       # other host, or Docker will create /mnt/user/appdata/... for you.
       - ${MEDIAREDUCER_DATA:-/mnt/user/appdata/mediareducer/config}:/config  # persistent config/logs/cache
+      # Whatever is at /library is what MediaReducer CAN delete; the monitored
+      # paths in the UI are a setting on top of that. To put a folder out of
+      # reach for good, layer it back read-only at the matching spot — Docker
+      # applies the nested mount over the parent. Add it, do not swap /library
+      # for subfolder mounts: free space is measured on /library itself, and
+      # without that mount it would be read from the container's own layer.
+      # - ${PLEX_LIBRARY_PATH}/Music:/library/Music:ro
     environment:
       - PYTHONUNBUFFERED=1
       # Run as a specific user instead of root (optional — works on any host).
@@ -26,6 +33,29 @@ services:
       # Accessing the UI through a reverse-proxy domain? List it here,
       # comma-separated — unknown Host headers are rejected (DNS-rebinding guard).
       # - MEDIAREDUCER_TRUSTED_HOSTS=media.example.com
+    # Only what entrypoint.py needs while it is still root: CHOWN and
+    # DAC_OVERRIDE to hand /config to the mapped user, SETUID and SETGID to
+    # become them. After that it holds none at all, so this narrows the startup
+    # window rather than the run. Serving on a port below 1024 INSIDE the
+    # container would also need NET_BIND_SERVICE — remap the host port instead.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    # Blocks privilege gain through execve. The root-to-PUID step is a
+    # downward transition and is unaffected.
+    security_opt:
+      - no-new-privileges:true
+    # A cleanup run is chatty; uncapped, the container log grows until the host
+    # notices (on Unraid, inside docker.img).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     init: true               # reap engine subprocesses cleanly + forward SIGTERM to the app
     # On stop, the app forwards SIGTERM to an in-flight run and waits ~8s for the
     # engine to finish its current file (unlink → deleted.log) before exiting.

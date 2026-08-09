@@ -29,8 +29,18 @@
   <TemplateURL>https://raw.githubusercontent.com/Stencil923/MediaReducer/main/unraid/mediareducer.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/Stencil923/MediaReducer/main/static/apple-touch-icon.png</Icon>
   <!-- stop-timeout 30: on stop the engine needs about 8s to finish the file it
-       is deleting and record it, and Unraid's default 10s can cut that short. -->
-  <ExtraParams>--init --stop-timeout=30</ExtraParams>
+       is deleting and record it, and Unraid's default 10s can cut that short.
+
+       The four capabilities are what entrypoint.py needs while it is still
+       root: CHOWN and DAC_OVERRIDE to hand /config to the mapped user, SETUID
+       and SETGID to become them. It then holds none at all, so this only
+       narrows the startup window. Serving on a port below 1024 INSIDE the
+       container would also need NET_BIND_SERVICE — remap the host port
+       instead, which is what the WebUI Port setting above does.
+
+       Log caps: a cleanup run is chatty, and without them the container log
+       grows inside docker.img until the array notices. -->
+  <ExtraParams>--init --stop-timeout=30 --security-opt=no-new-privileges:true --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --log-opt max-size=10m --log-opt max-file=3</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
@@ -42,8 +52,19 @@
           Description="Host port for the web interface. The container always serves on 7474."
           Type="Port" Display="always" Required="true" Mask="false">7474</Config>
 
+  <!-- Whatever is mounted here is what MediaReducer CAN delete; the monitored
+       paths in the UI are a setting on top of that. To put a folder out of
+       reach for good, add a second mapping for it, read-only, at the matching
+       spot underneath /library:
+
+           /mnt/user/media/Music  ->  /library/Music  (ro)
+
+       Docker layers that over the parent mount, so the folder is unwritable
+       inside the container no matter what the UI is set to. Overlay it; do not
+       replace the /library mapping with subfolder ones, or free space is read
+       from the container's own layer instead of the array. -->
   <Config Name="Movie library" Target="/library" Default="/mnt/user/media" Mode="rw"
-          Description="The folder CONTAINING your movie folders: films in /mnt/user/media/Movies means /mnt/user/media here, then add Movies as a monitored path in the UI. Must be writable, and it is the only place MediaReducer can delete from."
+          Description="The folder CONTAINING your movie folders: films in /mnt/user/media/Movies means /mnt/user/media here, then add Movies as a monitored path in the UI. Must be writable, and it is the only place MediaReducer can delete from. To protect a folder inside it, map that folder read-only at the same spot under /library."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media</Config>
 
   <Config Name="Config storage" Target="/config" Default="/mnt/user/appdata/mediareducer/config" Mode="rw"
@@ -51,15 +72,15 @@
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/mediareducer/config</Config>
 
   <Config Name="Tautulli appdata (optional)" Target="/tautulli" Default="/mnt/user/appdata/tautulli" Mode="ro"
-          Description="Read-only, and only so Auto Detect can read the Tautulli API key and Plex token. Skip it and enter them yourself."
+          Description="Read-only, and only so Auto Detect can read the Tautulli API key and Plex token. Skip it and enter them yourself, and remove it once they are saved — nothing else uses it."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/tautulli</Config>
 
   <Config Name="Radarr appdata (optional)" Target="/radarr" Default="/mnt/user/appdata/radarr" Mode="ro"
-          Description="Read-only, and only so Auto Detect can read the Radarr API key. Skip it and enter the key yourself."
+          Description="Read-only, and only so Auto Detect can read the Radarr API key. Skip it and enter the key yourself, and remove it once the key is saved — nothing else uses it."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/radarr</Config>
 
   <Config Name="Sonarr appdata (optional)" Target="/sonarr" Default="/mnt/user/appdata/sonarr" Mode="ro"
-          Description="Read-only, and only so Auto Detect can read the Sonarr API key. Skip it and enter the key yourself."
+          Description="Read-only, and only so Auto Detect can read the Sonarr API key. Skip it and enter the key yourself, and remove it once the key is saved — nothing else uses it."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/sonarr</Config>
 
   <Config Name="PUID" Target="PUID" Default="99" Mode=""

@@ -102,7 +102,8 @@ CONFIG_PATH      = Path(os.environ.get("MEDIAREDUCER_CONFIG", "/config/config.js
 # browser should draw the page. Two people on one install can disagree about
 # them without either being wrong, and a phone and a desktop usually do, so
 # they live in cookies rather than config.json. Nothing here reaches the
-# engine, no save is involved, and Reset MediaReducer leaves them alone.
+# engine and no save is involved. Reset MediaReducer expires them, which is the
+# one server-side reach into them and only for the browser that pressed it.
 APPEARANCE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 
@@ -141,6 +142,26 @@ def _appearance_flags(req) -> dict:
     return {"reduce_effects": bool(reduce_effects),
             "glass_pref_off": bool(glass_pref_off),
             "no_glass": bool(glass_pref_off or reduce_effects)}
+
+
+def _clear_appearance_cookies(resp, status: int | None = None):
+    """Expire the appearance cookies on a Reset MediaReducer response.
+
+    Reset means back to a first-time install, and someone who set the page to
+    plain and then reset it does not expect it to still be plain. These live in
+    the browser rather than config.json, so the only way to clear one is to
+    tell the browser to drop it — which reaches THIS browser, the one that
+    pressed the button, and no other. A phone that set its own keeps them until
+    it resets too; there is nowhere server-side to reach it from, and that is
+    the trade that made them per-browser in the first place.
+
+    Same path the setter used, or the browser treats it as a different cookie
+    and leaves the original in place."""
+    if status is not None:
+        resp.status_code = status
+    for name in ("mr_effects", "mr_glass"):
+        resp.delete_cookie(name, path="/", samesite="Lax")
+    return resp
 
 
 def _root_from_env(var: str, default: str) -> str:
@@ -480,7 +501,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.13"
+APP_VERSION = "1.0.0-alpha.14"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -9734,8 +9755,10 @@ def api_reset_config():
     ).start()
 
     if errors:
-        return jsonify({"ok": False, "message": "Reset completed with problems: " + "; ".join(errors)}), 500
-    return jsonify({"ok": True, "message": "Configuration reset."})
+        return _clear_appearance_cookies(jsonify(
+            {"ok": False,
+             "message": "Reset completed with problems: " + "; ".join(errors)}), 500)
+    return _clear_appearance_cookies(jsonify({"ok": True, "message": "Configuration reset."}))
 
 
 @app.route("/api/config/reset-invalid", methods=["POST"])

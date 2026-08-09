@@ -105,5 +105,33 @@ check("Firefox mobile is served a page already stamped glass-off",
 html = client.get("/config", headers={"User-Agent": CHROME_ANDROID}).get_data(as_text=True)
 check("...and an ordinary browser is not", 'data-glass="off"' not in html.split("\n", 3)[1])
 
+# ── Reset clears them ────────────────────────────────────────────────────────
+# Reset MediaReducer means back to a first-time install, so a browser that was
+# set to plain must not come back still plain. Only THIS browser can be
+# reached — the cookies live nowhere else — so the check is that the response
+# expires them.
+r = client.post("/api/config/reset", headers={"X-MediaReducer": "1"})
+setc = [v for k, v in r.headers.items() if k.lower() == "set-cookie"]
+for name in ("mr_effects", "mr_glass"):
+    line = next((c for c in setc if c.startswith(name + "=")), "")
+    check(f"reset expires {name}", bool(line) and ("Max-Age=0" in line or "01 Jan 1970" in line),
+          line or setc)
+# The path has to match the one the setter used, or the browser keeps the
+# original alongside the tombstone and nothing actually changes. Compared as a
+# whole attribute rather than a substring, since "Path=/api" contains "Path=/".
+def _attrs(line):
+    return [a.strip() for a in line.split(";")[1:]]
+
+
+check("...on the same path the setter used",
+      all("Path=/" in _attrs(c)
+          for c in setc if c.split("=")[0] in ("mr_effects", "mr_glass")), setc)
+
+# And a reset really does hand back a default-looking page for that browser:
+# with the cookies expired, the next request carries none.
+f = A._appearance_flags(_Req(ua=CHROME_ANDROID))
+check("a browser with no cookie is back to the shipped defaults",
+      f == {"reduce_effects": False, "glass_pref_off": False, "no_glass": False}, f)
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

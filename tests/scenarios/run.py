@@ -10,7 +10,7 @@ may not go while it is protected, everything removed must be in deleted.log,
 and no page or endpoint may 5xx afterwards. Each scenario also states what it
 EXPECTS to happen, so "did not crash" is not mistaken for "did the right thing".
 """
-import json, os, shutil, signal, subprocess, sys, time, urllib.request, urllib.error
+import json, os, re, shutil, signal, subprocess, sys, time, urllib.request, urllib.error
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +27,10 @@ JF_PORT = APP_PORT + 1
 FAILS, REFUSED = [], []
 COV = {"deleting": set(), "movies": 0, "episodes": 0, "runs": 0}
 
+
+# "The app is busy with its own work", as opposed to a real answer about this
+# run. Deliberately not a bare "already": that also matches the no-op.
+BUSY_RE = re.compile(r"try again in a moment|already (?:in progress|active)", re.I)
 
 def bad(name, phase, msg, extra=None):
     FAILS.append((name, phase, msg))
@@ -186,7 +190,14 @@ def run_scenario(name, spec, expect):
             for _ in range(20):
                 s, d = http("POST", "/api/run", {"mode": mode})
                 msg = d.get("message") or ""
-                if not (s in (400, 409) and ("moment" in msg or "already" in msg)):
+                # Matched on the message, not the status. api_run answers this
+                # refusal with a bare jsonify(), so it arrives 200 with
+                # started:false — the old condition required 400 or 409 and so
+                # never retried the one case it was written for. The pattern is
+                # exact rather than a bare "already" because "Space limits are
+                # already satisfied" is a legitimate no-op that must NOT be
+                # retried twenty times before being recorded.
+                if not BUSY_RE.search(msg):
                     break
                 time.sleep(1.5)
             if s == 400:

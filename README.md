@@ -126,9 +126,16 @@ docker compose up -d --build      # then open http://your-server-ip:7474
 | `/sonarr` | no | Same, for Sonarr. |
 
 The appdata mounts are a setup convenience only — everything after Auto Detect
-goes over HTTP. Skip them and type the keys in yourself. There is no Jellyfin
-mount because Jellyfin issues API keys from its dashboard and stores none on
-disk.
+goes over HTTP. Skip them and type the keys in yourself, or remove them once the
+keys are saved. There is no Jellyfin mount because Jellyfin issues API keys from
+its dashboard and stores none on disk.
+
+Whatever is at `/library` is what MediaReducer *can* delete; monitored paths are
+a setting on top of that. To put a folder beyond reach, mount it read-only at
+the matching spot underneath — `/mnt/user/media/Music` → `/library/Music:ro`.
+Docker layers that over the parent mount. Add it alongside the `/library` mount,
+never instead of it: free space is measured on `/library` itself, so replacing
+it with subfolder mounts reads the container's own layer rather than the array.
 
 Every URL field defaults to its service's documented port (8181 Tautulli, 32400
 Plex, 8096 Jellyfin, 7878 Radarr, 8989 Sonarr). Ports are never read from
@@ -525,6 +532,9 @@ abort a cleanup.
   folder name that matches under more than one monitored path.
 - Protected collections and filtered titles are hard exclusions, not score
   penalties.
+- The container drops every Linux capability but the four `entrypoint.py` needs
+  to become the PUID/PGID user, runs with `no-new-privileges`, and never mounts
+  the docker socket. `config.json` is written `0600` — it holds your tokens.
 - Editing connection or monitoring settings while Automatic Cleanup is on drops
   it to Monitor Only. A threshold change keeps it running and rebuilds the plan,
   unless the change leaves the library over a limit. Settings lock only while a
@@ -591,7 +601,9 @@ In the `/config` mount (`MEDIAREDUCER_DATA` on the host):
 | `title.ratings.tsv` | IMDb ratings dataset. |
 
 **Reset MediaReducer** (Advanced) removes configuration and state but always
-keeps the deletion history, the run logs and the IMDb dataset.
+keeps the deletion history, the run logs and the IMDb dataset. It also clears
+the appearance cookies, though only for the browser that pressed it — they live
+nowhere else.
 
 You can hand-edit `config.json`, but it is checked against the same rules the UI
 uses, so an invalid edit locks things down until fixed.
