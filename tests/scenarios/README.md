@@ -11,6 +11,47 @@ Each scenario builds a whole world — movies and multi-season shows on disk, a
 mock Jellyfin serving exactly what the disk holds, a config — then drives
 Simulate and Cleanup against it and checks what happened.
 
+## Manual runs and scheduled runs are different runs
+
+A cleanup fired through `/api/run` is a **manual** one, and manual ignores the
+deletion delay on purpose: you pressed the button, you meant now. Every
+scenario here worked that way at first, which left the mark-and-wait path
+untouched — across 29 scenarios and 51 runs the engine never once logged
+`MARKED for deletion`, so the mechanism the whole safety story rests on had no
+coverage. Disabling the delay outright changed nothing anywhere in the suite.
+
+A scheduled run is the engine started without `MEDIAREDUCER_MANUAL`, so
+`expect: {"scheduled": True}` runs `engine.py` directly instead of going
+through the API, after clearing the daily-window stamp the app sets at startup.
+It replaces the Simulate/Cleanup phases rather than preceding them — leaving
+them in would delete everything the scheduled run correctly held back.
+
+| expect key | what it adds |
+| --- | --- |
+| `scheduled` | run the engine directly, as the scheduler would |
+| `marks` | require the run to log `MARKED for deletion` — "deleted nothing" is also what a refused run looks like |
+| `marks_due` | then age every mark past its delay and run again, which must collect them |
+| `redline_x_free` (spec) | arm `REDLINE_GB` at a multiple of the free space that actually exists, so the trigger fires on any machine |
+| `run_time_ahead` (spec) | put `DAILY_RUN_TIME` ~90 minutes out, so a scheduled run arrives early |
+| `waits` | require the run to refuse with "waiting for today's scheduled run time" |
+| `day_used` | leave the daily-window stamp in place, for the branch that is about it |
+| `log_has` | require an exact phrase in the run log — several refusals delete nothing and are otherwise identical |
+
+## Diffing whole runs
+
+`MR_SCENARIO_KEEP=1` keeps each scenario's directory on a green run.
+`lastrun.log` is the engine's own transcript of what it decided, so normalizing
+those across every scenario gives a behavioural fingerprint of a run — useful
+before reshaping anything in `main()`. Scrub the timestamps, the run directory,
+elapsed times, and the used/free/total figures, which come from the real host
+filesystem rather than the fixture.
+
+Two scenarios stay out of it entirely: `redline-deletes-immediately` arms its
+floor from the free space that exists, and `scheduled-before-run-time` sets a
+run time from the clock, so every number they log moves on its own. Both are
+guarded by their own pass/fail expectations instead, which is what those are
+for.
+
 **Fixed, not random.** An earlier version drew its libraries and settings from
 a seeded RNG. That is the wrong thing to gate a merge on: two runs of the same
 commit cover different ground, and a failure may not reproduce. Every scenario

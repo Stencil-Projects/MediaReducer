@@ -5154,16 +5154,6 @@ async function saveConfig() {
 }
 
 
-// Reduce visual effects is stamped on <html> by the server, so the page a save
-// came from is still running the OLD mode: the stylesheet that strips the
-// decoration keys off that attribute, and the effects it removes by not
-// binding them at all (the tab indicator, the click ripple) were decided at
-// load. Half of it could be applied live and half could not, which is worse
-// than either — so reload, and let the page come back rendered the one way.
-//
-// Compared against what the DOM is actually rendered as, not against the
-// previously saved value: two saves in a row would otherwise compare against a
-// value the page was never rendered with, and skip the reload it still needs.
 function _imdbUrlDirty() {
   const current = document.getElementById('IMDB_RATINGS_URL')?.value?.trim() || '';
   const saved = String(_savedConfig?.IMDB_RATINGS_URL || '').trim();

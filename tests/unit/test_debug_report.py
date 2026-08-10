@@ -39,6 +39,20 @@ CFG = {
     # A real-looking Sonarr credential and a host of its OWN: the report must
     # mask the key and scrub the host even when no other service shares it.
     "SONARR_URL": "http://sonarr-box.lan:8989", "SONARR_API_KEY": "sonarrsecret123",
+    # The three ways private hosts and titles leaked past the sanitizer: a
+    # free-form auto-pause reason embedding a real path with a movie title,
+    # the DETECTED service URLs the user never typed into a *_URL field, and
+    # the notification servers, whose tokens were masked but hostnames not.
+    "RUN_MODE": "paused",
+    "_RUN_MODE_AUTOPAUSE_REASON":
+        "Media paths changed: sampled Plex paths match nothing — for example "
+        "/library/Movies HD/Private Film (2019)/Private Film.mkv.",
+    "_SERVICE_URL_DEFAULTS": {"plex": "http://192.168.77.42:32400",
+                              "tautulli": "http://my-nas-box.example.com:8181"},
+    "NOTIFY_GOTIFY_SERVER": "gotify.private-domain.example",
+    "NOTIFY_NTFY_SERVER": "https://ntfy.private-domain.example",
+    # A LIST-typed secret: registering its Python repr would scrub nothing.
+    "NOTIFY_CUSTOM_URLS": ["mailto://user:hunter2pass@mail.example.net"],
 }
 
 A.load_config = lambda: dict(CFG)
@@ -89,7 +103,9 @@ SPACED_FOLDER = "Movies LQ"
 (tmp / "lastrun.log").write_text(
     "2026-07-15 06:59:11 - Scanning library (info line).\n"
     f"2026-07-15 06:59:11 - ABORT: Plex protected collection(s) ['{PRIVATE_COLLECTION}'] not found.\n"
-    f"2026-07-15 06:59:11 - SKIP identity_mismatch | path=/library/{SPACED_FOLDER}/{SPACED_TITLE}/{SPACED_TITLE}.avi\n",
+    f"2026-07-15 06:59:11 - SKIP identity_mismatch | path=/library/{SPACED_FOLDER}/{SPACED_TITLE}/{SPACED_TITLE}.avi\n"
+    "2026-07-15 06:59:12 - WARN: notify send failed for "
+    "mailto://user:hunter2pass@mail.example.net (timeout)\n",
     encoding="utf-8")
 
 report = A._build_debug_report()
@@ -136,6 +152,19 @@ check("no spaced folder name leaks", SPACED_FOLDER not in report and "LQ" not in
 check("API error surfaces in the report", "Tautulli API error" in report)
 check("but the path inside the API error is redacted",
       API_ERR_PATH not in report and "Blade Runner 2049" not in report)
+
+# The report is pasted into public GitHub issues, so a private host or title
+# anywhere in it — not just on the line that used to print it — is a leak.
+for leak in ("Private Film", "Movies HD", "192.168.77.42", "my-nas-box.example.com",
+             "gotify.private-domain.example", "ntfy.private-domain.example",
+             "hunter2pass", "mail.example.net"):
+    hit = next((ln.strip() for ln in report.splitlines() if leak in ln), None)
+    check(f"report never contains {leak!r}" + (f"   [{hit}]" if hit else ""),
+          hit is None)
+check("the auto-pause reason still appears, tokenized",
+      "auto-pause reason:" in report)
+check("the detected defaults still appear, as tokenized URLs",
+      "_SERVICE_URL_DEFAULTS" in report and "<host>" in report)
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

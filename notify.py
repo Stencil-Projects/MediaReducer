@@ -424,14 +424,23 @@ def _flush_held():
             url = _held_urls.pop(key, None)
             if url and messages:
                 _last_sent[key] = now   # reserve before sending, as in _deliver
-                due.append((url, _merge_held(messages)))
+                due.append((key, url, _merge_held(messages)))
         _save_state_locked()
         _arm_flush_locked(now)
-    for url, (title, body) in due:
+    for key, url, (title, body) in due:
         try:
-            _send_now([url], title, body)
+            sent, _detail = _send_now([url], title, body)
         except Exception:   # pragma: no cover - defensive
-            pass
+            sent = False
+        if not sent:
+            # "Delayed but never dropped" has to survive the send failing too:
+            # the merged alert goes back on hold (the reservation above stands,
+            # so the retry waits out one cooldown rather than hammering a dead
+            # endpoint) and the timer re-arms for it.
+            with _rate_lock:
+                _held.setdefault(key, []).append((title, body))
+                _held_urls.setdefault(key, url)
+                _arm_flush_locked(time.time())
 
 
 # ── Delivery ────────────────────────────────────────────────────────────────
@@ -522,7 +531,7 @@ def _deliver(urls, title, body, *, hold=True):
             # announce the marks", and then the flushed summary announced them
             # too, so every held daily summary produced a duplicate alert.
             return True, (f"held for the rate limit — {len(waiting)} destination(s) "
-                          f"are inside their window; it will be sent when they open")
+                          "are inside their window; it will be sent when they open")
         return False, cooldown_message(wait_for)
 
     ok, detail = _send_now(ready, title, body)
@@ -579,9 +588,14 @@ def _fmt_size(num_bytes):
     return "0.0 GB"
 
 
-def _bounded_lines(items, render, char_budget):
+def _bounded_lines(items, render, char_budget, total=None):
     """Render item lines until the item cap OR the character budget is hit,
-    then a '…and N more' tail. Returns (lines, chars_used)."""
+    then a '…and N more' tail. Returns (lines, chars_used).
+
+    `total` is the run's TRUE count when the item list itself is capped: the
+    report file carries at most 200 items while deleted_count/marked_count
+    stay real, so a tail computed from len(items) would contradict the
+    header for any run past the cap ("Removed 500" … "and 160 more")."""
     items = items or []
     lines, used, shown = [], 0, 0
     for it in items:
@@ -593,7 +607,7 @@ def _bounded_lines(items, render, char_budget):
         lines.append(line)
         used += len(line) + 1
         shown += 1
-    extra = len(items) - shown
+    extra = max(len(items), total or 0) - shown
     if extra > 0:
         lines.append(f"…and {extra} more")
     return lines, used
@@ -673,7 +687,7 @@ def _movie_name_blocks(report, debug, budget=_MOVIE_LIST_CHARS, *, armed=True):
     d_lines, used = _bounded_lines(
         report.get("deleted_items"),
         lambda it: f"• {it.get('title', '?')} ({_fmt_size(it.get('size'))})",
-        budget)
+        budget, total=report.get("deleted_count"))
     if d_lines:
         blocks.append(("Would delete:" if debug else "Deleted:") + "\n" + "\n".join(d_lines))
         budget -= used
@@ -681,7 +695,7 @@ def _movie_name_blocks(report, debug, budget=_MOVIE_LIST_CHARS, *, armed=True):
     # This run's new marks: soonest-first, the date said once in the header.
     marked_items = _by_soonest(report.get("marked_items"))
     m_lines, used = _bounded_lines(marked_items, lambda it: f"• {it.get('title', '?')}",
-                                   max(200, budget))
+                                   max(200, budget), total=report.get("marked_count"))
     if m_lines:
         header = (("Would mark for deletion" if debug else "Newly marked")
                   + _marked_when(marked_items, armed or debug) + ":")
@@ -824,10 +838,10 @@ def build_run_message(cfg, report):
         if seasons.get("aborted"):
             body_parts.append(f"Season deletions skipped this run — "
                               f"{seasons['aborted']}; the movie side covers "
-                              f"the full target.")
+                              "the full target.")
         elif seasons.get("skipped"):
             body_parts.append(f"{int(seasons['skipped'])} season(s) skipped "
-                              f"— see the log.")
+                              "— see the log.")
 
     # Storage block: where the library stands after the run, plus the armed
     # limits — the notification's version of the dashboard's storage card.
@@ -879,23 +893,30 @@ def build_run_message(cfg, report):
     return title, "\n\n".join(p for p in body_parts if p)
 
 
-def build_marked_change_message(cfg, *, new_items, marked_total):
+def build_marked_change_message(cfg, *, new_items, marked_total, redated=False):
     """(title, body) for "a 15-minute space check marked more movies", or None
-    when that alert is toggled off or nothing is new."""
+    when that alert is toggled off or nothing is new.
+
+    `redated` items are EXISTING marks whose delete dates moved (a delay
+    setting change) — zero movies were newly marked, and saying "marked N
+    more" about them asserted additions that never happened."""
     if not _bool(cfg, "NOTIFY_ON_MARKED_CHANGES") or not new_items:
         return None
     armed = _armed(cfg)
     n = len(new_items)
     new_items = _by_soonest(new_items)
-    body_parts = [f"A space check marked {n} more movie(s) for deletion "
-                  f"({int(marked_total or n)} marked in total). "
+    lead = (f"A delay change re-dated {n} marked movie(s) "
+            if redated else
+            f"A space check marked {n} more movie(s) for deletion ")
+    body_parts = [lead + f"({int(marked_total or n)} marked in total). "
                   + _marked_sentence(new_items, armed),
                   _mode_note(cfg)]
     if _bool(cfg, "NOTIFY_SHOW_MOVIES"):
         lines, _ = _bounded_lines(new_items, lambda it: f"• {it.get('title', '?')}",
                                   _MOVIE_LIST_CHARS)
         if lines:
-            body_parts.append("Newly marked:\n" + "\n".join(lines))
+            body_parts.append(("Re-dated:" if redated else "Newly marked:")
+                              + "\n" + "\n".join(lines))
     return "MediaReducer — movies marked for deletion", "\n\n".join(body_parts)
 
 
@@ -980,10 +1001,11 @@ def dispatch_run_report(cfg, report):
     return _dispatch_built(cfg, build_run_message(cfg, report), "nothing to report")
 
 
-def dispatch_marked_changes(cfg, *, new_items, marked_total):
+def dispatch_marked_changes(cfg, *, new_items, marked_total, redated=False):
     """Deliver the "more movies were marked" alert for a 15-minute check."""
     return _dispatch_built(
-        cfg, build_marked_change_message(cfg, new_items=new_items, marked_total=marked_total),
+        cfg, build_marked_change_message(cfg, new_items=new_items, marked_total=marked_total,
+                                         redated=redated),
         "nothing to report")
 
 

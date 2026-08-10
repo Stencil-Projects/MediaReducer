@@ -1,13 +1,14 @@
 """Run the scenario table end to end and check invariants after every run.
 
-  python3 tests/fuzz/run.py [workdir] [name,name,...]
+  python3 tests/scenarios/run.py [workdir] [name,name,...]
 
 Each scenario boots a real app against a mock Jellyfin serving exactly what the
 scenario put on disk, then drives Simulate -> Cleanup -> Simulate -> Cleanup.
 After every run: nothing may leave the library root or a monitored path, a
 Simulate may delete nothing, a disabled media type may lose nothing, a favorite
 may not go while it is protected, everything removed must be in deleted.log,
-and no page or endpoint may 5xx afterwards. Each scenario also states what it
+no run may free or mark far past its own stated target, and no page or
+endpoint may 5xx afterwards. Each scenario also states what it
 EXPECTS to happen, so "did not crash" is not mistaken for "did the right thing".
 """
 import json, os, re, shutil, signal, subprocess, sys, time, urllib.request, urllib.error
@@ -118,6 +119,65 @@ def check_run(name, phase, cfg, spec, before, after, base):
             if Path(p).stem in favs:
                 bad(name, phase, "deleted a protected favorite", p)
 
+    # How MUCH went, not only what. The delete loop stops as soon as the bytes
+    # it has planned cover the run's target, and it tests that BEFORE taking
+    # the next candidate — so a run can overshoot by at most the single file it
+    # was working on. Nothing checked that ceiling. Freeing exactly the target
+    # and emptying the whole library look identical to every assertion above,
+    # and both leave a scenario reporting "some movies were removed": deleting
+    # the target gate outright went through the entire table unnoticed.
+    #
+    # Seasons are excluded on purpose. They are removed by the app's season
+    # executor against its own share of the deficit, not by this loop, so
+    # counting them here would measure two targets against one.
+    log_p = base / "config" / "lastrun.log"
+    run_log = log_p.read_text(errors="replace") if log_p.exists() else ""
+    _t = re.search(r"Target to free: ([\d.]+) GB", run_log)
+    target = float(_t.group(1)) * 1_000_000_000 if _t else None
+    mv = {p: s for p, s in removed.items() if "/Season " not in p}
+    if target is not None and mv:
+        freed, biggest = sum(mv.values()), max(mv.values())
+        if freed > target + biggest:
+            bad(name, phase, "freed far past the run's target",
+                f"{freed / 1e9:.2f} GB freed against a {target / 1e9:.2f} GB "
+                f"target (largest single file {biggest / 1e9:.2f} GB)")
+    # The same ceiling on the marked side, read from the QUEUE rather than
+    # from the run's own summary line. The summary prints a figure the loop
+    # computes from the very counter that decides when to stop, so a mutation
+    # that stops the counter reports 0.0 GB marked while marking the whole
+    # library — the log agreed with itself and the check saw nothing. The queue
+    # rows and the sizes on disk are the two things the loop cannot restate.
+    dbp = base / "config" / "mediareducer.db"
+    if target is not None and dbp.exists():
+        import sqlite3
+        with sqlite3.connect(dbp) as _c:
+            marks = [r[0] for r in _c.execute(
+                "SELECT path FROM queue WHERE marked_at IS NOT NULL")]
+        sizes = [before[p] for p in marks if p in before]
+        if sizes and sum(sizes) > target + max(before.values(), default=0):
+            bad(name, phase, "marked far past the run's target",
+                f"{len(sizes)} movie(s) / {sum(sizes) / 1e9:.2f} GB marked "
+                f"against a {target / 1e9:.2f} GB target")
+
+    # What the run SAYS it freed has to be what actually left the disk. The
+    # figure feeds the dashboard, the run summary and the notification, and it
+    # is accumulated separately from the deletions themselves — so it can drift
+    # from them without a single file being wrongly removed, and nothing else
+    # here would notice.
+    _sf = re.search(r"Space freed: ([\d.]+) GB", run_log)
+    _dc = re.search(r"Deleted: (\d+)", run_log)
+    if _sf and mv:
+        claimed, real = float(_sf.group(1)) * 1e9, sum(mv.values())
+        # Rounded to 2 dp in the log, and seasons are counted in it too.
+        if abs(claimed - real) > 0.02e9 and not any(
+                "/Season " in p for p in removed):
+            bad(name, phase, "the run misreported how much it freed",
+                f"said {claimed / 1e9:.2f} GB, actually {real / 1e9:.2f} GB")
+    if _dc and not any("/Season " in p for p in removed):
+        if int(_dc.group(1)) != len(mv):
+            bad(name, phase, "the run misreported how many files it deleted",
+                f"said {_dc.group(1)}, actually {len(mv)}")
+
     dl = base / "config" / "deleted.log"
     logged = dl.read_text(errors="replace") if dl.exists() else ""
     for p in removed:
@@ -159,6 +219,7 @@ def run_scenario(name, spec, expect):
     app = subprocess.Popen([sys.executable, "-u", str(REPO / "app.py")], env=env,
                            cwd=str(REPO), stdout=applog, stderr=subprocess.STDOUT)
     gone = {"movies": 0, "episodes": 0}
+    gone_paths: list = []   # every deleted path, across all phases, for gone_has/gone_not
     try:
         # Ready means the STARTUP storage refresh has finished, not just that the
         # port answers: /api/status replies a moment before that clears, and a run
@@ -180,6 +241,95 @@ def run_scenario(name, spec, expect):
         phases = [("simulate", "debug_sim"), ("cleanup", "headroom")]
         if expect.get("repeat"):
             phases += [("simulate2", "debug_sim"), ("cleanup2", "headroom")]
+        # A scheduled scenario is ONLY the scheduled run. Leaving the manual
+        # phases in place afterwards deletes everything the scheduled run
+        # correctly held back, and the scenario then fails its own expectation
+        # for a reason that has nothing to do with what it is testing.
+        if expect.get("scheduled") or expect.get("direct_manual"):
+            phases = []
+
+        # A cleanup fired from the API is a MANUAL one, and manual deliberately
+        # ignores the deletion delay — you pressed the button, you meant now.
+        # Every phase above is therefore manual, which left the delayed path
+        # unexercised: across 29 scenarios the engine never once logged
+        # "MARKED for deletion", so nothing was checking the mechanism the
+        # whole safety story rests on. A scheduled run is the engine started
+        # without MEDIAREDUCER_MANUAL, so it is run directly here.
+        # direct_manual runs the engine as a MANUAL cleanup without going
+        # through /api/run. The app refuses a manual cleanup when nothing is
+        # over its limits — "Space limits are already satisfied" — so its own
+        # within-limits branch is unreachable from the API by design. It is
+        # still the last thing standing between a disagreement (the app reading
+        # cached stats, the engine recomputing) and a deletion nobody wanted,
+        # which is exactly the kind of second check worth having a test on.
+        if expect.get("scheduled") or expect.get("direct_manual"):
+            # The app marks today's daily window used at startup, so a
+            # scheduled cleanup would refuse with "skipping until tomorrow"
+            # before reaching anything worth testing. Clear the stamp.
+            import sqlite3
+            _db = base / "config" / "mediareducer.db"
+            # Left in place for scenarios that are ABOUT the window already
+            # being spent today; cleared otherwise, or the run refuses before
+            # reaching whatever the scenario is really testing.
+            if _db.exists() and not expect.get("day_used"):
+                with sqlite3.connect(_db) as _c:
+                    _c.execute("DELETE FROM meta WHERE key='last_cleanup_date'")
+            _phase = "manual-direct" if expect.get("direct_manual") else "scheduled"
+            env2 = dict(env, MEDIAREDUCER_MODE_OVERRIDE="headroom")
+            if expect.get("direct_manual"):
+                env2["MEDIAREDUCER_MANUAL"] = "1"
+            else:
+                env2.pop("MEDIAREDUCER_MANUAL", None)
+            subprocess.run([sys.executable, "-u", str(REPO / "engine.py")],
+                           env=env2, cwd=str(REPO), stdout=applog,
+                           stderr=subprocess.STDOUT, timeout=300)
+            after = snapshot(lib)
+            _rm = check_run(name, _phase, cfg, spec, before, after, base)
+            gone["movies"] += sum(1 for q in _rm if "/Season " not in q)
+            gone["episodes"] += sum(1 for q in _rm if "/Season " in q)
+            gone_paths.extend(_rm)
+            before = after
+            # "Deleted nothing" is also what a refused run looks like, so the
+            # marking has to be shown positively or the scenario proves the
+            # opposite of what it claims.
+            # Which refusal it was, not merely that it refused. Several of
+            # these paths delete nothing and are otherwise indistinguishable.
+            if expect.get("log_has"):
+                _log = (base / "config" / "lastrun.log").read_text(errors="replace")
+                if expect["log_has"] not in _log:
+                    bad(name, _phase, f"expected the run to say {expect['log_has']!r}",
+                        _log[-300:])
+            if expect.get("waits"):
+                _log = (base / "config" / "lastrun.log").read_text(errors="replace")
+                # Matched case-insensitively: the progress message capitalises
+                # it, the log line has it mid-sentence.
+                if "scheduled run time" not in _log.lower():
+                    bad(name, _phase, "an early scheduled run did not wait", _log[-300:])
+            if expect.get("marks"):
+                _log = (base / "config" / "lastrun.log").read_text(errors="replace")
+                if "MARKED for deletion" not in _log:
+                    bad(name, _phase, "a delayed scheduled run marked nothing",
+                        _log[-300:])
+
+            # The other half of the mechanism: a mark that has aged past its
+            # delay must actually delete on the next scheduled run. Marking and
+            # never collecting would look identical in every check above, and
+            # would mean a library that is never cleaned.
+            if expect.get("marks_due"):
+                with sqlite3.connect(_db) as _c:
+                    _c.execute("UPDATE queue SET marked_at = marked_at - ?",
+                               (float(cfg.get("DELETE_DELAY_DAYS", 1) + 2) * 86400,))
+                    _c.execute("DELETE FROM meta WHERE key='last_cleanup_date'")
+                subprocess.run([sys.executable, "-u", str(REPO / "engine.py")],
+                               env=env2, cwd=str(REPO), stdout=applog,
+                               stderr=subprocess.STDOUT, timeout=300)
+                after = snapshot(lib)
+                _rm = check_run(name, "marks-due", cfg, spec, before, after, base)
+                gone["movies"] += sum(1 for q in _rm if "/Season " not in q)
+                gone["episodes"] += sum(1 for q in _rm if "/Season " in q)
+                gone_paths.extend(_rm)
+                before = after
+
         for phase, mode in phases:
             # "Try again in a moment" refusals are the app being busy with its
             # own background refresh, not a verdict about this scenario. Retried
@@ -217,6 +367,7 @@ def run_scenario(name, spec, expect):
             rm = check_run(name, phase, cfg, spec, before, after, base)
             gone["movies"] += sum(1 for p in rm if "/Season " not in p)
             gone["episodes"] += sum(1 for p in rm if "/Season " in p)
+            gone_paths.extend(rm)
             before = after
 
         for path in ("/api/status", "/api/config", "/api/queue", "/api/history",
@@ -238,6 +389,18 @@ def run_scenario(name, spec, expect):
                 bad(name, "expect", f"expected {kind} to be deleted, none were")
             if want == "none" and gone[kind] > 0:
                 bad(name, "expect", f"expected NO {kind} deleted, {gone[kind]} were")
+        # WHICH paths, for the rules whose whole point is the selection. A
+        # substring per expectation: gone_has must match something deleted,
+        # gone_not must match nothing — the deletion that would prove a
+        # season rule leaked.
+        for frag in expect.get("gone_has", ()):
+            if not any(frag in p for p in gone_paths):
+                bad(name, "expect", f"expected a deletion matching {frag!r}, none happened",
+                    sorted(gone_paths)[:6])
+        for frag in expect.get("gone_not", ()):
+            hits = [p for p in gone_paths if frag in p]
+            if hits:
+                bad(name, "expect", f"{frag!r} must not be deleted, but was", hits[:4])
         if expect.get("refused") and not any(r[0] == name for r in REFUSED):
             bad(name, "expect", "expected the app to refuse this run, it did not")
     finally:
@@ -251,8 +414,12 @@ def run_scenario(name, spec, expect):
         if "Traceback (most recent call last)" in log:
             i = log.find("Traceback (most recent call last)")
             bad(name, "log", "unhandled exception in the app", log[i:i + 260])
-        if not FAILS:
-            shutil.rmtree(base, ignore_errors=True)   # keep only what failed
+        # Kept only when something failed, so a green run leaves no debris. The
+        # override exists for diffing whole runs against each other: lastrun.log
+        # is the engine's own transcript of what it decided, which is the closest
+        # thing there is to a behavioural fingerprint of a run.
+        if not FAILS and not os.environ.get("MR_SCENARIO_KEEP"):
+            shutil.rmtree(base, ignore_errors=True)
 
 
 picked = [(n, s, e) for n, s, e in SCENARIOS if not ONLY or n in ONLY]

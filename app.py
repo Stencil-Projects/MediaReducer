@@ -501,7 +501,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.14"
+APP_VERSION = "1.0.0-alpha.15"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -745,7 +745,6 @@ def _config_file_issues(saved: dict) -> list[dict]:
     if not ({"REDLINE_GB", "HEADROOM_GB", "MAX_LIBRARY_GB"} & flagged):
         redline = _config_num(saved.get("REDLINE_GB", _CONFIG_DEFAULTS.get("REDLINE_GB")))
         headroom = _config_num(saved.get("HEADROOM_GB", _CONFIG_DEFAULTS.get("HEADROOM_GB")))
-        cap = _config_num(saved.get("MAX_LIBRARY_GB", _CONFIG_DEFAULTS.get("MAX_LIBRARY_GB")))
         # The one cross-field rule: under an ARMED headroom (>= 1) the Redline
         # floor sits strictly below the target it backs up. With headroom off
         # there is no target, so Redline is free, and EVERY threshold may be
@@ -1036,7 +1035,15 @@ def _atomic_write_json(path: Path, data, *, indent: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        tmp.write_text(json.dumps(data, indent=indent), encoding="utf-8")
+        # fsync before the rename, so the write is atomic against POWER LOSS
+        # and not just process death: without it the rename can be persisted
+        # while the data blocks are not, and an unclean host shutdown leaves a
+        # zero-length config.json — the whole configuration (tokens,
+        # thresholds, monitor dirs) gone behind an invalid-JSON lockout.
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=indent))
+            f.flush()
+            os.fsync(f.fileno())
         # Owner-only, before the rename rather than after: config.json holds a
         # Plex token, three API keys and any notification webhook URLs in clear
         # text, and the default umask leaves it world-readable — which on a NAS
@@ -2186,24 +2193,35 @@ def _check_marked_change_notification() -> None:
         prev_marked = (prev or {}).get("marked") if isinstance(prev, dict) else None
         if prev_sig == sig:
             return
-        # Always advance the baseline (also stores the marked map so the NEXT
-        # diff can name exactly which movies are new).
-        _store_notify_meta("notify_marked_state", {"sig": sig, "marked": marked})
+        # The baseline (which also stores the marked map so the NEXT diff can
+        # name exactly which movies are new) advances immediately when nothing
+        # needs announcing — but when an alert IS due, it advances only after
+        # the send succeeded: storing first meant one failed delivery lost
+        # those marks forever, since the next tick compared against a baseline
+        # that already contained them.
+        baseline = {"sig": sig, "marked": marked}
         if prev_sig is None:
+            _store_notify_meta("notify_marked_state", baseline)
             return   # first observation; baseline only, nothing to compare
         if not (notify.flag(cfg, "NOTIFY_ENABLED") and notify.flag(cfg, "NOTIFY_ON_MARKED_CHANGES")):
+            _store_notify_meta("notify_marked_state", baseline)
             return
         prev_paths = set(prev_marked or {})
         new_items = [dict(v) for p, v in marked.items() if p not in prev_paths]
+        redated = False
         if not new_items and isinstance(prev_marked, dict):
             # No additions — but a re-dated existing mark (delay change) also
             # deserves one alert, presented as the current marked set.
-            redated = [dict(v) for p, v in marked.items()
-                       if p in prev_marked and prev_marked[p].get("delete_on") != v["delete_on"]]
-            new_items = redated
+            new_items = [dict(v) for p, v in marked.items()
+                         if p in prev_marked and prev_marked[p].get("delete_on") != v["delete_on"]]
+            redated = bool(new_items)
         if not new_items:
+            _store_notify_meta("notify_marked_state", baseline)
             return   # marks only dropped off; nothing new to announce
-        notify.dispatch_marked_changes(cfg, new_items=new_items, marked_total=len(marked))
+        sent, _detail = notify.dispatch_marked_changes(
+            cfg, new_items=new_items, marked_total=len(marked), redated=redated)
+        if sent:
+            _store_notify_meta("notify_marked_state", baseline)
     except Exception:
         pass
 
@@ -2256,10 +2274,14 @@ def _check_low_space_notification(cfg: dict, disk: dict | None) -> None:
             front = [e for e in entries if e.get("marked")] or entries
             items = [{"title": e.get("title"), "size": e.get("size_bytes")}
                      for e in front][:15]
-        notify.dispatch_low_space(cfg, free_gb=free_gb, redline_gb=redline,
-                                  margin_gb=margin, items=items)
-        _store_notify_meta("notify_low_space",
-                           {"warned": True, "redline": redline, "margin": margin})
+        sent, _detail = notify.dispatch_low_space(cfg, free_gb=free_gb, redline_gb=redline,
+                                                  margin_gb=margin, items=items)
+        # Only a DELIVERED warning is a warning: storing "warned" on a failed
+        # send silenced the alert until free space recovered past the margin
+        # and dropped again — the next tick retries instead.
+        if sent:
+            _store_notify_meta("notify_low_space",
+                               {"warned": True, "redline": redline, "margin": margin})
     except Exception:
         pass
 
@@ -2307,7 +2329,13 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
         # by _work below.
         marked_alert_armed = notify.flag(cfg, "NOTIFY_ON_MARKED_CHANGES")
         if not notify.flag(cfg, "NOTIFY_ENABLED") or stopped or not wants_notify or muted:
-            if returncode == 0 and not stopped and not muted:
+            # Debug Cleanup is silent by design, but it PERSISTS the same
+            # queue upkeep a real tick would — its mark changes are real, and
+            # the promise above is that the between-run marked-changes alert
+            # covers them. Re-baselining here would swallow them unannounced,
+            # so while that alert is armed the baseline is left for it.
+            if (returncode == 0 and not stopped and not muted
+                    and not (is_debug and marked_alert_armed)):
                 threading.Thread(target=_update_marked_baseline, daemon=True,
                                  name="notify-baseline").start()
             return
@@ -4102,13 +4130,20 @@ def _plex_protected_series_titles(conn: dict, names) -> set:
         if not isinstance(sec, dict) or sec.get("type") != "show":
             continue
         cols = _plex_get(url, token,
-                         f"/library/sections/{sec.get('key')}/collections", timeout=10) or {}
+                         f"/library/sections/{sec.get('key')}/collections", timeout=10)
+        if not isinstance(cols, dict):
+            # The same rule as the section list above, for the SAME reason: an
+            # empty-body 200 here would silently read as "this section has no
+            # collections" and strip a protected show's shield for the pass.
+            raise RuntimeError("Plex's collection list did not answer")
         for col in (cols.get("MediaContainer") or {}).get("Metadata") or []:
             if not isinstance(col, dict) or str(col.get("title") or "") not in wanted:
                 continue
             kids = _plex_get(url, token,
                              f"/library/collections/{col.get('ratingKey')}/children",
-                             timeout=15) or {}
+                             timeout=15)
+            if not isinstance(kids, dict):
+                raise RuntimeError("Plex's collection members did not answer")
             for kid in (kids.get("MediaContainer") or {}).get("Metadata") or []:
                 if isinstance(kid, dict) and kid.get("title"):
                     out.add(_norm_series_title(kid["title"]))
@@ -4131,7 +4166,12 @@ def _jellyfin_protected_series_titles(url: str, key: str, names) -> set:
         if not isinstance(box, dict) or str(box.get("Name") or "") not in wanted \
                 or not box.get("Id"):
             continue
-        kids = _jellyfin_get(url, key, "/Items", {"ParentId": box["Id"]}, timeout=15) or {}
+        kids = _jellyfin_get(url, key, "/Items", {"ParentId": box["Id"]}, timeout=15)
+        if not isinstance(kids, dict):
+            # An empty body must raise here too — the box-set list answered,
+            # but its MEMBERS are the protection; reading them as absent
+            # unprotects the whole set.
+            raise RuntimeError("Jellyfin's box-set members did not answer")
         for kid in kids.get("Items") or []:
             if isinstance(kid, dict) and kid.get("Type") == "Series" and kid.get("Name"):
                 out.add(_norm_series_title(kid["Name"]))
@@ -4284,6 +4324,35 @@ def _resolve_tv_scope(rows: list, cfg: dict) -> None:
             print(f"TV scope: {row.get('title') or row.get('path')} matches "
                   f"{len(conflict)} monitored folders ({', '.join(conflict)}) — "
                   f"out of scope until the name is unambiguous", flush=True)
+
+    # The same refusal in the OTHER direction: one name matching two folders is
+    # ambiguous, and two ROWS claiming one folder is too. A same-named show in
+    # a monitored and an unmonitored library resolves BY NAME into the
+    # monitored copy's folder, and one show splits into two rows when the
+    # servers disagree on its year — either way the plan would treat one
+    # on-disk folder as two shows: seasons counted twice in the TV share, and
+    # one row's episode paths joined onto a folder the other row's facts
+    # describe. A folder claimed twice is not an identity, so every claimant
+    # goes out of scope.
+    claims: dict = {}
+    for row in rows:
+        if not row.get("path"):
+            continue
+        try:
+            key = str(Path(row["path"]).resolve())
+        except OSError:
+            key = str(row["path"])
+        claims.setdefault(key, []).append(row)
+    for key, group in claims.items():
+        if len(group) < 2:
+            continue
+        titles = ", ".join(str(r.get("title") or "?") for r in group)
+        for row in group:
+            row["path"] = None
+            row["tv_in_scope"] = 0
+            row["tv_scope_conflict"] = [key]
+        print(f"TV scope: {len(group)} inventory rows ({titles}) all resolve to "
+              f"{key} — out of scope until one show owns the folder", flush=True)
 
 
 def _season_score_settings(cfg: dict) -> dict:
@@ -4717,7 +4786,8 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -
               "deleted_seasons": [], "skipped": [], "aborted": None,
               "blocked_by_safety": False, "eligible_seasons": 0,
               "seasons_seen": 0, "cleanup_off": 0, "excluded": {},
-              "deleted_files": 0, "freed_bytes": 0}
+              "deleted_files": 0, "freed_bytes": 0,
+              "vanished_seasons": 0, "vanished_bytes": 0}
     st = _tv_cleanup_state()
 
     def _finish():
@@ -4825,12 +4895,20 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -
         # measures AFTER these deletions and would subtract the freed bytes a
         # second time. Re-stamp with only the share still PENDING (marked,
         # not yet deleted), so the two executors cover the deficit once.
-        if report["freed_bytes"]:
-            _stamp_tv_share(max(0, pool["tv_share_bytes"] - report["freed_bytes"]))
+        # A VANISHED season leaves the pending share too: it was priced in at
+        # its server-reported size, frees nothing, and its mark is cleared —
+        # leaving its claim standing would have the engine subtract bytes no
+        # season will ever free.
+        if report["freed_bytes"] or report["vanished_bytes"]:
+            _stamp_tv_share(max(0, pool["tv_share_bytes"] - report["freed_bytes"]
+                                - report["vanished_bytes"]))
 
     _finish()
-    if report["deleted_files"]:
-        _refresh_tv_inventory(cfg)   # sizes changed; keep the stored inventory honest
+    if report["deleted_files"] or report["vanished_seasons"]:
+        # Sizes changed — or a season the inventory still lists turned out to
+        # be gone from disk; either way the stored inventory is stale and
+        # would re-plan the same phantom next pass.
+        _refresh_tv_inventory(cfg)
     print(f"TV cleanup ({report['mode']}): pool deficit {report['pool_target_gb']} GB "
           f"→ seasons {report['tv_share_gb']} GB, movies {report['movie_share_gb']} GB | "
           f"{report['marked_new']} newly marked, "
@@ -5018,7 +5096,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
             if len(candidates) > 1:
                 raise RuntimeError(
                     f"{len(candidates)} Sonarr series share this title — "
-                    f"cannot tell which to unmonitor")
+                    "cannot tell which to unmonitor")
             match = candidates[0] if candidates else None
             if match is not None and entry_year and match.get("year") \
                     and match["year"] != entry_year:
@@ -5119,6 +5197,22 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
         except Exception:
             pass
 
+    if not deleted:
+        # Every file was already gone: the season vanished outside this pass
+        # (removed by hand, or the server's layout no longer matches disk).
+        # NOT a deletion — reporting it as one ("DELETED … 0 file(s)") once
+        # let this repeat forever: freed_bytes stayed 0, so the share was
+        # never re-stamped and the inventory never refreshed, and the season
+        # re-entered every plan claiming its stale server size while the
+        # movie side under-covered the deficit by exactly that much, daily.
+        # The mark still clears (the files ARE gone); the vanished counters
+        # are what makes the caller re-stamp and refresh.
+        report["vanished_seasons"] += 1
+        report["vanished_bytes"] += max(0, int(entry.get("size_bytes") or 0))
+        print(f"TV cleanup: {entry.get('title')} S{entry.get('season')} — every "
+              "file already gone on disk (removed outside MediaReducer); "
+              "clearing the mark and refreshing the inventory", flush=True)
+        return True
     report["deleted_seasons"].append({"title": entry.get("title"),
                                       "season": entry.get("season"),
                                       "files": deleted, "bytes": freed})
@@ -5420,7 +5514,7 @@ def _resolve_media_path_explained(path_str: str | None, expected_size=0):
     if len(hits) > 1:
         if expected <= 0:
             return None, (f"{len(hits)} same-named files and the server reported "
-                          f"no size to pick between them")
+                          "no size to pick between them")
         sized = []
         for p in hits:
             try:
@@ -6045,8 +6139,8 @@ def _debug_resolved_line(raw, monitor_dirs, want=0):
     folder-shaped entry says so — those are not part of the accuracy check."""
     if not _is_media_file_path(raw, _media_file_extensions()):
         return (f"      {raw}\n        -> a folder path (no media file "
-                f"extension) — not a movie file entry, ignored by the "
-                f"accuracy check")
+                "extension) — not a movie file entry, ignored by the "
+                "accuracy check")
     resolved, why = _resolve_media_path_explained(raw, expected_size=want)
     if resolved is None:
         return f"      {raw}\n        -> NO MATCH: {why}"
@@ -6383,7 +6477,7 @@ def api_debug_sonarr():
 
     lines.append("")
     lines.append(f"SONARR_CLEANUP_ENABLED = {bool(cfg.get('SONARR_CLEANUP_ENABLED', False))} "
-                 f"(off: files still delete; seasons stay monitored in Sonarr)")
+                 "(off: files still delete; seasons stay monitored in Sonarr)")
     return jsonify({"ok": True, "text": "\n".join(lines)})
 
 
@@ -6419,7 +6513,7 @@ def api_debug_media_paths():
     idx = _media_fingerprint_index()
     lines.append(f"Fingerprint index: {sum(len(v) for v in idx['dir_name'].values()):,} "
                  f"file(s) walked {max(0, time.time() - idx['at']):.0f}s ago "
-                 f"(rebuilt fresh whenever the accuracy check runs)")
+                 "(rebuilt fresh whenever the accuracy check runs)")
 
     lines.append("")
     lines.append("Stored media-path verdict (re-judged ONLY by Check for Errors or a")
@@ -6609,7 +6703,7 @@ def api_debug_cache():
                              "trigger are set")
             if tv_marked:
                 lines.append(f"  marked seasons ({len(tv_marked)} — deleted by an Automatic "
-                             f"Cleanup once their delete-on date arrives):")
+                             "Cleanup once their delete-on date arrives):")
                 for m in sorted(tv_marked.values(), key=lambda x: x.get("score") or 0):
                     try:
                         _due = (datetime.fromtimestamp(m.get("marked_at") or 0)
@@ -6627,7 +6721,7 @@ def api_debug_cache():
                              "the cleanup would take no seasons")
             else:
                 lines.append(f"  pool deficit {_pool['target_bytes'] / 1e9:,.1f} GB "
-                             f"(Headroom / Library Size Cap, movies and TV in ONE order) → "
+                             "(Headroom / Library Size Cap, movies and TV in ONE order) → "
                              f"seasons cover {_pool['tv_share_bytes'] / 1e9:,.1f} GB (TAKE), "
                              f"movies {_pool['movie_share_bytes'] / 1e9:,.1f} GB")
             run = 0
@@ -6730,7 +6824,12 @@ def api_debug_cache():
 _REPORT_SECRET_KEYS = ("TAUTULLI_API_KEY", "PLEX_TOKEN", "JELLYFIN_API_KEY",
                        "RADARR_API_KEY", "SONARR_API_KEY") + notify.SECRET_KEYS
 _REPORT_URL_KEYS = ("TAUTULLI_URL", "PLEX_URL", "JELLYFIN_URL", "RADARR_URL",
-                    "SONARR_URL", "IMDB_RATINGS_URL")
+                    "SONARR_URL", "IMDB_RATINGS_URL",
+                    # The notification servers are the user's own hosts exactly
+                    # like the media servers above; their tokens/topics are in
+                    # SECRET_KEYS but the hostnames leaked through the raw
+                    # {value!r} fallback.
+                    "NOTIFY_NTFY_SERVER", "NOTIFY_GOTIFY_SERVER")
 
 
 class _ReportSanitizer:
@@ -6739,14 +6838,35 @@ class _ReportSanitizer:
         # error messages: secrets, configured URLs, and their hostnames.
         self._scrub: list[tuple[str, str]] = []
         for key in _REPORT_SECRET_KEYS:
-            value = str(cfg.get(key) or "").strip()
-            if value:
-                self._scrub.append((value, f"<{key.lower()}>"))
+            value = cfg.get(key)
+            # NOTIFY_CUSTOM_URLS is a LIST of apprise URLs; registering its
+            # Python repr would scrub nothing. Each element is its own secret.
+            values = value if isinstance(value, list) else [value]
+            for v in values:
+                v = str(v or "").strip()
+                if v:
+                    self._scrub.append((v, f"<{key.lower()}>"))
         for key in _REPORT_URL_KEYS:
             value = str(cfg.get(key) or "").strip()
             if not value or key == "IMDB_RATINGS_URL":
                 continue
             self._scrub.append((value, f"<{key.lower()}>"))
+            try:
+                host = urlparse(value).hostname
+            except Exception:
+                host = None
+            if host:
+                self._scrub.append((host, "<host>"))
+        # The detected service defaults are URLs the user never typed into a
+        # *_URL field — the LAN IP the app guessed, the Plex host read out of
+        # Tautulli's config — so in the standard "URL left blank" setup they
+        # are the ONLY spelling of those hosts, and nothing above registered
+        # them. Same scrub as a configured URL.
+        for value in (cfg.get("_SERVICE_URL_DEFAULTS") or {}).values():
+            value = str(value or "").strip()
+            if not value:
+                continue
+            self._scrub.append((value, "<url>"))
             try:
                 host = urlparse(value).hostname
             except Exception:
@@ -6855,13 +6975,20 @@ def _build_debug_report() -> str:
             add(f"  {key} = {s.token(value, 'name')}")
         elif key == "OUTPUT_DIR":
             add(f"  {key} = {value}")
+        elif key == "_SERVICE_URL_DEFAULTS":
+            urls = value if isinstance(value, dict) else {}
+            add(f"  {key} = {{{', '.join(f'{k}: {s.url(v)}' for k, v in sorted(urls.items()))}}}")
+        elif key == "_RUN_MODE_AUTOPAUSE_REASON":
+            # Free-form sentence that can embed a real library path with a
+            # movie title (it is built from health-check error text).
+            add(f"  {key} = {s.redact(value)}")
         else:
             add(f"  {key} = {value!r}")
 
     section("SCHEDULER & CLOCK")
     add(f"  run mode: {cfg.get('RUN_MODE')!r}")
     if cfg.get("RUN_MODE") == "paused" and cfg.get("_RUN_MODE_AUTOPAUSE_REASON"):
-        add(f"  auto-pause reason: {cfg.get('_RUN_MODE_AUTOPAUSE_REASON')}")
+        add(f"  auto-pause reason: {s.redact(cfg.get('_RUN_MODE_AUTOPAUSE_REASON'))}")
     add(f"  TIME_ZONE setting: {cfg.get('TIME_ZONE')!r}")
     add(f"  effective process zone: {_server_time_zone_name()} (host zone: {_host_time_zone_name()})")
     add(f"  process clock now: {time.strftime('%Y-%m-%d %H:%M:%S %z')} (tzname={'/'.join(time.tzname)})")
@@ -7244,6 +7371,133 @@ def api_collections():
     return jsonify(out)
 
 
+
+def _judge_media_paths(*, pre, use_plex, use_jellyfin, tautulli_connected,
+                       jellyfin_connected, dirs_sig, errors, warnings,
+                       add_error, add_warning) -> tuple[list, bool]:
+    """Sample each connected server's reported file paths against the library.
+
+    The question is whether the files a run would act on are actually there:
+    a server describing a library that is not the one mounted is the wrong
+    -library tripwire, and it has to stop a run rather than delete against a
+    backup. A few misses are ordinary and only warn.
+
+    errors and warnings are the caller's own lists, passed in rather than
+    returned, because a retained verdict is replayed by slicing what THIS
+    call appended — and add_error/add_warning carry field highlighting the
+    plain lists do not.
+
+    Returns the per-server compatibility rows and whether any of them blocks.
+    """
+    media_path_compatibility: list[dict] = []
+    media_path_blocker = False
+    _dirs_sig = dirs_sig
+    # Re-judging: a fresh walk, always — the fingerprint index's short
+    # cache exists to share ONE walk between the two servers' checks
+    # below, never to judge a walk from before a mount fix.
+    _MEDIA_FP_INDEX["at"] = 0.0
+    _judged_any = False
+
+    def _store_media_verdict(_name, _e0, _w0):
+        """Replace one server's stored verdict slot — called only when its
+        check actually produced a compat entry, so a sampler failure or a
+        down server keeps the previous verdict instead of clearing it."""
+        nonlocal _judged_any
+        if media_path_compatibility and media_path_compatibility[-1].get("server") == _name:
+            _c = media_path_compatibility[-1]
+            _MEDIA_PATH_VERDICT["servers"][_name] = {
+                "compat": dict(_c),
+                "errors": list(errors[_e0:]),
+                "warnings": list(warnings[_w0:]),
+                "blocker": bool(_c.get("checked") and not _c.get("ok")),
+                "at": time.time(),
+            }
+            _judged_any = True
+
+    # One judgement, run per connected server. The two used to be written out
+    # twice, identical apart from five places each names itself — which is a
+    # standing invitation to leave a Jellyfin user being told to press the
+    # Tautulli button. The names live in one table instead, and
+    # test_media_path_messages pins every slot of every message.
+    SERVERS = (
+        # on,           connected,           label,             sample key,
+        #   reports / debug button / stale-entry noun / the rescan that clears it
+        (use_plex,      tautulli_connected,  "Plex/Tautulli",   "tautulli_paths",
+         "Plex", "Tautulli", "Plex", "a Plex/Tautulli rescan clears this"),
+        (use_jellyfin,  jellyfin_connected,  "Jellyfin",        "jellyfin_paths",
+         "Jellyfin", "Jellyfin", "Jellyfin", "a Jellyfin library scan clears this"),
+    )
+    for on, connected, label, sample_key, reports, button, stale, clears in SERVERS:
+        if not (on and connected):
+            continue
+        _e0, _w0 = len(errors), len(warnings)
+        try:
+            compat = _media_path_compatibility_state(label, _sample_result(pre, sample_key))
+            media_path_compatibility.append(compat)
+            if compat["checked"] == 0:
+                if compat.get("folder_entries"):
+                    add_warning(f"{label} returned only folder entries "
+                                f"({compat['folder_entries']}) — no movie file paths to check.")
+                else:
+                    add_warning(f"{label} connected, but no movie paths were available to check.")
+            elif not compat["ok"]:
+                media_path_blocker = True
+                if compat.get("mismatch_problem"):
+                    add_error(
+                        f"{compat['size_mismatched']} of {compat['size_checked']} sampled files "
+                        f"under {FILESYSTEM_CHECK_PATH} differ in size from what {reports} "
+                        f"reports — that looks like the wrong library (a backup or stale copy "
+                        f"mounted, or a {reports} library describing different files), not a few "
+                        "quality upgrades. Check the /library mount, or rescan "
+                        f"{reports}, then recheck.")
+                else:
+                    _ex = (compat.get("unmatched_examples") or [""])[0]
+                    add_error(
+                        f"{compat['unmatched']} of {compat['checked']} sampled {reports} paths "
+                        f"match nothing under {FILESYSTEM_CHECK_PATH}"
+                        + (f" — for example {_ex}" if _ex else "") + ". Files match by "
+                        "folder + file name (mounts never need to line up), so the "
+                        f"folder and file names {reports} reports must exist under the "
+                        f"library. Check the /library mount, then recheck; the "
+                        f"{button} debug button under Connections shows each sampled "
+                        "path and why it did or didn't match.")
+            elif compat["unmatched"]:
+                _ex = (compat.get("unmatched_examples") or [""])[0]
+                add_warning(
+                    f"{compat['unmatched']} of {compat['checked']} sampled {reports} entries "
+                    f"match no file under {FILESYSTEM_CHECK_PATH}"
+                    + (f" (for example {_ex})" if _ex else "") + " — usually a stale "
+                    f"{stale} entry whose file was renamed, upgraded, or removed since "
+                    "its last scan. It scans as missing and is never deleted; "
+                    f"{clears}.")
+        except Exception:
+            add_warning(f"Could not check {reports} media paths.")
+        _store_media_verdict(label, _e0, _w0)
+    # A server whose judge did NOT complete this run (its sampler failed,
+    # or it was down) keeps showing its RETAINED verdict — otherwise one
+    # hiccup would flap an active error to "no problem" for exactly one
+    # response and back on the next probe.
+    for _name, _on in (("Plex/Tautulli", use_plex), ("Jellyfin", use_jellyfin)):
+        if not _on or any(c.get("server") == _name for c in media_path_compatibility):
+            continue
+        _slot = _MEDIA_PATH_VERDICT["servers"].get(_name)
+        if not _slot:
+            continue
+        media_path_compatibility.append(dict(_slot["compat"]))
+        for _e in _slot["errors"]:
+            add_error(_e)
+        for _w in _slot["warnings"]:
+            add_warning(_w)
+        if _slot["blocker"]:
+            media_path_blocker = True
+    # The signature stamps only when SOMETHING was judged: a re-judge
+    # where no media server answered keeps retrying on later probes
+    # instead of recording "nothing wrong" it never verified.
+    if _judged_any:
+        _MEDIA_PATH_VERDICT["sig"] = _dirs_sig
+    return media_path_compatibility, media_path_blocker
+
+
 def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
                              media_paths: bool | None = None) -> dict:
     """Validate connection health for the services MediaReducer talks to.
@@ -7492,13 +7746,13 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
         if not _library.get("mounted"):
             add_error(
                 f"No media library at {FILESYSTEM_CHECK_PATH}. The container has no "
-                f"library mounted there, so nothing can be scanned or deleted. Check "
-                f"the /library mapping, then recheck.")
+                "library mounted there, so nothing can be scanned or deleted. Check "
+                "the /library mapping, then recheck.")
         else:
             add_error(
                 f"{FILESYSTEM_CHECK_PATH} is mounted but empty. That is usually a "
-                f"share or disk that has not come up yet rather than an empty "
-                f"library. Check the mount, then recheck.")
+                "share or disk that has not come up yet rather than an empty "
+                "library. Check the mount, then recheck.")
 
     if probe and not library_missing and not run_media_check:
         # This probe does NOT re-judge the media paths: replay each stored
@@ -7520,138 +7774,11 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
                 media_path_blocker = True
 
     if probe and not library_missing and run_media_check:
-        # Re-judging: a fresh walk, always — the fingerprint index's short
-        # cache exists to share ONE walk between the two servers' checks
-        # below, never to judge a walk from before a mount fix.
-        _MEDIA_FP_INDEX["at"] = 0.0
-        _judged_any = False
-
-        def _store_media_verdict(_name, _e0, _w0):
-            """Replace one server's stored verdict slot — called only when its
-            check actually produced a compat entry, so a sampler failure or a
-            down server keeps the previous verdict instead of clearing it."""
-            nonlocal _judged_any
-            if media_path_compatibility and media_path_compatibility[-1].get("server") == _name:
-                _c = media_path_compatibility[-1]
-                _MEDIA_PATH_VERDICT["servers"][_name] = {
-                    "compat": dict(_c),
-                    "errors": list(errors[_e0:]),
-                    "warnings": list(warnings[_w0:]),
-                    "blocker": bool(_c.get("checked") and not _c.get("ok")),
-                    "at": time.time(),
-                }
-                _judged_any = True
-
-        _e0, _w0 = len(errors), len(warnings)
-        if use_plex and tautulli_connected:
-            try:
-                compat = _media_path_compatibility_state("Plex/Tautulli", _sample_result(pre, "tautulli_paths"))
-                media_path_compatibility.append(compat)
-                if compat["checked"] == 0:
-                    if compat.get("folder_entries"):
-                        add_warning(f"Plex/Tautulli returned only folder entries "
-                                    f"({compat['folder_entries']}) — no movie file paths to check.")
-                    else:
-                        add_warning("Plex/Tautulli connected, but no movie paths were available to check.")
-                elif not compat["ok"]:
-                    media_path_blocker = True
-                    if compat.get("mismatch_problem"):
-                        add_error(
-                            f"{compat['size_mismatched']} of {compat['size_checked']} sampled files "
-                            f"under {FILESYSTEM_CHECK_PATH} differ in size from what Plex reports — "
-                            f"that looks like the wrong library (a backup or stale copy mounted, or "
-                            f"a Plex library describing different files), not a few quality "
-                            f"upgrades. Check the /library mount, or rescan Plex, then recheck.")
-                    else:
-                        _ex = (compat.get("unmatched_examples") or [""])[0]
-                        add_error(
-                            f"{compat['unmatched']} of {compat['checked']} sampled Plex paths "
-                            f"match nothing under {FILESYSTEM_CHECK_PATH}"
-                            + (f" — for example {_ex}" if _ex else "") + ". Files match by "
-                            f"folder + file name (mounts never need to line up), so the "
-                            f"folder and file names Plex reports must exist under the "
-                            f"library. Check the /library mount, then recheck; the "
-                            f"Tautulli debug button under Connections shows each sampled "
-                            f"path and why it did or didn't match.")
-                elif compat["unmatched"]:
-                    _ex = (compat.get("unmatched_examples") or [""])[0]
-                    add_warning(
-                        f"{compat['unmatched']} of {compat['checked']} sampled Plex entries "
-                        f"match no file under {FILESYSTEM_CHECK_PATH}"
-                        + (f" (for example {_ex})" if _ex else "") + " — usually a stale "
-                        f"Plex entry whose file was renamed, upgraded, or removed since "
-                        f"its last scan. It scans as missing and is never deleted; a "
-                        f"Plex/Tautulli rescan clears this.")
-            except Exception:
-                add_warning("Could not check Plex media paths.")
-            _store_media_verdict("Plex/Tautulli", _e0, _w0)
-
-        _e0, _w0 = len(errors), len(warnings)
-        if use_jellyfin and jellyfin_connected:
-            try:
-                compat = _media_path_compatibility_state("Jellyfin", _sample_result(pre, "jellyfin_paths"))
-                media_path_compatibility.append(compat)
-                if compat["checked"] == 0:
-                    if compat.get("folder_entries"):
-                        add_warning(f"Jellyfin returned only folder entries "
-                                    f"({compat['folder_entries']}) — no movie file paths to check.")
-                    else:
-                        add_warning("Jellyfin connected, but no movie paths were available to check.")
-                elif not compat["ok"]:
-                    media_path_blocker = True
-                    if compat.get("mismatch_problem"):
-                        add_error(
-                            f"{compat['size_mismatched']} of {compat['size_checked']} sampled files "
-                            f"under {FILESYSTEM_CHECK_PATH} differ in size from what Jellyfin "
-                            f"reports — that looks like the wrong library (a backup or stale copy "
-                            f"mounted, or a Jellyfin library describing different files), not a few "
-                            f"quality upgrades. Check the /library mount, or rescan Jellyfin, then "
-                            f"recheck.")
-                    else:
-                        _ex = (compat.get("unmatched_examples") or [""])[0]
-                        add_error(
-                            f"{compat['unmatched']} of {compat['checked']} sampled Jellyfin paths "
-                            f"match nothing under {FILESYSTEM_CHECK_PATH}"
-                            + (f" — for example {_ex}" if _ex else "") + ". Files match by "
-                            f"folder + file name (mounts never need to line up), so the "
-                            f"folder and file names Jellyfin reports must exist under the "
-                            f"library. Check the /library mount, then recheck; the "
-                            f"Jellyfin debug button under Connections shows each sampled "
-                            f"path and why it did or didn't match.")
-                elif compat["unmatched"]:
-                    _ex = (compat.get("unmatched_examples") or [""])[0]
-                    add_warning(
-                        f"{compat['unmatched']} of {compat['checked']} sampled Jellyfin entries "
-                        f"match no file under {FILESYSTEM_CHECK_PATH}"
-                        + (f" (for example {_ex})" if _ex else "") + " — usually a stale "
-                        f"Jellyfin entry whose file was renamed, upgraded, or removed since "
-                        f"its last scan. It scans as missing and is never deleted; a "
-                        f"Jellyfin library scan clears this.")
-            except Exception:
-                add_warning("Could not check Jellyfin media paths.")
-            _store_media_verdict("Jellyfin", _e0, _w0)
-        # A server whose judge did NOT complete this run (its sampler failed,
-        # or it was down) keeps showing its RETAINED verdict — otherwise one
-        # hiccup would flap an active error to "no problem" for exactly one
-        # response and back on the next probe.
-        for _name, _on in (("Plex/Tautulli", use_plex), ("Jellyfin", use_jellyfin)):
-            if not _on or any(c.get("server") == _name for c in media_path_compatibility):
-                continue
-            _slot = _MEDIA_PATH_VERDICT["servers"].get(_name)
-            if not _slot:
-                continue
-            media_path_compatibility.append(dict(_slot["compat"]))
-            for _e in _slot["errors"]:
-                add_error(_e)
-            for _w in _slot["warnings"]:
-                add_warning(_w)
-            if _slot["blocker"]:
-                media_path_blocker = True
-        # The signature stamps only when SOMETHING was judged: a re-judge
-        # where no media server answered keeps retrying on later probes
-        # instead of recording "nothing wrong" it never verified.
-        if _judged_any:
-            _MEDIA_PATH_VERDICT["sig"] = _dirs_sig
+        media_path_compatibility, media_path_blocker = _judge_media_paths(
+            pre=pre, use_plex=use_plex, use_jellyfin=use_jellyfin,
+            tautulli_connected=tautulli_connected, jellyfin_connected=jellyfin_connected,
+            dirs_sig=_dirs_sig, errors=errors, warnings=warnings,
+            add_error=add_error, add_warning=add_warning)
 
     # Threshold values, library-cap readiness, and other run-mode blockers live in the
     # Dashboard buttons, Config validation, and the engine's own safety checks. Only
@@ -7724,6 +7851,7 @@ _API_CREDENTIAL_KEYS = (
     "TAUTULLI_URL", "TAUTULLI_API_KEY", "PLEX_URL", "PLEX_TOKEN",
     "JELLYFIN_URL", "JELLYFIN_API_KEY",
     "RADARR_URL", "RADARR_API_KEY",
+    "SONARR_URL", "SONARR_API_KEY",
     "RADARR_OVERSEERR_SECTION_ID",
 )
 
@@ -7948,7 +8076,8 @@ def _detect_radarr_plex_section(cfg: dict | None = None) -> dict:
         if sec.get("type") not in (None, "movie"):
             continue
         sid = str(sec.get("key") or "").strip()
-        locations = [str(loc.get("path", "")) for loc in (sec.get("Location") or []) if loc.get("path")]
+        locations = [str(loc.get("path", "")) for loc in _as_list(sec.get("Location"))
+                     if isinstance(loc, dict) and loc.get("path")]
         if sid and locations:
             sections.append({"id": sid, "name": str(sec.get("title") or sid), "locations": locations})
     result["sections"] = sections
@@ -8558,7 +8687,15 @@ def _plan_config_value(cfg: dict, key: str):
     config.json; _SCORING_CURVES is the scoring_constants fingerprint, because
     the queue's stored scores (which the Redline fast path deletes by) came
     from those curves."""
-    return SCORING_FINGERPRINT if key == "_SCORING_CURVES" else cfg.get(key)
+    if key == "_SCORING_CURVES":
+        return SCORING_FINGERPRINT
+    if key == "MOVIE_CLEANUP_ENABLED":
+        # The engine stamps the EFFECTIVE bool (absent means OFF), so compare
+        # like with like — comparing the raw file value read a hand-edited
+        # config with the key deleted as stale forever, ghosting Automatic
+        # Cleanup with a "changed keys" the engine itself did not see.
+        return _coerce_bool(cfg.get(key), default=False)
+    return cfg.get(key)
 
 
 def _pending_plan_current(cfg: dict, *, use_saved_file: bool = True) -> bool:
@@ -9819,6 +9956,109 @@ def api_reset_invalid_config():
         "connection_health": health,
     })
 
+
+def _carry_forward_omitted_fields(cfg: dict, saved_cfg: dict) -> list:
+    """Fill in what this form did not send, and remember a disabled field's value.
+
+    Two different reasons a key can be missing. The scoring fields live on
+    another page, so their absence means "unchanged" and they are carried from
+    disk — the caller re-reads them just before writing, because this handler
+    runs multi-second probes and a scoring save landing mid-probe must not be
+    reverted by a stale snapshot. That is why the carried keys come back.
+
+    A disabled threshold is different: it is absent because it is OFF, and its
+    last value is kept in a _LAST key so the grayed-out field still shows it
+    after a restart. Headroom spells "off" as 0 rather than null, which is why
+    it needs the same rule written out a second time.
+    """
+    # Every key the Filtering & Scoring page owns must be here: the
+    # Configuration form posts none of them, and a key missing from this list
+    # is silently reset to its default by the next Configuration save.
+    # test_score_field_carry derives the required set from _score_page_config,
+    # so adding a knob there without adding it here fails a test instead of
+    # quietly reverting someone's setting.
+    _score_fields = ("GRACE_PERIOD_DAYS", "MAX_IMDB_RATING", "SCORE_BALANCE",
+                     "SKIP_UNPLAYED_MOVIES", "PROTECT_JELLYFIN_FAVORITES",
+                     "NEAR_TIE_PTS", "MAX_STALENESS_MONTHS",
+                     "MOVIE_CLEANUP_ENABLED", "TV_CLEANUP_ENABLED",
+                     "TV_SEASON_ELIGIBILITY", "TV_MAX_SEASON_EPISODES",
+                     "TV_WATCH_WEIGHT", "TV_SERIES_WATCH_BUMP",
+                     "_MAX_IMDB_RATING_LAST", "_NEAR_TIE_PTS_LAST")
+    _carried_score_fields = [k for k in _score_fields if k not in cfg]
+    for key in _carried_score_fields:
+        if key in saved_cfg:
+            cfg[key] = saved_cfg[key]
+    # Disabled optional thresholds keep their last entered value so the grayed-out
+    # field still shows it (surviving restarts). The form posts _REDLINE_GB_LAST /
+    # _MAX_LIBRARY_GB_LAST with the disabled field's text; fall back to the value
+    # being disabled, then the memory on disk (also written by the startup
+    # undersized-cap reset). Saving the field enabled clears its memory. Underscore
+    # keys bypass the file validator, so only a positive number is ever kept.
+    for _opt_key in ("REDLINE_GB", "MAX_LIBRARY_GB"):
+        _last_key = f"_{_opt_key}_LAST"
+        if cfg.get(_opt_key) is None:
+            _last = next((n for n in (_config_num(cfg.get(_last_key)),
+                                      _config_num(saved_cfg.get(_opt_key)),
+                                      _config_num(saved_cfg.get(_last_key)))
+                          if n is not None and n > 0), None)
+            if _last is not None:
+                cfg[_last_key] = int(_last) if float(_last).is_integer() else _last
+            else:
+                cfg.pop(_last_key, None)
+        else:
+            cfg.pop(_last_key, None)
+    # Headroom's value memory works the same way, with 0 (its disable toggle,
+    # redline-only mode) as the off spelling instead of null.
+    _hr_last_key = "_HEADROOM_GB_LAST"
+    if _config_num(cfg.get("HEADROOM_GB")) == 0:
+        _hr_last = next((n for n in (_config_num(cfg.get(_hr_last_key)),
+                                     _config_num(saved_cfg.get("HEADROOM_GB")),
+                                     _config_num(saved_cfg.get(_hr_last_key)))
+                         if n is not None and n > 0), None)
+        if _hr_last is not None:
+            cfg[_hr_last_key] = int(_hr_last) if float(_hr_last).is_integer() else _hr_last
+        else:
+            cfg.pop(_hr_last_key, None)
+    else:
+        cfg.pop(_hr_last_key, None)
+    return _carried_score_fields
+
+
+def _coerce_notify_fields(cfg: dict, saved_cfg: dict) -> None:
+    """Normalize the notification block in place.
+
+    Nothing here can fail a save. A scripted POST that omits these keeps what
+    was saved, and a bad service URL is the test button's problem — refusing a
+    whole config over an unreachable webhook would block settings that have
+    nothing to do with it.
+    """
+    # Notifications (outbound alerting). A partial/scripted POST that omits
+    # these keeps whatever was saved; bad service URLs never block a save —
+    # the "Send test notification" button surfaces those instead.
+    for _k in notify.CONFIG_KEYS:
+        if _k not in cfg:
+            cfg[_k] = saved_cfg.get(_k)
+    cfg["NOTIFY_ENABLED"] = bool(cfg.get("NOTIFY_ENABLED"))
+    for _k, _dflt in notify.TOGGLE_DEFAULTS.items():
+        if _k == "NOTIFY_ENABLED":
+            continue
+        _v = cfg.get(_k)
+        cfg[_k] = _dflt if _v is None else bool(_v)  # absent → default
+    try:
+        cfg["NOTIFY_LOW_SPACE_GB"] = max(1, int(float(
+            cfg.get("NOTIFY_LOW_SPACE_GB") or notify.NUMBER_DEFAULTS["NOTIFY_LOW_SPACE_GB"])))
+    except (TypeError, ValueError):
+        cfg["NOTIFY_LOW_SPACE_GB"] = notify.NUMBER_DEFAULTS["NOTIFY_LOW_SPACE_GB"]
+    for _k in notify.STRING_KEYS:
+        cfg[_k] = str(cfg.get(_k) or "").strip()
+    _custom = cfg.get("NOTIFY_CUSTOM_URLS")
+    if isinstance(_custom, str):
+        _custom = _custom.replace("\r", "\n").split("\n")
+    if not isinstance(_custom, (list, tuple)):
+        _custom = []
+    cfg["NOTIFY_CUSTOM_URLS"] = [str(u).strip() for u in _custom if str(u).strip()]
+
+
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
     try:
@@ -9839,48 +10079,7 @@ def api_save_config():
         # re-read from disk right before the final write, because this handler runs
         # multi-second probes and a /api/score-config save landing mid-probe must not be
         # reverted by this save's stale snapshot.
-        _score_fields = ("GRACE_PERIOD_DAYS", "MAX_IMDB_RATING", "SCORE_BALANCE",
-                         "SKIP_UNPLAYED_MOVIES", "PROTECT_JELLYFIN_FAVORITES",
-                         "NEAR_TIE_PTS", "MAX_STALENESS_MONTHS",
-                         "MOVIE_CLEANUP_ENABLED", "TV_CLEANUP_ENABLED",
-                         "_MAX_IMDB_RATING_LAST", "_NEAR_TIE_PTS_LAST")
-        _carried_score_fields = [k for k in _score_fields if k not in cfg]
-        for key in _carried_score_fields:
-            if key in saved_cfg:
-                cfg[key] = saved_cfg[key]
-        # Disabled optional thresholds keep their last entered value so the grayed-out
-        # field still shows it (surviving restarts). The form posts _REDLINE_GB_LAST /
-        # _MAX_LIBRARY_GB_LAST with the disabled field's text; fall back to the value
-        # being disabled, then the memory on disk (also written by the startup
-        # undersized-cap reset). Saving the field enabled clears its memory. Underscore
-        # keys bypass the file validator, so only a positive number is ever kept.
-        for _opt_key in ("REDLINE_GB", "MAX_LIBRARY_GB"):
-            _last_key = f"_{_opt_key}_LAST"
-            if cfg.get(_opt_key) is None:
-                _last = next((n for n in (_config_num(cfg.get(_last_key)),
-                                          _config_num(saved_cfg.get(_opt_key)),
-                                          _config_num(saved_cfg.get(_last_key)))
-                              if n is not None and n > 0), None)
-                if _last is not None:
-                    cfg[_last_key] = int(_last) if float(_last).is_integer() else _last
-                else:
-                    cfg.pop(_last_key, None)
-            else:
-                cfg.pop(_last_key, None)
-        # Headroom's value memory works the same way, with 0 (its disable toggle,
-        # redline-only mode) as the off spelling instead of null.
-        _hr_last_key = "_HEADROOM_GB_LAST"
-        if _config_num(cfg.get("HEADROOM_GB")) == 0:
-            _hr_last = next((n for n in (_config_num(cfg.get(_hr_last_key)),
-                                         _config_num(saved_cfg.get("HEADROOM_GB")),
-                                         _config_num(saved_cfg.get(_hr_last_key)))
-                             if n is not None and n > 0), None)
-            if _hr_last is not None:
-                cfg[_hr_last_key] = int(_hr_last) if float(_hr_last).is_integer() else _hr_last
-            else:
-                cfg.pop(_hr_last_key, None)
-        else:
-            cfg.pop(_hr_last_key, None)
+        _carried_score_fields = _carry_forward_omitted_fields(cfg, saved_cfg)
         # Compare signatures on a copy normalized EXACTLY like the save below (and like
         # api_config_check); the form posts RADARR_OVERSEERR_SECTION_ID='auto' and raw
         # URL text, while the saved file holds the concrete detected section id and
@@ -10250,31 +10449,7 @@ def api_save_config():
         cfg["KEEP_INTERRUPTED_LOGS"] = bool(cfg.get("KEEP_INTERRUPTED_LOGS"))
         cfg["DEBUG_MODE"] = bool(cfg.get("DEBUG_MODE"))
 
-        # Notifications (outbound alerting). A partial/scripted POST that omits
-        # these keeps whatever was saved; bad service URLs never block a save —
-        # the "Send test notification" button surfaces those instead.
-        for _k in notify.CONFIG_KEYS:
-            if _k not in cfg:
-                cfg[_k] = saved_cfg.get(_k)
-        cfg["NOTIFY_ENABLED"] = bool(cfg.get("NOTIFY_ENABLED"))
-        for _k, _dflt in notify.TOGGLE_DEFAULTS.items():
-            if _k == "NOTIFY_ENABLED":
-                continue
-            _v = cfg.get(_k)
-            cfg[_k] = _dflt if _v is None else bool(_v)  # absent → default
-        try:
-            cfg["NOTIFY_LOW_SPACE_GB"] = max(1, int(float(
-                cfg.get("NOTIFY_LOW_SPACE_GB") or notify.NUMBER_DEFAULTS["NOTIFY_LOW_SPACE_GB"])))
-        except (TypeError, ValueError):
-            cfg["NOTIFY_LOW_SPACE_GB"] = notify.NUMBER_DEFAULTS["NOTIFY_LOW_SPACE_GB"]
-        for _k in notify.STRING_KEYS:
-            cfg[_k] = str(cfg.get(_k) or "").strip()
-        _custom = cfg.get("NOTIFY_CUSTOM_URLS")
-        if isinstance(_custom, str):
-            _custom = _custom.replace("\r", "\n").split("\n")
-        if not isinstance(_custom, (list, tuple)):
-            _custom = []
-        cfg["NOTIFY_CUSTOM_URLS"] = [str(u).strip() for u in _custom if str(u).strip()]
+        _coerce_notify_fields(cfg, saved_cfg)
 
         # IMDb refresh interval: the file validator requires >= 1, so clamp here too —
         # otherwise a blank/0 saves fine, then the next load flags it and locks the app.
@@ -11553,8 +11728,11 @@ if __name__ == "__main__":
     # Initialize config on first boot
     if not CONFIG_PATH.exists():
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        import shutil as _sh
-        _sh.copy(DEFAULT_CFG_PATH, CONFIG_PATH)
+        # Through the atomic writer, not a bare copy: a kill mid-copy left a
+        # truncated config.json that EXISTS, so the seed never re-ran and
+        # every later boot sat in the invalid-JSON lockout.
+        _atomic_write_json(CONFIG_PATH, json.loads(Path(DEFAULT_CFG_PATH).read_text(
+            encoding="utf-8")), indent=2)
         print(f"Created default config at {CONFIG_PATH}")
 
     # Registered on the main thread (signal.signal requires it) and only when run

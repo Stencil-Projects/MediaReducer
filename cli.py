@@ -523,8 +523,8 @@ def cmd_stop(args, base):
 
 def cmd_run(args, base, mode, label):
     if mode == "headroom" and not args.yes:
-        if not _confirm(f"Run a real Cleanup now? This DELETES files to your thresholds "
-                        f"(no recycle bin)."):
+        if not _confirm("Run a real Cleanup now? This DELETES files to your thresholds "
+                        "(no recycle bin)."):
             return 1
     code, d = api("POST", "/api/run", base, body={"mode": mode}, timeout=args.timeout)
     if not isinstance(d, dict) or not d.get("ok", False):

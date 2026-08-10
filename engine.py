@@ -1065,9 +1065,9 @@ def verify_media_path_compatibility():
             _abort_api_failure(
                 f"{size_mismatch} of {verified + size_mismatch} size-reporting sampled "
                 f"file(s) differ in size from what {label} reports. That is what the "
-                f"WRONG library looks like — a backup or stale copy mounted at "
+                "WRONG library looks like — a backup or stale copy mounted at "
                 f"{LIBRARY_ROOT}, or a {label} library describing different files — "
-                f"not a few quality upgrades. Nothing was deleted. Check the /library "
+                "not a few quality upgrades. Nothing was deleted. Check the /library "
                 f"mount (and rescan {label} if the mount is right), then run again.",
                 detail=f"size-checked: {verified + size_mismatch} | mismatched: {size_mismatch} "
                        f"| matched paths: {matched_n}/{len(raw_paths)}",
@@ -1081,15 +1081,15 @@ def verify_media_path_compatibility():
         if unmatched:
             log(f"WARN {label} path compatibility: {len(unmatched)} of {len(raw_paths)} "
                 f"sampled file(s) match nothing under {LIBRARY_ROOT} — stale {label} "
-                f"entries whose files were moved, renamed, or removed since its last "
-                f"scan. They scan as missing and are never deleted; a rescan on "
+                "entries whose files were moved, renamed, or removed since its last "
+                "scan. They scan as missing and are never deleted; a rescan on "
                 f"{label} clears this. Example: {unmatched[0]}")
         if size_mismatch:
             log(f"WARN {label} path compatibility: {size_mismatch} sampled file(s) "
                 f"differ in size from what {label} reports — its library metadata "
                 f"may be stale. A refresh/rescan on {label} clears this. The file "
-                f"on disk is the size authority, so plans and deletion history "
-                f"carry the on-disk bytes.")
+                "on disk is the size authority, so plans and deletion history "
+                "carry the on-disk bytes.")
 
 
 def log_blank():
@@ -1262,7 +1262,7 @@ def _finalize_run():
         # SILENT failure here is exactly why archived logs can go missing, so make
         # it visible in stderr and (best-effort) in lastrun.log instead of hiding it.
         msg = (f"ERROR: could not archive run log to {LOGS_DIR}: {type(e).__name__}: {e}. "
-               f"Check that the logs directory is writable inside the container.")
+               "Check that the logs directory is writable inside the container.")
         try:
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {msg}", flush=True)
         except Exception:
@@ -1446,6 +1446,25 @@ def emit_stats(**fields):
 def bytes_to_gb(num):
     return num / 1_000_000_000
 
+
+def gb_text(value) -> str:
+    """A GB figure written for a person to read.
+
+    One decimal suits library-sized numbers, but not everything measured in GB
+    here is library-sized: the cap safety floor of a small library is a
+    fraction of a GB, and rounding that to 0.0 is exactly how it was once
+    waved through. So the smaller the figure, the more of it survives — never
+    down to a bare 0.0 for something that is not zero.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if v == 0 or abs(v) >= 10:
+        return f"{v:.1f}"
+    if abs(v) >= 0.1:
+        return f"{v:.2f}"
+    return f"{v:.3g}"
 
 
 def get_usage_info():
@@ -1683,7 +1702,7 @@ def _library_file_index() -> dict:
         if _walk_errors[0]:
             log(f"WARN library walk: {_walk_errors[0]} directory(ies) under "
                 f"{LIBRARY_ROOT} could not be read — path resolution may be "
-                f"partial. Check permissions and mounts.")
+                "partial. Check permissions and mounts.")
         _LIB_FILE_INDEX = {"dir_name": by_dir_name, "name_size": by_name_size}
     return _LIB_FILE_INDEX
 
@@ -2161,10 +2180,14 @@ def _load_config_from_file():
     except (TypeError, ValueError):
         pass
     if "PROTECT_JELLYFIN_FAVORITES" in _c: PROTECT_JELLYFIN_FAVORITES = _coerce_config_bool(_c["PROTECT_JELLYFIN_FAVORITES"])
-    # Absent means ON — the shipped behavior — so a config written before the
-    # key existed keeps deleting movies rather than silently going inert. The
-    # plan-stamp copy carries the effective bool for the same reason: an absent
-    # key must compare equal to an explicit true.
+    # Absent means OFF. Movie cleanup is opt-in, exactly like TV cleanup: the
+    # fail direction of a missing key on a deletion app is "delete nothing",
+    # never "keep deleting". The app writes the key on every Filtering &
+    # Scoring save and refuses to arm Automatic Cleanup while both switches
+    # are off, so a real install always carries an explicit value; the False
+    # here only decides what a hand-edited or ancient config does, and it
+    # decides it in the safe direction. The plan-stamp copy carries the
+    # effective bool so an absent key and an explicit false compare equal.
     MOVIE_CLEANUP_ENABLED = _coerce_config_bool(_c["MOVIE_CLEANUP_ENABLED"]) if "MOVIE_CLEANUP_ENABLED" in _c else False
     _PLAN_CONFIG_RAW["MOVIE_CLEANUP_ENABLED"] = MOVIE_CLEANUP_ENABLED
 
@@ -2468,7 +2491,7 @@ def write_plan_to_queue(planned, scheduled_count=0) -> tuple[dict, int, int, lis
     if _redline_only_mode():
         log(f"Eligible for Redline: {len(kept)} movie(s) in deletion order"
             f"{f' ({dropped} dropped)' if dropped else ''} — they delete only when "
-            f"free space hits the Redline floor, worst-scored first.")
+            "free space hits the Redline floor, worst-scored first.")
     elif DELETE_DELAY_DAYS > 0:
         log(f"Marked for deletion: {marked_total} movie(s) ({new_marks} new"
             f"{f', {dropped} dropped' if dropped else ''}) — each deletable "
@@ -2544,8 +2567,8 @@ def debug_startup():
     # window is meaningfully wider.
     if DELETE_DELAY_DAYS >= 2 and REDLINE_GB is None:
         log(f"NOTE: {DELETE_DELAY_DAYS}-day delay with no Redline floor — a fast-filling library "
-            f"could run out of space before marks age out. Redline deletes immediately when space "
-            f"is critically low.")
+            "could run out of space before marks age out. Redline deletes immediately when space "
+            "is critically low.")
     elif _redline_only_mode():
         log("NOTE: Redline-only mode — the deletion delay and daily schedule do not apply; "
             "Redline deletes immediately, worst-scored first, whenever free space hits the floor.")
@@ -3053,7 +3076,7 @@ def fetch_protected_paths():
                 f"Fix or uncheck {_it} under Configuration → Protected collections.",
                 names=_missing)
         log(f"WARN Plex protected {_noun} {_names} not found — renamed or deleted? "
-            f"A deleting run would stop here rather than run unprotected.")
+            "A deleting run would stop here rather than run unprotected.")
     return paths, keys, imdb_ids, tmdb_ids
 
 
@@ -3195,14 +3218,14 @@ def cleanup_radarr(candidate):
             return
         if not _radarr_movie_matches_deleted_path(radarr_movie, candidate["path"]):
             log(
-                f"Radarr: skipping cleanup, candidate section is unknown and Radarr's "
-                f"path did not match the deleted folder | "
+                "Radarr: skipping cleanup, candidate section is unknown and Radarr's "
+                "path did not match the deleted folder | "
                 f"title={title} | tmdb_id={tmdb_id} | "
                 f"path={candidate['path']} | radarr_path={radarr_movie.get('path') or radarr_movie.get('folderName')}"
             )
             return
         log(
-            f"Radarr: candidate section is unknown, but Radarr owns the deleted folder; "
+            "Radarr: candidate section is unknown, but Radarr owns the deleted folder; "
             f"continuing cleanup | title={title} | tmdb_id={tmdb_id}"
         )
 
@@ -3295,7 +3318,7 @@ def extract_file_path(item, quiet=False):
 
     if not quiet:
         log(
-            f"SKIP metadata_no_file_path | "
+            "SKIP metadata_no_file_path | "
             f"title={item.get('title')} | "
             f"rating_key={rating_key} | "
             f"metadata_keys={list(metadata.keys())}"
@@ -3377,10 +3400,10 @@ def _plex_distinct_users_by_key(section_ids):
             if pages > 1000:
                 log(f"WARN Tautulli watch history: section {section_id} kept returning pages "
                     f"past {rows_seen} rows — stopping the sweep. Viewer counts for older "
-                    f"plays may be low until this is looked at.")
+                    "plays may be low until this is looked at.")
                 break
     log(f"Tautulli watch history: {rows_seen} play(s) across {len(users_by_key)} movie(s) "
-        f"— distinct viewers counted per movie.")
+        "— distinct viewers counted per movie.")
     return {key: len(who) for key, who in users_by_key.items()}
 
 
@@ -3490,6 +3513,12 @@ def get_all_movies_from_tautulli():
 # BoxSets named in JELLYFIN_PROTECTED_COLLECTIONS.
 
 _JELLYFIN_PROTECTED_MATCH_KEYS = set()
+# Favorited files by path/fp key, mirroring the collections set above: the
+# row FLAG only protects a row that successfully pairs with its Plex twin,
+# and a favorite whose Jellyfin row dies unpaired (no_file_path) protected
+# nothing while the Plex row for the same file stayed deletable. The fast
+# path already matches favorites by key; the full scan now agrees.
+_JELLYFIN_FAVORITE_MATCH_KEYS = set()
 _JELLYFIN_PROTECTED_IMDB_IDS = set()
 _JELLYFIN_PROTECTED_TMDB_IDS = set()
 # Resolved /library match key -> {"imdb","tmdb","title"} for EVERY Jellyfin movie.
@@ -3721,8 +3750,8 @@ def _jellyfin_protected_items():
                 f"user can see {_it}, or uncheck {_it} under Configuration → Protected collections.",
                 names=_missing)
         log(f"WARN Jellyfin protected {_noun} {_names} not found — renamed, deleted, or not "
-            f"visible to the API key's user? A deleting run would stop here rather than "
-            f"run unprotected.")
+            "visible to the API key's user? A deleting run would stop here rather than "
+            "run unprotected.")
     return protected_ids, protected_paths, protected_imdb_ids, protected_tmdb_ids
 
 
@@ -3757,9 +3786,10 @@ def get_all_movies_from_jellyfin():
     Play data is aggregated across every Jellyfin user (summed plays, most recent
     last-played).
     """
-    global _JELLYFIN_PROTECTED_MATCH_KEYS, _JELLYFIN_PROTECTED_IMDB_IDS, _JELLYFIN_PROTECTED_TMDB_IDS
+    global _JELLYFIN_PROTECTED_MATCH_KEYS, _JELLYFIN_PROTECTED_IMDB_IDS, _JELLYFIN_PROTECTED_TMDB_IDS, _JELLYFIN_FAVORITE_MATCH_KEYS
     global _JELLYFIN_IDS_BY_MATCH_KEY
     _JELLYFIN_PROTECTED_MATCH_KEYS = set()
+    _JELLYFIN_FAVORITE_MATCH_KEYS = set()
     _JELLYFIN_PROTECTED_IMDB_IDS = set()
     _JELLYFIN_PROTECTED_TMDB_IDS = set()
     _JELLYFIN_IDS_BY_MATCH_KEY = {}
@@ -3889,6 +3919,11 @@ def get_all_movies_from_jellyfin():
             resolved = resolve_under_library(row.get("file"))
             if resolved:
                 _JELLYFIN_PROTECTED_MATCH_KEYS.update(_match_keys(str(resolved)))
+        if row.get("_jf_favorite"):
+            _JELLYFIN_FAVORITE_MATCH_KEYS.update(_match_keys(row.get("file")))
+            resolved = resolve_under_library(row.get("file"))
+            if resolved:
+                _JELLYFIN_FAVORITE_MATCH_KEYS.update(_match_keys(str(resolved)))
 
     return list(rows.values())
 
@@ -4063,9 +4098,9 @@ def get_all_movies():
         _other_n = len(plex_rows or jelly_rows)
         _abort_api_failure(
             f"{_empty} returned an empty library while {_other} returned {_other_n:,} movies. "
-            f"Nothing was deleted — with one catalog missing, every movie would lose its "
+            "Nothing was deleted — with one catalog missing, every movie would lose its "
             f"{_empty} watch history and protection. Check that {_empty} is running and its "
-            f"library has finished scanning, then run again.")
+            "library has finished scanning, then run again.")
 
     if not jelly_rows:
         return plex_rows
@@ -4082,13 +4117,20 @@ def get_all_movies():
     _unresolved = 0
     _resolve_started = time.time()
     log(f"Resolving file paths for {len(plex_rows)} Plex movie(s) — cached movies "
-        f"resolve instantly; uncached ones need a Tautulli metadata fetch "
-        f"(~50ms each, so a first run after a cache reset takes a while here).")
+        "resolve instantly; uncached ones need a Tautulli metadata fetch "
+        "(~50ms each, so a first run after a cache reset takes a while here).")
     for i, prow in enumerate(plex_rows, 1):
         if not prow.get("file"):
             p = extract_file_path(prow, quiet=True)
             if p is not None:
                 prow["file"] = str(p)
+                # HOW the path attached rides with it. This rewrite hands the
+                # scan an already-resolved /library path, which re-resolves on
+                # the trivial prefix rung — so without this, a row whose
+                # identity was established by NAME + SIZE alone would reach
+                # the scan looking folder-anchored, and the size-agreement
+                # gate that rung exists to trigger would never fire.
+                prow["_resolve_rung"] = _LAST_RESOLVE_RUNG
             else:
                 _unresolved += 1
         if i % 25 == 0 or i == len(plex_rows):
@@ -4104,7 +4146,7 @@ def get_all_movies():
     log(f"  Plex file paths resolved in {_fmt_elapsed(time.time() - _resolve_started)}")
     if _unresolved:
         log(f"Merge: {_unresolved} Plex row(s) had no resolvable path yet — "
-            f"the scan resolves and reports those individually.")
+            "the scan resolves and reports those individually.")
 
     # Index every Jellyfin row under all of its possible match keys — the
     # row's own byte count sharpens resolution between same-named copies.
@@ -4739,7 +4781,7 @@ def _pop_next_deletion(pending: list, tie_group: list, remaining_bytes, *, quiet
                 log(f"File size optimization: the remaining {bytes_to_gb(remaining_bytes):.1f} GB "
                     f"target falls inside a group of {j} near-tied movies (scores "
                     f"{head_score:.1f}–{tie_group[-1]['retention_score']:.1f}) — picking inside the "
-                    f"group so the target costs the fewest movies.")
+                    "group so the target costs the fewest movies.")
             return _pop_from_tie_group(tie_group, remaining_bytes, quiet=quiet)
     return pending.pop(0)
 
@@ -4794,6 +4836,219 @@ def _hard_filter_reason(*, protected, favorite, imdb_rating, imdb_votes,
     if shared.unplayed_rung(play_count > 0 or last_played > 0, SKIP_UNPLAYED_MOVIES):
         return "unplayed"
     return None
+
+
+
+
+def _identity_conflict_skip(*, is_plex_row, title, meta, file_path, resolved_path,
+                            snap_entry, mismatch_skip_paths, identity_mismatches,
+                            stats) -> bool:
+    """Do the two servers disagree about what this FILE is? Then leave it alone.
+
+    Only reachable with both servers in use. A disagreement means one of them
+    has the wrong film attached to this path, and there is no way to tell
+    which — so the file is skipped rather than deleted on a guess, and the run
+    reports it.
+
+    Both rows for the file have to go. The Plex row records the path when it
+    flags the conflict; the Jellyfin row for the same file then recognises it
+    and drops out too, without counting the same disagreement twice. Missing
+    that second half would leave the file deletable through the other server's
+    row, which is the whole thing this is preventing.
+
+    True means the caller skips this row.
+    """
+    if is_plex_row:
+        # Exact (resolved-file) key first, fp second — same preference as the
+        # merge, so with same-named copies the identity lookup reads what
+        # Jellyfin says about THIS copy before falling back to what it says
+        # about the shared fingerprint.
+        jf_id = None
+        for k in sorted(_match_keys(resolved_path), key=lambda s: s.startswith("fp:")):
+            if k in _JELLYFIN_IDS_BY_MATCH_KEY:
+                jf_id = _JELLYFIN_IDS_BY_MATCH_KEY[k]
+                break
+        if not jf_id:
+            return False
+        p_imdb, j_imdb = _norm_id(meta.get("imdb_id")), _norm_id(jf_id.get("imdb"))
+        p_tmdb, j_tmdb = _norm_id(meta.get("tmdb_id")), _norm_id(jf_id.get("tmdb"))
+        # IMDb decides when both sides have it. Two servers can hold DIFFERENT
+        # TMDb records for the same film — remakes, re-releases and alternate
+        # cuts are split entries there — so a TMDb disagreement under a
+        # matching IMDb id is a catalogue quirk, not two different movies. It
+        # is also the IMDb id that fetches the rating this is scored on, so
+        # agreement there is agreement about the thing that matters. TMDb only
+        # arbitrates when IMDb cannot.
+        if p_imdb and j_imdb:
+            conflict = p_imdb != j_imdb
+        else:
+            conflict = bool(p_tmdb and j_tmdb and p_tmdb != j_tmdb)
+        if not conflict:
+            return False
+        stats["identity_mismatch"] += 1
+        mismatch_skip_paths.add(resolved_path)
+        try:
+            mismatch_skip_paths.add(str(file_path.resolve()))
+        except Exception:
+            pass
+        detail = {
+            "title":         f"{title} (Plex) ↔ {jf_id.get('title')} (Jellyfin)",
+            "path":          resolved_path,
+            "plex_imdb":     meta.get("imdb_id") or "—",
+            "jellyfin_imdb": jf_id.get("imdb") or "—",
+            "plex_tmdb":     meta.get("tmdb_id") or "—",
+            "jellyfin_tmdb": jf_id.get("tmdb") or "—",
+        }
+        identity_mismatches.append(detail)
+        snap_entry["excluded"] = True   # not recomputable from the snapshot
+        log(f"SKIP identity_mismatch | plex_title={title!r} != jellyfin_title={jf_id.get('title')!r} | "
+            f"plex(imdb={detail['plex_imdb']},tmdb={detail['plex_tmdb']}) != "
+            f"jellyfin(imdb={detail['jellyfin_imdb']},tmdb={detail['jellyfin_tmdb']}) | "
+            f"path={file_path}")
+        return True
+
+    # A Jellyfin row whose Plex twin already flagged this exact file.
+    resolved2 = None
+    try:
+        resolved2 = str(file_path.resolve())
+    except Exception:
+        pass
+    if resolved_path in mismatch_skip_paths or (resolved2 and resolved2 in mismatch_skip_paths):
+        snap_entry["excluded"] = True   # the Jellyfin write above reset it; re-flag
+        log(f"SKIP identity_mismatch (Jellyfin twin) | jellyfin_title={title!r} | path={file_path}")
+        return True
+    return False
+
+
+def _merge_candidates_by_path(candidates: list) -> tuple[list, int]:
+    """Fold rows that resolved to the SAME file into a single candidate.
+
+    A second pass, after the raw file-key dedup: two servers, or one server
+    listing a file under two sections, can reach the same path by keys that
+    never matched each other.
+
+    Plays SUM across servers and max() within one, which is the whole subtlety
+    here — two servers describe DIFFERENT plays of the file, while a repeat
+    from a server already folded in describes the same ones. The rest takes
+    the better of each scoring input, since ranking happens after this.
+
+    Returns the merged list and how many rows it absorbed.
+    """
+    path_seen: dict = {}
+    deduped: list = []
+
+    for c in candidates:
+        key = c["path"].resolve()
+        if key not in path_seen:
+            path_seen[key] = len(deduped)
+            deduped.append(c)
+        else:
+            existing = deduped[path_seen[key]]
+            # Cross-server rows describe DIFFERENT plays of the same file, so
+            # plays SUM (the documented merge design). Rows from a server whose
+            # plays are already folded in (same-server duplicates, e.g. one
+            # file listed in two sections) describe the SAME plays, so max()
+            # avoids double-counting them.
+            merged_sources = existing.setdefault("_merged_sources", {existing.get("source")})
+            if c.get("source") not in merged_sources:
+                merged_plays = parse_int(existing.get("play_count"), 0) + parse_int(c.get("play_count"), 0)
+                merged_sources.add(c.get("source"))
+            else:
+                merged_plays = max(existing["play_count"], c["play_count"])
+            merged_lp = max(existing["last_played"], c["last_played"])
+            if merged_plays != existing["play_count"] or merged_lp != existing["last_played"]:
+                existing["play_count"] = merged_plays
+                existing["last_played"] = merged_lp
+                log(
+                    f"DEDUP merged duplicate path | title={existing['title']} | "
+                    f"merged_plays={merged_plays} | merged_last_played={format_epoch(merged_lp)}"
+                )
+            # Take the best retention-score inputs from either server's row —
+            # rescoring happens after this dedup pass, so merges are cheap.
+            existing["distinct_users"] = max(parse_int(existing.get("distinct_users"), 0),
+                                             parse_int(c.get("distinct_users"), 0))
+            for field in ("resolution",):
+                if not existing.get(field) and c.get(field):
+                    existing[field] = c[field]
+            if parse_int(c.get("bitrate"), 0) > parse_int(existing.get("bitrate"), 0):
+                existing["bitrate"] = c["bitrate"]
+            # Preserve the Radarr section_id and TMDB ID across merges
+            if str(c.get("section_id")) == str(RADARR_OVERSEERR_SECTION_ID):
+                existing["section_id"] = RADARR_OVERSEERR_SECTION_ID
+            if c.get("tmdb_id") and not existing.get("tmdb_id"):
+                existing["tmdb_id"] = c["tmdb_id"]
+            if c.get("imdb_id") and not existing.get("imdb_id"):
+                existing["imdb_id"] = c["imdb_id"]
+                if existing.get("imdb_rating") is None and c.get("imdb_rating") is not None:
+                    existing["imdb_rating"] = c["imdb_rating"]
+                    existing["imdb_votes"] = c.get("imdb_votes")
+    return deduped, len(candidates) - len(deduped)
+
+
+def _reconcile_metadata_cache(movies: list, cached_movies: dict) -> None:
+    """Drop cache entries for movies Plex no longer has, and report the hit rate.
+
+    Plex-only: the cache is keyed by Tautulli rating_key, so Jellyfin rows
+    ("jf:…") are not counted here and never pruned by it.
+    """
+
+    # Remove stale cache entries (Plex movies no longer present). The metadata
+    # cache is Plex-only (keyed by Tautulli rating_key), so Jellyfin rows
+    # (rating_key "jf:…") are excluded from cache accounting.
+    current_keys = {str(rk) for item in movies
+                    if (rk := item.get("rating_key")) and not str(rk).startswith("jf:")}
+    stale_keys   = set(cached_movies.keys()) - current_keys
+    if stale_keys and not current_keys and cached_movies:
+        # A scan that returned zero Plex movies against a non-empty cache is
+        # far more likely a transient empty API response than a genuinely
+        # emptied library. Keep the cache; a later healthy scan prunes it.
+        log(f"Cache: scan returned 0 Plex movies but the cache holds {len(cached_movies)}; keeping cache.")
+        stale_keys = set()
+    if stale_keys:
+        log(f"Cache: pruning {len(stale_keys)} stale entries (no longer in Plex).")
+        for k in stale_keys:
+            cached_movies.pop(k, None)
+            _metadata_cache.pop(k, None)
+
+    new_count = len(current_keys - set(cached_movies.keys()))
+    hit_count = len(current_keys) - new_count
+    log(f"Cache: {hit_count} hits, {new_count} new movie(s) need metadata fetch.")
+    if new_count > 0:
+        log(f"Fetching metadata for {new_count} new movie(s) at ~50ms each "
+            f"(~{round(new_count * 0.05)}s). Cached movies are instant.")
+
+
+def _log_scoring_settings() -> None:
+    """Say what the scoring settings mean for THIS run, before it starts.
+
+    Read from the log afterwards, this is what explains an outcome, so the
+    inert cases are called out too: a protection that is configured against a
+    server this run is not using protects nothing, and saying so beats a line
+    that reads like it is on.
+    """
+    log(f"Retention scoring active — balance={SCORE_BALANCE:.0f} "
+        f"(history {HISTORY_WEIGHT:.0%} / imdb {QUALITY_WEIGHT:.0%}) | "
+        f"grace={GRACE_PERIOD_DAYS}d | "
+        + (f"file size optimization on ({NEAR_TIE_PTS:g}-pt near-tie window): optimized picks "
+           "inside the tied group where the space target lands; same-movie copies lowest-quality first"
+           if NEAR_TIE_PTS else
+           "file size optimization off: strict score order throughout"))
+    if SKIP_UNPLAYED_MOVIES:
+        log("Unplayed filter active: movies with no play history are skipped.")
+    if MAX_IMDB_RATING is not None:
+        log(f"Rating cutoff active: movies rated above {float(MAX_IMDB_RATING):.1f} on IMDb are never deleted.")
+    if PROTECT_JELLYFIN_FAVORITES:
+        if USE_JELLYFIN:
+            log("Jellyfin favorites protection active: favorited movies are never deleted.")
+        else:
+            # Configured but inert; say so instead of the reassuring line
+            # above, which read as active protection in a Plex-only run.
+            log("WARN: Protect Jellyfin favorites is enabled but Jellyfin is not selected — "
+                "it protects nothing this run.")
+    if JELLYFIN_PROTECTED_COLLECTIONS and not USE_JELLYFIN:
+        log(f"WARN: Jellyfin protected collection(s) {sorted(JELLYFIN_PROTECTED_COLLECTIONS)} are "
+            "configured but Jellyfin is not selected — they protect nothing this run.")
+
 
 
 def build_candidates():
@@ -4923,31 +5178,7 @@ def build_candidates():
                            "was deleted. Check that it is running, then run again.",
                            detail=str(e))
     total_movies = len(movies)
-
-    # Remove stale cache entries (Plex movies no longer present). The metadata
-    # cache is Plex-only (keyed by Tautulli rating_key), so Jellyfin rows
-    # (rating_key "jf:…") are excluded from cache accounting.
-    current_keys = {str(rk) for item in movies
-                    if (rk := item.get("rating_key")) and not str(rk).startswith("jf:")}
-    stale_keys   = set(cached_movies.keys()) - current_keys
-    if stale_keys and not current_keys and cached_movies:
-        # A scan that returned zero Plex movies against a non-empty cache is
-        # far more likely a transient empty API response than a genuinely
-        # emptied library. Keep the cache; a later healthy scan prunes it.
-        log(f"Cache: scan returned 0 Plex movies but the cache holds {len(cached_movies)}; keeping cache.")
-        stale_keys = set()
-    if stale_keys:
-        log(f"Cache: pruning {len(stale_keys)} stale entries (no longer in Plex).")
-        for k in stale_keys:
-            cached_movies.pop(k, None)
-            _metadata_cache.pop(k, None)
-
-    new_count = len(current_keys - set(cached_movies.keys()))
-    hit_count = len(current_keys) - new_count
-    log(f"Cache: {hit_count} hits, {new_count} new movie(s) need metadata fetch.")
-    if new_count > 0:
-        log(f"Fetching metadata for {new_count} new movie(s) at ~50ms each "
-            f"(~{round(new_count * 0.05)}s). Cached movies are instant.")
+    _reconcile_metadata_cache(movies, cached_movies)
 
     log_stage("SCORING", phase="scanning")
     log(f"Processing {total_movies} unique movie entries.")
@@ -4968,29 +5199,7 @@ def build_candidates():
         imdb_ratings = {}
         log("IMDb dataset skipped: scoring is 100% watch history and no Max IMDb "
             "rating cutoff is set, so IMDb ratings cannot affect this run.")
-    log(f"Retention scoring active — balance={SCORE_BALANCE:.0f} "
-        f"(history {HISTORY_WEIGHT:.0%} / imdb {QUALITY_WEIGHT:.0%}) | "
-        f"grace={GRACE_PERIOD_DAYS}d | "
-        + (f"file size optimization on ({NEAR_TIE_PTS:g}-pt near-tie window): optimized picks "
-           f"inside the tied group where the space target lands; same-movie copies lowest-quality first"
-           if NEAR_TIE_PTS else
-           "file size optimization off: strict score order throughout"))
-    if SKIP_UNPLAYED_MOVIES:
-        log("Unplayed filter active: movies with no play history are skipped.")
-    if MAX_IMDB_RATING is not None:
-        log(f"Rating cutoff active: movies rated above {float(MAX_IMDB_RATING):.1f} on IMDb are never deleted.")
-    if PROTECT_JELLYFIN_FAVORITES:
-        if USE_JELLYFIN:
-            log("Jellyfin favorites protection active: favorited movies are never deleted.")
-        else:
-            # Configured but inert; say so instead of the reassuring line
-            # above, which read as active protection in a Plex-only run.
-            log("WARN: Protect Jellyfin favorites is enabled but Jellyfin is not selected — "
-                "it protects nothing this run.")
-    if JELLYFIN_PROTECTED_COLLECTIONS and not USE_JELLYFIN:
-        log(f"WARN: Jellyfin protected collection(s) {sorted(JELLYFIN_PROTECTED_COLLECTIONS)} are "
-            f"configured but Jellyfin is not selected — they protect nothing this run.")
-
+    _log_scoring_settings()
     log_blank()
 
     total_movies = len(movies)
@@ -5027,7 +5236,12 @@ def build_candidates():
         # library scan catches up, SKIP rather than delete a file one source
         # may be describing differently. Movie-folder layouts never hit this:
         # the folder anchors identity and sizes are not load-bearing there.
-        if _LAST_RESOLVE_RUNG == "name_size" and USE_JELLYFIN:
+        # The rung recorded when the path FIRST attached wins over this scan's
+        # re-resolution: a pre-resolved row re-resolves on the trivial prefix
+        # rung, which would read a name+size identity as folder-anchored and
+        # skip the gate below.
+        _rung = item.get("_resolve_rung") or _LAST_RESOLVE_RUNG
+        if _rung == "name_size" and USE_JELLYFIN:
             try:
                 _disk_size = file_path.stat().st_size
             except OSError:
@@ -5112,6 +5326,12 @@ def build_candidates():
             elif str(tmdb_id or "").strip() and str(tmdb_id or "").strip() in _JELLYFIN_PROTECTED_TMDB_IDS:
                 jf_protected = True
         protected = plex_protected or jf_protected
+        # Favorite by row flag OR by key: the flag only survives a successful
+        # Plex/Jellyfin row pairing, and a favorite is a favorite whichever
+        # row carried the news.
+        jf_favorite = bool(item.get("_jf_favorite"))
+        if USE_JELLYFIN and not jf_favorite and _JELLYFIN_FAVORITE_MATCH_KEYS:
+            jf_favorite = bool(_match_keys(str(file_path)) & _JELLYFIN_FAVORITE_MATCH_KEYS)
 
         if movie_idx % 100 == 0 or movie_idx == total_movies:
             _skipped = stats['no_file_path'] + stats['bad_extension'] + stats['missing_on_disk'] + stats['outside_monitored_dirs'] + stats['symlink'] + stats['size_disagreement']
@@ -5143,7 +5363,7 @@ def build_candidates():
             _snap_imdb[1] if _snap_imdb else None,
             item.get("play_count"), _distinct_users_for_row(item),
             item.get("last_played"), item.get("added_at"), _snap_size,
-            protected=protected, favorite=bool(item.get("_jf_favorite")),
+            protected=protected, favorite=jf_favorite,
             source_id=rating_key, jf_source_id=item.get("_jf_source_id"),
             tmdb_id=tmdb_id, section_id=section_id,
             path=_snap_key)
@@ -5165,67 +5385,12 @@ def build_candidates():
         # (can't compare). Plex rows are processed before Jellyfin rows, so a
         # conflicting Plex row flags the shared path and its Jellyfin twin is
         # skipped when reached.
-        if USE_PLEX and USE_JELLYFIN:
-            if is_plex_row:
-                # Exact (resolved-file) key first, fp second — same preference
-                # as the merge, so with same-named copies the identity lookup
-                # reads what Jellyfin says about THIS copy before falling back
-                # to what it says about the shared fingerprint.
-                jf_id = None
-                _iks = _match_keys(resolved_path)
-                for k in sorted(_iks, key=lambda s: s.startswith("fp:")):
-                    if k in _JELLYFIN_IDS_BY_MATCH_KEY:
-                        jf_id = _JELLYFIN_IDS_BY_MATCH_KEY[k]
-                        break
-                if jf_id:
-                    p_imdb, j_imdb = _norm_id(meta.get("imdb_id")), _norm_id(jf_id.get("imdb"))
-                    p_tmdb, j_tmdb = _norm_id(meta.get("tmdb_id")), _norm_id(jf_id.get("tmdb"))
-                    # IMDb decides when both sides have it. Two servers can
-                    # hold DIFFERENT TMDb records for the same film — remakes,
-                    # re-releases and alternate cuts are split entries there —
-                    # so a TMDb disagreement under a matching IMDb id is a
-                    # catalogue quirk, not two different movies. It is also
-                    # the IMDb id that fetches the rating this is scored on,
-                    # so agreement there is agreement about the thing that
-                    # matters. TMDb only arbitrates when IMDb cannot.
-                    if p_imdb and j_imdb:
-                        _conflict = p_imdb != j_imdb
-                    else:
-                        _conflict = bool(p_tmdb and j_tmdb and p_tmdb != j_tmdb)
-                    if _conflict:
-                        stats["identity_mismatch"] += 1
-                        _mismatch_skip_paths.add(resolved_path)
-                        try:
-                            _mismatch_skip_paths.add(str(file_path.resolve()))
-                        except Exception:
-                            pass
-                        detail = {
-                            "title":         f"{title} (Plex) ↔ {jf_id.get('title')} (Jellyfin)",
-                            "path":          resolved_path,
-                            "plex_imdb":     meta.get("imdb_id") or "—",
-                            "jellyfin_imdb": jf_id.get("imdb") or "—",
-                            "plex_tmdb":     meta.get("tmdb_id") or "—",
-                            "jellyfin_tmdb": jf_id.get("tmdb") or "—",
-                        }
-                        identity_mismatches.append(detail)
-                        _snapshot_by_path[_snap_key]["excluded"] = True  # not recomputable from the snapshot
-                        log(f"SKIP identity_mismatch | plex_title={title!r} != jellyfin_title={jf_id.get('title')!r} | "
-                            f"plex(imdb={detail['plex_imdb']},tmdb={detail['plex_tmdb']}) != "
-                            f"jellyfin(imdb={detail['jellyfin_imdb']},tmdb={detail['jellyfin_tmdb']}) | "
-                            f"path={file_path}")
-                        continue
-            else:
-                # Jellyfin row whose Plex twin already flagged this exact file as a
-                # mismatch — skip the duplicate without double-counting.
-                _resolved2 = None
-                try:
-                    _resolved2 = str(file_path.resolve())
-                except Exception:
-                    pass
-                if resolved_path in _mismatch_skip_paths or (_resolved2 and _resolved2 in _mismatch_skip_paths):
-                    _snapshot_by_path[_snap_key]["excluded"] = True  # the Jellyfin write above reset it; re-flag
-                    log(f"SKIP identity_mismatch (Jellyfin twin) | jellyfin_title={title!r} | path={file_path}")
-                    continue
+        if USE_PLEX and USE_JELLYFIN and _identity_conflict_skip(
+                is_plex_row=is_plex_row, title=title, meta=meta, file_path=file_path,
+                resolved_path=resolved_path, snap_entry=_snapshot_by_path[_snap_key],
+                mismatch_skip_paths=_mismatch_skip_paths,
+                identity_mismatches=identity_mismatches, stats=stats):
+            continue
 
         # Hard-exclusion ladder (favorite → no-IMDb → rating cutoff → grace →
         # unplayed) via _hard_filter_reason; the SAME predicate the config-save
@@ -5242,7 +5407,7 @@ def build_candidates():
         # protected and the identity mismatch were handled above; the rest of the
         # ladder is a pure function of these stored facts.
         reason = _hard_filter_reason(
-            protected=False, favorite=bool(item.get("_jf_favorite")),
+            protected=False, favorite=jf_favorite,
             imdb_rating=imdb_rating, imdb_votes=imdb_votes,
             added_at=added_at, play_count=play_count, last_played=last_played)
         if reason:
@@ -5298,60 +5463,9 @@ def build_candidates():
 
     # Second-pass dedup on resolved file path (catches cases where the raw file
     # key dedup above couldn't match, e.g. rating_key fallback with different keys)
-    path_seen: dict = {}
-    deduped: list = []
-
-    for c in candidates:
-        key = c["path"].resolve()
-        if key not in path_seen:
-            path_seen[key] = len(deduped)
-            deduped.append(c)
-        else:
-            existing = deduped[path_seen[key]]
-            # Cross-server rows describe DIFFERENT plays of the same file, so
-            # plays SUM (the documented merge design). Rows from a server whose
-            # plays are already folded in (same-server duplicates, e.g. one
-            # file listed in two sections) describe the SAME plays, so max()
-            # avoids double-counting them.
-            merged_sources = existing.setdefault("_merged_sources", {existing.get("source")})
-            if c.get("source") not in merged_sources:
-                merged_plays = parse_int(existing.get("play_count"), 0) + parse_int(c.get("play_count"), 0)
-                merged_sources.add(c.get("source"))
-            else:
-                merged_plays = max(existing["play_count"], c["play_count"])
-            merged_lp = max(existing["last_played"], c["last_played"])
-            if merged_plays != existing["play_count"] or merged_lp != existing["last_played"]:
-                existing["play_count"] = merged_plays
-                existing["last_played"] = merged_lp
-                log(
-                    f"DEDUP merged duplicate path | title={existing['title']} | "
-                    f"merged_plays={merged_plays} | merged_last_played={format_epoch(merged_lp)}"
-                )
-            # Take the best retention-score inputs from either server's row —
-            # rescoring happens after this dedup pass, so merges are cheap.
-            existing["distinct_users"] = max(parse_int(existing.get("distinct_users"), 0),
-                                             parse_int(c.get("distinct_users"), 0))
-            for field in ("resolution",):
-                if not existing.get(field) and c.get(field):
-                    existing[field] = c[field]
-            if parse_int(c.get("bitrate"), 0) > parse_int(existing.get("bitrate"), 0):
-                existing["bitrate"] = c["bitrate"]
-            # Preserve the Radarr section_id and TMDB ID across merges
-            if str(c.get("section_id")) == str(RADARR_OVERSEERR_SECTION_ID):
-                existing["section_id"] = RADARR_OVERSEERR_SECTION_ID
-            if c.get("tmdb_id") and not existing.get("tmdb_id"):
-                existing["tmdb_id"] = c["tmdb_id"]
-            if c.get("imdb_id") and not existing.get("imdb_id"):
-                existing["imdb_id"] = c["imdb_id"]
-                if existing.get("imdb_rating") is None and c.get("imdb_rating") is not None:
-                    existing["imdb_rating"] = c["imdb_rating"]
-                    existing["imdb_votes"] = c.get("imdb_votes")
-
-    duplicates_removed = len(candidates) - len(deduped)
+    candidates, duplicates_removed = _merge_candidates_by_path(candidates)
     if duplicates_removed:
         log(f"Path dedup removed {duplicates_removed} duplicate candidate(s).")
-
-    candidates = deduped
     stats["duplicates_merged"] = duplicates_removed
 
     # ── Persist updated metadata cache ───────────────────────────────────────
@@ -5516,7 +5630,7 @@ def score_and_rank_candidates(candidates):
         for slot, member in zip(slots, members):
             candidates[slot] = member
         log(
-            f"Duplicate copies reordered (lowest quality deletes first) | "
+            "Duplicate copies reordered (lowest quality deletes first) | "
             f"movie={members[0].get('title')} | copies={len(slots)} | "
             f"order={[(str(m.get('resolution') or '?') + ' ' + format(m.get('file_size', 0)/1e9, '.1f') + 'GB') for m in members]}"
         )
@@ -5663,6 +5777,51 @@ def _snapshot_by_store_key(store) -> dict:
         if entry is not None:
             out[key] = entry
     return out
+
+
+# How long the quiet Summary may reuse a stored library measure instead of
+# re-walking the library. The tick runs every 15 minutes around the clock, and
+# the walk stats every movie file — on a large array that is thousands of
+# metadata reads per tick, enough to keep standby disks awake all day for a
+# number that only changes when files come or go. Six hours turns ~96 walks a
+# day into ~4, and every run that can DELETE (cleanup, Simulate, Debug
+# Cleanup) still measures fresh, so no deletion decision ever rides on this.
+LIBRARY_SIZE_REUSE_SECONDS = 6 * 3600
+
+
+def _recent_library_size_gb():
+    """The stored library measure, if it is fresh enough for a Summary to
+    reuse — None means walk the disk. A clock that moved backwards reads as
+    stale rather than as fresh-forever."""
+    try:
+        with db.connect(DB_FILE) as conn:
+            rec = db.get_meta(conn, "library_size")
+        if isinstance(rec, dict) and isinstance(rec.get("gb"), (int, float)):
+            age = time.time() - float(rec.get("at") or 0)
+            if 0 <= age <= LIBRARY_SIZE_REUSE_SECONDS:
+                log(f"Library size: reusing the measure from {age / 60:.0f} min ago "
+                    "(the quiet Summary re-walks at most every "
+                    f"{LIBRARY_SIZE_REUSE_SECONDS // 3600}h; cleanups and Simulate "
+                    "always measure fresh).")
+                return float(rec["gb"])
+    except Exception:
+        pass
+    return None
+
+
+def _remember_library_size(gb) -> None:
+    """Store a freshly measured (or deletion-adjusted) library size for the
+    Summary to reuse. Best-effort: a store hiccup costs one extra walk, never
+    a run."""
+    if not isinstance(gb, (int, float)):
+        return
+    try:
+        with db.transaction(DB_FILE) as conn:
+            db.ensure_code_current(conn, code_checksum())
+            db.set_meta(conn, "library_size", {"gb": round(float(gb), 3),
+                                               "at": time.time()})
+    except Exception:
+        pass
 
 
 def _tv_share_bytes() -> int:
@@ -5907,7 +6066,7 @@ def reconcile_from_snapshot(trigger="config change", *, refetch_protection=False
     _snap_dirs = sorted(str(d) for d in (snapshot.get("monitor_dirs") or []))
     if _snap_dirs != sorted(str(d) for d in (MONITOR_DIRS or [])):
         log(f"Reconcile [{trigger}]: the monitored paths changed since the last scan, so the "
-            f"stored snapshot cannot answer for the library — run Simulate. "
+            "stored snapshot cannot answer for the library — run Simulate. "
             f"(scanned: {_snap_dirs or 'none'} | now: {sorted(str(d) for d in (MONITOR_DIRS or [])) or 'none'})")
         return
 
@@ -6037,7 +6196,7 @@ def _revalidate_pending_marks(daily_deficit_bytes: int = 0) -> None:
             if watch_updates:
                 changed = True   # refreshed scores/plays are a real cache change
                 log(f"Mark re-size: refreshed plays & scores for {len(watch_updates)} "
-                    f"movie(s) from fresh watch data.")
+                    "movie(s) from fresh watch data.")
         except SystemExit:
             raise
         except Exception as e:
@@ -6053,7 +6212,7 @@ def _revalidate_pending_marks(daily_deficit_bytes: int = 0) -> None:
                 unscheduled += 1
         if unscheduled:
             log(f"Space limits satisfied — unscheduled {unscheduled} marked deletion(s); "
-                f"the eligible queue remains.")
+                "the eligible queue remains.")
             changed = True
 
     if changed:
@@ -6149,7 +6308,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
         raise   # a Stop (SIGTERM) mid-fetch ends the run; it must never reroute into the full scan
     except Exception as e:
         log(f"Fast path unavailable: protection could not be verified ({e}) — "
-            f"running the full scan.")
+            "running the full scan.")
         return False
     # Robust protection match (path SET + rating_key/jf-id/tmdb), NOT an exact path
     # string — the queue key and the fresh protection path can differ by mount /
@@ -6279,11 +6438,11 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
             store.pop(key, None)
         gone_snapshot.update(dead)
         log(f"Fast path: dropped {len(dead)} marked movie(s) whose file was already "
-            f"gone from the queue.")
+            "gone from the queue.")
     if unmounted:
         log(f"Fast path: left {unmounted} marked movie(s) queued whose library branch is "
-            f"not mounted — they are not gone, the storage is. Coverage may fall short, "
-            f"which routes this run to the full scan.")
+            "not mounted — they are not gone, the storage is. Coverage may fall short, "
+            "which routes this run to the full scan.")
     if covered < to_free_bytes:
         if dead or sizes_refreshed:
             save_pending(store, snapshot_delete_paths=gone_snapshot)
@@ -6293,7 +6452,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
         return False
 
     log(f"{trigger} fast path: deleting from the marked queue (worst-first, with File "
-        f"size optimization) — no library rescan"
+        "size optimization) — no library rescan"
         + ("." if do_radarr else "; Radarr cleanup is skipped for these emergency deletions."))
     emit_progress(phase="deleting", trigger=trigger, target_bytes=to_free_bytes,
                   deleted=0, bytes_freed=0, current_title="",
@@ -6396,7 +6555,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     if bytes_freed < to_free_bytes:
         log(f"NOTE: freed {bytes_to_gb(bytes_freed):.1f} GB of the "
             f"{bytes_to_gb(to_free_bytes):.1f} GB target — some queued files could not "
-            f"be deleted; the next run continues past them.")
+            "be deleted; the next run continues past them.")
     log(f"{trigger} fast path complete: deleted {deleted_count} movie(s), freed "
         f"{bytes_to_gb(bytes_freed):.1f} GB (target {bytes_to_gb(to_free_bytes):.1f} GB) | "
         f"free now {bytes_to_gb(final['free']):.1f} GB | {len(store)} movie(s) still marked.")
@@ -6702,7 +6861,7 @@ def _space_threshold_errors(usage_info=None, *, enforce_headroom_safety=True):
             # the flag, so a contradictory hand-edit gets the same verdict the
             # load-time derivation would give it.
             errors.append(f"REDLINE_GB ({REDLINE_GB}) must be lower than HEADROOM_GB ({HEADROOM_GB}) — "
-                          f"or untick Headroom.")
+                          "or untick Headroom.")
 
     if MAX_LIBRARY_GB is not None:
         if not _is_number(MAX_LIBRARY_GB) or MAX_LIBRARY_GB <= 0:
@@ -6904,7 +7063,7 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
     if build_stats.get("outside_monitored_dirs"):
         row("Outside monitored paths:",
             f"{build_stats['outside_monitored_dirs']} (in the library but under a "
-            f"directory you don't monitor — not a fault)")
+            "directory you don't monitor — not a fault)")
     row("Duplicates merged:", build_stats.get('duplicates_merged', 0))
     _elig_seasons = int(seasons.get("eligible_seasons") or 0)
     row("Eligible:", f"{build_stats['eligible']} movie(s) + {_elig_seasons} season(s) "
@@ -6917,7 +7076,7 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
         if _del_seasons else removed_count)
     if seasons.get("marked_new"):
         row("Seasons marked:", f"{seasons['marked_new']} new "
-                               f"(deletable after the same delay as a marked movie)")
+                               "(deletable after the same delay as a marked movie)")
     if seasons.get("held_by_delay"):
         row("Seasons waiting:", f"{seasons['held_by_delay']} (delay not elapsed)")
     if seasons.get("aborted"):
@@ -6950,7 +7109,7 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
             _lib_after = effective_library_gb - bytes_to_gb(freed_bytes)
             if _lib_after > MAX_LIBRARY_GB:
                 record_issue("cap_unreachable",
-                             f"deleting every eligible movie only reduces the library to "
+                             "deleting every eligible movie only reduces the library to "
                              f"{_lib_after:.1f} GB, still above the cap of {MAX_LIBRARY_GB} GB")
 
     # Last, so it lands under the numbers it qualifies and catches the two
@@ -6958,374 +7117,343 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
     log_issue_block()
 
 
-def main():
-    # Load saved config from JSON file (Docker / web UI mode).
-    _load_config_from_file()
-    # Allow the web UI to trigger a specific run mode without changing the saved config.
-    if _MODE_OVERRIDE:
-        global RUN_MODE
-        RUN_MODE = _MODE_OVERRIDE
 
-    global LOGFILE, _QUIET_PROGRESS
-    if RUN_MODE in ("debug_info", "reconcile"):
-        # Quiet background jobs (storage refresh / config-save queue reconcile): no
-        # progress events, and the log is discarded; lastrun.log stays the last
-        # real run's log and no scratch log files accumulate. Failures still surface
-        # through the subprocess exit code and the UI messages.
-        LOGFILE = Path(_os.devnull)
-        _QUIET_PROGRESS = True
+def _report_debug_info(*, used_gb, max_gb, free_gb, library_gb,
+                       over_limit, redline_hit, _cap_active, _threshold_errors,
+                       _total_gb) -> None:
+    """Check for Errors: say what a run WOULD find, and change nothing.
 
-    run_start = time.strftime("%Y-%m-%d_%H-%M-%S")
-    reset_log()
-    # Every run closes its last stage, including the modes that keep a log but
-    # never archive one (info). Registered before _finalize_run, so atexit's
-    # reverse order runs the archiver first, which closes the stage itself, and
-    # leaves this call a no-op.
-    atexit.register(close_stage)
+    The one mode that never deletes and never plans a deletion. It answers
+    "is this set up correctly and what is the current state" — mounts,
+    thresholds, whether anything is over — so it is the mode someone opens
+    when the app is not doing what they expected.
 
-    # Archive this run's log exactly once at process exit; completed, failed,
-    # or (opt-in) interrupted. Registered here, in the engine's main thread, so
-    # SIGTERM from a web-app "Stop" unwinds cleanly and still archives.
-    global _RUN_START, _RUN_ARCHIVABLE
-    _RUN_START = run_start
-    _RUN_ARCHIVABLE = RUN_MODE in ARCHIVABLE_RUN_MODES
-    if _RUN_ARCHIVABLE:
-        try:
-            signal.signal(signal.SIGTERM, _handle_sigterm)
-        except (ValueError, OSError):
-            pass  # not in main thread / unsupported; atexit still covers normal exits
-        atexit.register(_finalize_run)
+    It does keep the marked set honest against today's deficit: the daily run
+    enforces the cap whether or not this mode does, so leaving marks sized to
+    a stale deficit would have the next real run act on the wrong number.
+    """
+    # Summary should warn when the library is currently over the configured cap,
+    # even though no deletion trigger is active in info mode.
+    _lib_over = (library_gb is not None and MAX_LIBRARY_GB is not None
+                 and library_gb > MAX_LIBRARY_GB)
 
-    debug_startup()
-
-    # Safety gate: only the recognized run modes may proceed. Any other value —
-    # including the Docker default "paused", the fully-stopped "off", a blank
-    # string, or a typo; must NOT
-    # fall through to the live-deletion path below. This guarantees that a direct
-    # or cron invocation with RUN_MODE not set to an executable mode is a no-op,
-    # mirroring the scheduler's own paused check in app.py.
-    if RUN_MODE not in EXECUTABLE_RUN_MODES:
-        log(f"RUN_MODE={RUN_MODE!r}: paused / not an executable mode — no scan or cleanup performed.")
-        emit_progress(schema=1, status="done", phase="done", mode=RUN_MODE,
-                      scanned=0, total=0, eligible=0, deleted=0, bytes_freed=0,
-                      target_bytes=0, trigger="", current_title="",
-                      message="Paused — no scan or cleanup performed.",
-                      started_at=_run_started_at())
-        return
-
-    # Config-save reconcile: rebuild the queue from the stored snapshot, no scan.
-    # A pure recompute (scoring / threshold / filter change) needs no server, so it
-    # runs BEFORE the connection check; a collections/favorites change passes
-    # MEDIAREDUCER_RECONCILE_REFETCH=1 and the fetch itself fails closed if a needed
-    # server is unreachable (the app gates and flags that connection).
-    if RUN_MODE == "reconcile":
-        try:
-            reconcile_from_snapshot(
-                trigger=_os.environ.get("MEDIAREDUCER_RECONCILE_TRIGGER", "config change"),
-                refetch_protection=_os.environ.get("MEDIAREDUCER_RECONCILE_REFETCH", "") == "1")
-        except Exception as e:
-            log(f"Reconcile aborted: {e}")
-        return
-
-    emit_progress(schema=1, status="running", phase="checking", mode=RUN_MODE,
-                  scanned=0, total=0, eligible=0, protected=0, skipped=0,
-                  deleted=0, bytes_freed=0, target_bytes=0, trigger="",
-                  current_title="", message="Checking connections…",
-                  started_at=_run_started_at())
-
-    if not validate_connections():
-        emit_progress(status="error", phase="checking",
-                      message=("Connection check failed: " + _CONNECTION_VALIDATION_ERRORS[0]
-                               + " Fix it in Configuration → Connections.")
-                      if _CONNECTION_VALIDATION_ERRORS
-                      else "Connection check failed — see the log for details.")
-        return
-
-    verify_runtime_api_health()
-
-    _is_sim   = RUN_MODE == "debug_sim"
-    _is_info  = RUN_MODE == "debug_info"
-    # debug_cleanup runs the queue-based preview path (_debug_cleanup_from_queue)
-    # and skips the headroom safety cap (below) like Simulate does.
-    _is_debug_cleanup = RUN_MODE == "debug_cleanup"
-    _cap_active = RUN_MODE in ("debug_sim", "headroom", "debug_cleanup") and MAX_LIBRARY_GB is not None
-
-    usage_info = get_usage_info()
-    used_gb = usage_info["used_gb"]
-    max_gb = usage_info["max_gb"]
-    free_gb = round(bytes_to_gb(usage_info["free"]), 1)
-
-    # Validate Space Thresholds. Summary/debug_info is allowed to continue so it
-    # can show readiness errors; simulation and Live abort because scoring
-    # and deletion decisions depend on these thresholds being sane.
-    _threshold_errors, _total_gb, _max_headroom_gb = _space_threshold_errors(
-        usage_info, enforce_headroom_safety=not (_is_sim or _is_debug_cleanup)
-    )
-    if (
-        _is_sim
-        and _max_headroom_gb is not None
-        and isinstance(HEADROOM_GB, (int, float))
-        and HEADROOM_GB > _max_headroom_gb
-    ):
-        # Logged, not recorded as a run issue: this is a standing configuration
-        # state, not something that went wrong in this run. The app already
-        # refuses to arm Automatic Cleanup on it, ghosts the manual Cleanup
-        # button with the reason, and says so in Cleanup Targets; the run
-        # panel's issue list is for what the run itself hit.
-        log(f"NOTE: HEADROOM_GB={HEADROOM_GB} GB exceeds the safety cap of "
-            f"{MAX_HEADROOM_PCT}% of total filesystem capacity "
-            f"({_total_gb:.1f} GB × {MAX_HEADROOM_PCT}% = {_max_headroom_gb:.1f} GB). "
-            f"A real Cleanup would refuse to run: lower HEADROOM_GB or — with "
-            f"caution — raise MAX_HEADROOM_PCT.")
-        log_blank()
-
-    if _threshold_errors:
-        for _err in _threshold_errors:
-            log(f"CONFIG ERROR: {_err}")
-        if not _is_info:
-            log("ABORT: Fix Space Thresholds before running simulation or live cleanup.")
-            # Terminal progress emit: the engine exits 0 here, so without this
-            # the dashboard's progress panel would stay on "running" forever.
-            emit_progress(status="error", phase="checking",
-                          message="Space Thresholds are invalid — fix them in Configuration, "
-                                  "then run again. See the detailed log for the exact errors.")
-            return
-        # Same reasoning: the CONFIG ERROR lines above already name each bad
-        # value, and the Configuration tab turns red until they are fixed.
-        log("NOTE: Simulate and Automatic Cleanup stay blocked until the "
-            "Space Thresholds above are fixed.")
-        log_blank()
-
-    # IMDb ratings are required for scoring, so resolve the dataset among the
-    # FIRST checks: a missing file with a broken download aborts here; within
-    # the download timeout; instead of after the whole library fetch, and the
-    # dashboard's manual-setup popup appears right away. Skipped when the run
-    # cannot use IMDb (100% watch history, no rating cutoff) so it neither
-    # checks nor downloads the dataset.
-    if not _is_info and imdb_dataset_needed():
-        emit_progress(phase="checking", message="Checking the IMDb ratings dataset…")
-        ensure_imdb_ratings()
-
-    if _total_gb is None:
-        _total_gb = bytes_to_gb(usage_info["total"])
-    if _max_headroom_gb is None:
-        try:
-            _max_headroom_gb = round(_total_gb * MAX_HEADROOM_PCT / 100, 1)
-        except Exception:
-            _max_headroom_gb = 0
-
-    # Library size — read directly from disk so it reflects deletions
-    # immediately. Tautulli's cached media-info size can lag reality for a long
-    # time after a file is removed, which would keep the cap triggering after
-    # space was already freed. This needs neither Plex nor Tautulli reachable.
-    emit_progress(message="Reading library size…")
-    # In Summary/debug_info, still surface the Tautulli movie section IDs (via
-    # get_movie_section_ids, which logs them) so the user can see them; e.g. to
-    # set the Radarr section ID; without starting a scan. Guarded so an
-    # unreachable Tautulli never aborts the size read below.
-    if _is_info:
-        try:
-            get_movie_section_ids()
-        except Exception as e:
-            log(f"Movie section IDs unavailable (Tautulli query failed): {e}")
-    log("Computing library size from disk...")
-    library_gb = get_library_size_gb()
+    log_stage("STATUS (info mode — no scan performed)")
+    log(f"  Filesystem:   {used_gb:.1f} GB used / {_total_gb:.1f} GB total")
+    log(f"  Headroom:     limit {max_gb:.1f} GB  |  {'OVER by ' + str(round(used_gb - max_gb, 1)) + ' GB' if over_limit else 'OK (' + str(free_gb) + ' GB free)'}")
+    log(f"  Redline:      {REDLINE_GB} GB  |  {'HIT — only ' + str(free_gb) + ' GB free' if redline_hit else 'OK'}")
+    log("  IMDb ratings: skipped in summary mode")
     if library_gb is not None:
-        if MAX_LIBRARY_GB is not None:
-            delta = library_gb - MAX_LIBRARY_GB
-            status = f"OVER cap by {delta:.1f} GB" if delta > 0 else f"under cap by {abs(delta):.1f} GB"
-            log(f"Library size: {library_gb:.1f} GB | cap: {MAX_LIBRARY_GB} GB | {status}")
+        if MAX_LIBRARY_GB is None:
+            lib_status = "cap disabled"
+        elif _lib_over:
+            _mode_note = "active" if _cap_active else "enable Library Size Cap to activate"
+            lib_status = f"OVER by {library_gb - MAX_LIBRARY_GB:.1f} GB  ({_mode_note})"
         else:
-            log(f"Library size: {library_gb:.1f} GB | cap: disabled")
+            lib_status = f"OK — {MAX_LIBRARY_GB - library_gb:.1f} GB under cap of {MAX_LIBRARY_GB} GB"
+        log(f"  Library:      {library_gb:.1f} GB  |  {lib_status}")
     else:
-        log("Library size: unavailable (disk read failed)")
+        _lib_over = False
+    if redline_hit or over_limit or _lib_over:
+        triggers = []
+        if redline_hit: triggers.append("REDLINE")
+        if _lib_over:
+            triggers.append("LIBRARY CAP" if _cap_active else "LIBRARY CAP (inactive in current mode)")
+        if over_limit: triggers.append("HEADROOM (daily)")
+        log(f"  Would trigger: {' + '.join(triggers)}")
+    else:
+        log("  Would trigger: nothing — all limits satisfied")
+    log_raw("=" * 34)
 
-    # Refresh dashboard stats (runs in every mode, including the quiet Summary).
-    # library_gb is only written when known, so a disk-read failure keeps the
-    # last good value instead of blanking the dashboard.
-    total_gb = round(bytes_to_gb(usage_info["total"]), 1)
-    _stats = {
-        "library_cap_gb": MAX_LIBRARY_GB,
-        "disk": {
-            "used_gb": used_gb,
-            "total_gb": total_gb,
-            "free_gb": free_gb,
-            "pct_used": round(used_gb / total_gb * 100, 1) if total_gb else 0,
-        },
-    }
-    if library_gb is not None:
-        _stats["library_gb"] = round(library_gb, 1)
-    emit_stats(**_stats)
+    # ── Readiness check for Live ──────────────────────────────────
+    # We already know validate_connections() passed (we'd have exited if not).
+    _r_issues   = []   # blocking — script refuses to run in Live
+    _r_warnings = []   # non-blocking — script runs but may behave unexpectedly
 
-    over_limit = used_gb >= max_gb
-    redline_hit = REDLINE_GB is not None and free_gb <= REDLINE_GB
-    library_cap_hit = (_cap_active and MAX_LIBRARY_GB is not None
-                       and library_gb is not None and library_gb > MAX_LIBRARY_GB)
-    # Only Redline is an emergency trigger. The Library Size Cap shares the
-    # headroom's once-per-day window (and the deletion delay).
-    immediate_trigger = redline_hit
-    # Dashboard Cleanup button: prune every breached target now; the delay
-    # and the daily window pace automatic runs, not a deliberate button press.
-    _manual_cleanup = _MANUAL_RUN and not _is_sim and not _is_info
-
-    # ── Info mode: show status and exit ─────────────────────────────────────
-    if _is_info:
-        # Summary should warn when the library is currently over the configured cap,
-        # even though no deletion trigger is active in info mode.
-        _lib_over = (library_gb is not None and MAX_LIBRARY_GB is not None
-                     and library_gb > MAX_LIBRARY_GB)
-
-        log_stage("STATUS (info mode — no scan performed)")
-        log(f"  Filesystem:   {used_gb:.1f} GB used / {_total_gb:.1f} GB total")
-        log(f"  Headroom:     limit {max_gb:.1f} GB  |  {'OVER by ' + str(round(used_gb - max_gb, 1)) + ' GB' if over_limit else 'OK (' + str(free_gb) + ' GB free)'}")
-        log(f"  Redline:      {REDLINE_GB} GB  |  {'HIT — only ' + str(free_gb) + ' GB free' if redline_hit else 'OK'}")
-        log("  IMDb ratings: skipped in summary mode")
-        if library_gb is not None:
-            if MAX_LIBRARY_GB is None:
-                lib_status = "cap disabled"
-            elif _lib_over:
-                _mode_note = "active" if _cap_active else "enable Library Size Cap to activate"
-                lib_status = f"OVER by {library_gb - MAX_LIBRARY_GB:.1f} GB  ({_mode_note})"
-            else:
-                lib_status = f"OK — {MAX_LIBRARY_GB - library_gb:.1f} GB under cap of {MAX_LIBRARY_GB} GB"
-            log(f"  Library:      {library_gb:.1f} GB  |  {lib_status}")
-        else:
-            _lib_over = False
-        if redline_hit or over_limit or _lib_over:
-            triggers = []
-            if redline_hit: triggers.append("REDLINE")
-            if _lib_over:
-                triggers.append("LIBRARY CAP" if _cap_active else "LIBRARY CAP (inactive in current mode)")
-            if over_limit: triggers.append("HEADROOM (daily)")
-            log(f"  Would trigger: {' + '.join(triggers)}")
-        else:
-            log("  Would trigger: nothing — all limits satisfied")
-        log_raw("=" * 34)
-
-        # ── Readiness check for Live ──────────────────────────────────
-        # We already know validate_connections() passed (we'd have exited if not).
-        _r_issues   = []   # blocking — script refuses to run in Live
-        _r_warnings = []   # non-blocking — script runs but may behave unexpectedly
-
-        # Library mount; empty MONITOR_DIRS is a safe no-op, but not ready for live cleanup.
-        if not LIBRARY_ROOT.exists():
+    # Library mount; empty MONITOR_DIRS is a safe no-op, but not ready for live cleanup.
+    if not LIBRARY_ROOT.exists():
+        _r_issues.append(
+            "/library is not mounted — check the Plex library Docker volume"
+        )
+    elif not any(LIBRARY_ROOT.iterdir()):
+        _r_issues.append(
+            "/library is mounted but empty — verify the Plex library volume path"
+        )
+    elif not MONITOR_DIRS:
+        _r_issues.append(
+            "No Movie Library Paths configured — add at least one monitored folder "
+            f"under {LIBRARY_ROOT} before enabling live cleanup"
+        )
+    else:
+        _roots    = monitored_roots()
+        _existing = [r for r in _roots if r.exists()]
+        if not _existing:
             _r_issues.append(
-                "/library is not mounted — check the Plex library Docker volume"
+                f"None of the configured Movie Library Paths exist under {LIBRARY_ROOT} — "
+                "verify the folder names"
             )
-        elif not any(LIBRARY_ROOT.iterdir()):
-            _r_issues.append(
-                "/library is mounted but empty — verify the Plex library volume path"
-            )
-        elif not MONITOR_DIRS:
-            _r_issues.append(
-                "No Movie Library Paths configured — add at least one monitored folder "
-                f"under {LIBRARY_ROOT} before enabling live cleanup"
-            )
-        else:
-            _roots    = monitored_roots()
-            _existing = [r for r in _roots if r.exists()]
-            if not _existing:
-                _r_issues.append(
-                    f"None of the configured Movie Library Paths exist under {LIBRARY_ROOT} — "
-                    "verify the folder names"
-                )
-            elif len(_existing) < len(_roots):
-                _r_warnings.append(
-                    f"{len(_roots) - len(_existing)} of {len(_roots)} Movie Library "
-                    f"Path(s) not found under {LIBRARY_ROOT}"
-                )
-
-        # Space Thresholds
-        for _err in _threshold_errors:
-            if _err not in _r_issues:
-                _r_issues.append(_err)
-
-        # Filtering warnings
-        if not PROTECTED_COLLECTIONS:
+        elif len(_existing) < len(_roots):
             _r_warnings.append(
-                "PROTECTED_COLLECTIONS is empty — no Plex collection protection active"
+                f"{len(_roots) - len(_existing)} of {len(_roots)} Movie Library "
+                f"Path(s) not found under {LIBRARY_ROOT}"
             )
 
-        # Optional Library Size Cap readiness warning. It only blocks Live when
-        # the cap is enabled but the disk size read failed.
-        _r_cap_issues = []
-        if MAX_LIBRARY_GB is not None and library_gb is None:
-            _r_cap_issues.append(
-                "Library size could not be read from disk — cap cannot be verified"
-            )
+    # Space Thresholds
+    for _err in _threshold_errors:
+        if _err not in _r_issues:
+            _r_issues.append(_err)
 
-        def _show_ready(mode, extra_issues=None):
-            all_issues = _r_issues + (extra_issues or [])
-            log_blank()
-            log(f'  Ready to run as RUN_MODE = "{mode}"?')
-            log_raw("─" * 34)
-            log("  Connections:  ✓ validated")
-            if all_issues:
-                for issue in all_issues:
-                    log(f"  ✗ {issue}")
-            if _r_warnings:
-                for warn in _r_warnings:
-                    log(f"  ⚠ {warn}")
-            if not all_issues:
-                if not _r_warnings:
-                    log(f'  → Ready. Set RUN_MODE = "{mode}" to go live.')
-                else:
-                    log('  → Ready, but review the warning(s) above first.')
-            else:
-                log(f"  → {len(all_issues)} issue(s) must be fixed before going live.")
+    # Filtering warnings
+    if not PROTECTED_COLLECTIONS:
+        _r_warnings.append(
+            "PROTECTED_COLLECTIONS is empty — no Plex collection protection active"
+        )
 
-        _show_ready("headroom", extra_issues=_r_cap_issues)
+    # Optional Library Size Cap readiness warning. It only blocks Live when
+    # the cap is enabled but the disk size read failed.
+    _r_cap_issues = []
+    if MAX_LIBRARY_GB is not None and library_gb is None:
+        _r_cap_issues.append(
+            "Library size could not be read from disk — cap cannot be verified"
+        )
 
+    def _show_ready(mode, extra_issues=None):
+        all_issues = _r_issues + (extra_issues or [])
         log_blank()
-        log_raw("=" * 34)
-        log_blank()
-        _info_triggers = []
-        if redline_hit: _info_triggers.append("Redline")
-        if _lib_over:   _info_triggers.append("Library Size Cap")
-        if over_limit:  _info_triggers.append("Headroom")
-        _info_msg = ("Summary — would trigger: " + ", ".join(_info_triggers)) if _info_triggers \
-                    else "Summary — all limits satisfied, nothing would run."
-        # Maintain the marked set against the CURRENT headroom/cap deficit; the
-        # daily run enforces the cap even though this Summary mode does not, so the
-        # marks size to it regardless of _cap_active. Redline is an emergency, not a
-        # delay-clocked mark, so it never sizes the marks.
-        _revalidate_pending_marks(_daily_deficit_bytes(used_gb, max_gb, library_gb))
-        emit_progress(status="done", phase="done", message=_info_msg)
-        return
-
-    # ── Decide whether to run ────────────────────────────────────────────────
-
-    # Fail-closed cap-floor check against TODAY's library size. The cap was
-    # validated when Live was armed, but the library can grow afterwards
-    # (files copied in), and a Cleanup may delete at most MAX_HEADROOM_PCT%
-    # of the library. Mirrors the app's arm-time rule; sim may preview past
-    # it, Live refuses.
-    if (library_cap_hit and isinstance(MAX_HEADROOM_PCT, (int, float))
-            and 0 < MAX_HEADROOM_PCT <= 100):
-        # Compare UNROUNDED: rounding the floor for display first turned it
-        # into 0.0 on small libraries and waved the deletion through.
-        _cap_floor_gb = library_gb * (100 - MAX_HEADROOM_PCT) / 100
-        if MAX_LIBRARY_GB < _cap_floor_gb:
-            _floor_msg = (
-                f"Library Size Cap {MAX_LIBRARY_GB} GB is below the safety floor "
-                f"({library_gb:g} GB library × {100 - MAX_HEADROOM_PCT:g}% = {_cap_floor_gb:g} GB) — "
-                f"reaching the cap would delete more than {MAX_HEADROOM_PCT:g}% of the library."
-            )
-            if _is_sim or _is_debug_cleanup:
-                # Debug Cleanup ignores the safety percentage like Simulate does (it
-                # deletes nothing); warn but continue so the preview still runs.
-                # A config state the app already blocks on, so it belongs in the
-                # log rather than the run panel's issue list.
-                log(f"NOTE: {_floor_msg} A real Cleanup would refuse to run "
-                    "until the cap or the safety percentage is raised.")
-                log_blank()
+        log(f'  Ready to run as RUN_MODE = "{mode}"?')
+        log_raw("─" * 34)
+        log("  Connections:  ✓ validated")
+        if all_issues:
+            for issue in all_issues:
+                log(f"  ✗ {issue}")
+        if _r_warnings:
+            for warn in _r_warnings:
+                log(f"  ⚠ {warn}")
+        if not all_issues:
+            if not _r_warnings:
+                log(f'  → Ready. Set RUN_MODE = "{mode}" to go live.')
             else:
-                log(f"ABORT: {_floor_msg}")
-                emit_progress(status="error", phase="checking",
-                              message="Library Size Cap is below the safety floor — raise the cap "
-                                      "or the safety percentage, then run again.")
-                return
+                log('  → Ready, but review the warning(s) above first.')
+        else:
+            log(f"  → {len(all_issues)} issue(s) must be fixed before going live.")
 
+    _show_ready("headroom", extra_issues=_r_cap_issues)
+
+    log_blank()
+    log_raw("=" * 34)
+    log_blank()
+    _info_triggers = []
+    if redline_hit: _info_triggers.append("Redline")
+    if _lib_over:   _info_triggers.append("Library Size Cap")
+    if over_limit:  _info_triggers.append("Headroom")
+    _info_msg = ("Summary — would trigger: " + ", ".join(_info_triggers)) if _info_triggers \
+                else "Summary — all limits satisfied, nothing would run."
+    # Maintain the marked set against the CURRENT headroom/cap deficit; the
+    # daily run enforces the cap even though this Summary mode does not, so the
+    # marks size to it regardless of _cap_active. Redline is an emergency, not a
+    # delay-clocked mark, so it never sizes the marks.
+    _revalidate_pending_marks(_daily_deficit_bytes(used_gb, max_gb, library_gb))
+    emit_progress(status="done", phase="done", message=_info_msg)
+
+
+
+def _run_simulation(*, candidates, build_stats, total_scanned, usage_info,
+                    used_gb, max_gb, effective_library_gb, library_cap_hit,
+                    to_free_gb, to_free_bytes, trigger) -> None:
+    """Simulate: decide everything a Cleanup would, and delete nothing.
+
+    The mode the app is meant to be lived in — it rebuilds the plan, works
+    out what would go and in what order, and writes the queue the Dashboard
+    and the Filtering page read. A run that deletes is the same decisions
+    with the unlink attached, which is why this is the thing to trust before
+    turning the other one on.
+    """
+    simulated_used = usage_info["used"]
+    simulated_freed_bytes = 0
+    simulated_count = 0
+    _sim_planned: list = []   # (candidate, size); becomes the marked queue when a delay is set
+    # The prefix of the plan that covers to_free_bytes; what a Cleanup
+    # would delete RIGHT NOW. In redline-only mode the loop keeps queueing
+    # past the target, so this freezes while simulated_count keeps growing;
+    # in every other mode the loop stops at the target and the two agree.
+    _would_count = 0
+    _would_bytes = 0
+
+    # Every mode plans the ENTIRE eligible list in deletion order; the
+    # whole library's fate is visible up front. Only the prefix covering
+    # the current space target is MARKED (scheduled, delay-clocked); the
+    # rest stays merely eligible.
+    _sim_min_count = len(candidates)
+
+    log(f"DRY RUN [{trigger}]: Simulating deletions — target: free {to_free_gb:.1f} GB.")
+    if _redline_only_mode():
+        log(f"Redline-only mode: all {len(candidates)} eligible movies enter the queue "
+            f"in deletion order. When free space drops below {REDLINE_GB} GB, Redline deletes "
+            "down this list (re-scored fresh at that moment) until back at the floor. "
+            "The queue itself is not logged — view or download it from the Marked & "
+            "Eligible Deletions list.")
+    else:
+        log(f"All {len(candidates)} eligible movies enter the queue in deletion order; "
+            "only the movies needed to meet the current targets are marked for deletion "
+            "and logged below. The rest of the queue is not logged — view or download it "
+            "from the Marked & Eligible Deletions list.")
+    emit_progress(phase="simulating", trigger=trigger, target_bytes=to_free_bytes,
+                  deleted=0, bytes_freed=0, current_title="",
+                  message="Simulating cleanup — no files touched…")
+
+    pending = list(candidates)
+    tie_group: list = []
+    while pending or tie_group:
+        # Target check at the TOP, exactly like the live loop below; a
+        # bottom-of-loop check would pop (and report) one extra movie
+        # whenever the target is already met, diverging from a real run.
+        if simulated_freed_bytes >= to_free_bytes and simulated_count >= _sim_min_count:
+            break
+        candidate = _pop_next_deletion(pending, tie_group, to_free_bytes - simulated_freed_bytes)
+        try:
+            file_size = candidate["path"].stat().st_size
+        except OSError as e:
+            # Missing, permission-denied, or a hiccuping mount; skip the
+            # file rather than abort the whole preview.
+            log(f"DRY RUN: Skipping unreadable file during simulation ({e}): {candidate['path']}")
+            continue
+
+        before_gb = round(bytes_to_gb(simulated_used), 1)
+        simulated_used -= file_size
+        # Part of the covering prefix (what a Cleanup would delete NOW)?
+        # Only those get per-movie log lines; the rest of the plan enters
+        # the queue silently (it is downloadable from the Marked & Eligible
+        # list, and logging thousands of queued entries buried the 10 that
+        # matter).
+        in_target = _would_bytes < to_free_bytes
+        if in_target:
+            _would_bytes += file_size
+            _would_count += 1
+        simulated_freed_bytes += file_size
+        simulated_count += 1
+        after_gb = round(bytes_to_gb(simulated_used), 1)
+
+        if in_target:
+            log(
+                f"DRY RUN DELETE #{simulated_count}: "
+                f"{candidate['title']} | "
+                f"score={round(candidate['retention_score'], 3)} | "
+                f"imdb={candidate['imdb_rating']} | votes={candidate['imdb_votes']} | year={candidate['release_year']} | "
+                f"plays={candidate['play_count']} | "
+                f"last_played={format_epoch(candidate['last_played'])} | "
+                f"size={bytes_to_gb(file_size):.2f} GB | "
+                f"added={format_epoch(candidate['added_at'])} | "
+                f"used {before_gb:.1f} GB -> {after_gb:.1f} GB | "
+                f"path={candidate['path']}"
+            )
+        elif to_free_bytes > 0 and simulated_count == _would_count + 1:
+            # First entry past the target: one hand-off line instead of a
+            # per-movie line for every queued entry behind it.
+            log(f"Target covered by the {_would_count} movie(s) above — the remaining "
+                f"{len(pending) + len(tie_group) + 1} eligible movie(s) queue silently "
+                "in deletion order.")
+        # The progress tiles report what WOULD delete, never the queue size
+        # — a redline-only preview above the floor reads "Would delete 0".
+        emit_progress(phase="simulating", deleted=_would_count,
+                      bytes_freed=_would_bytes, target_bytes=to_free_bytes,
+                      current_title=candidate["title"])
+
+        _sim_planned.append((candidate, file_size))
+        remove_empty_movie_folder(candidate["path"])
+
+    # The simulation IS the marking step: it writes its plan to the
+    # marked-for-deletion queue (keeping existing marks' clocks) so the
+    # user can review what deletes and when; BEFORE arming Automatic Cleanup. It
+    # never deletes and never consumes the daily window; stale marks not
+    # in this plan drop off. With delay 0 the marks are simply eligible
+    # immediately: the next daily run deletes them.
+    log_blank()
+    # Only the target-covering prefix is scheduled (and delay-clocked);
+    # redline-only schedules nothing; its prefix deletes via the Redline
+    # trigger, not a calendar.
+    _, _, _, _sim_new_items = write_plan_to_queue(
+        _sim_planned, scheduled_count=0 if _redline_only_mode() else _would_count)
+
+    # The summary reports what would delete RIGHT NOW (_would_count,
+    # tracked in the loop) plus the full eligible queue as its own row.
+    _queued_count, _queued_bytes = simulated_count, simulated_freed_bytes
+
+    final_gb = round(bytes_to_gb(usage_info["used"] - _would_bytes), 1)
+    final_free_gb = round(bytes_to_gb(usage_info["total"]) - final_gb, 1)
+    log_run_summary(
+        is_sim=True, trigger=trigger, to_free_gb=to_free_gb,
+        used_gb=used_gb, free_before_gb=round(bytes_to_gb(usage_info["free"]), 1),
+        final_gb=final_gb, final_free_gb=final_free_gb,
+        freed_bytes=_would_bytes, removed_count=_would_count,
+        skipped_under_limit=len(candidates) - simulated_count,
+        effective_library_gb=effective_library_gb, max_gb=max_gb,
+        build_stats=build_stats, total_scanned=total_scanned,
+        library_cap_hit=library_cap_hit,
+        queued_count=_queued_count, queued_bytes=_queued_bytes or 0,
+    )
+
+    log_blank()
+    _rest = simulated_count - _would_count
+    if _redline_only_mode():
+        _sim_msg = summary_message(
+            "Dry run — Redline is breached." if _would_count
+            else "Dry run — nothing is over a limit.",
+            ("Would delete now",
+             f"{_would_count:,} movie{'' if _would_count == 1 else 's'} "
+             f"(~{bytes_to_gb(_would_bytes):.1f} GB)" if _would_count else ""),
+            ("Eligible in deletion order",
+             f"{simulated_count:,} movie{'' if simulated_count == 1 else 's'} "
+             f"(~{bytes_to_gb(simulated_freed_bytes):.1f} GB)"),
+            ("Deletes when", "free space hits the Redline floor, worst-scored first"),
+        )
+    elif _would_count == 0:
+        _sim_msg = summary_message(
+            "Dry run — space limits are satisfied, nothing marked.",
+            ("Eligible in deletion order",
+             f"{simulated_count:,} movie{'' if simulated_count == 1 else 's'}"),
+        )
+    else:
+        _sim_msg = summary_message(
+            f"Dry run — would mark {_would_count:,} "
+            f"movie{'' if _would_count == 1 else 's'} for deletion.",
+            ("Marked", f"~{bytes_to_gb(_would_bytes):.1f} GB"),
+            ("Deletes", f"after a {DELETE_DELAY_DAYS}-day delay" if DELETE_DELAY_DAYS > 0
+                        else "at the next daily run"),
+            ("Also eligible", f"{_rest:,} movie{'' if _rest == 1 else 's'}"),
+        )
+    emit_progress(status="done", phase="done", deleted=_would_count,
+                  bytes_freed=_would_bytes, target_bytes=to_free_bytes,
+                  current_title="", message=_sim_msg)
+    # Report for the app's notifications (the app only alerts for the
+    # SCHEDULED daily Simulate; manual ones are decided app-side).
+    write_run_report(
+        mode="simulate", eligible_count=simulated_count,
+        marked_count=0 if _redline_only_mode() else _would_count,
+        deleted_count=0, bytes_freed=0,
+        redline_only=_redline_only_mode(),
+        library_gb=effective_library_gb, message=_sim_msg,
+        deleted_items=[], marked_items=_sim_new_items[:REPORT_ITEMS_CAP],
+    )
+
+
+def _deletion_target(*, used_gb, max_gb, free_gb, total_gb, library_gb,
+                     over_limit, redline_hit, library_cap_hit, immediate_trigger,
+                     _cap_active, _is_sim, _manual_cleanup):
+    """How much space this run is trying to free, and what to call the run.
+
+    Three targets can be breached at once, and they do not combine the same way
+    for every kind of run. An emergency restores the free-space floor and
+    nothing beyond it. A scheduled run works the daily, delay-clocked deficit.
+    Simulate and the manual button take whichever is larger, because both mean
+    "everything that is over its limit, now".
+
+    The trigger label is not decoration: it heads the run log and the run
+    summary, and each branch reads a different combination of the same three
+    breaches. A label naming the wrong target sends someone to the wrong
+    setting to fix a deletion they did not expect.
+
+    Returns the target in GB and in bytes, the label, and whether a
+    daily-scheduled target is breached at all.
+    """
     # Compute how many bytes need to be freed to satisfy all active conditions.
     _headroom_deficit_gb = max(0.0, used_gb - max_gb)
     # Redline fires on FREE space, so its deficit is measured in free terms:
@@ -7394,18 +7522,24 @@ def main():
         library_deficit_gb=_library_deficit_gb, to_free_gb=to_free_gb, trigger=trigger)
 
     daily_breach = over_limit or library_cap_hit
+    return to_free_gb, to_free_bytes, trigger, daily_breach
 
-    # Debug Cleanup mirrors the automatic scheduler tick, working from the standing
-    # marked queue in cache; NO full library scan (candidates are never built
-    # below) and NO deletions. It runs (and persists) the same queue upkeep a
-    # cleanup tick would, then only PREVIEWS the delete-from-queue step.
-    if _is_debug_cleanup:
-        _debug_cleanup_from_queue(
-            to_free_bytes=to_free_bytes, trigger=trigger,
-            breached=bool(daily_breach or redline_hit),
-            used_gb=used_gb, max_gb=max_gb, library_gb=library_gb)
-        return
 
+def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_trigger,
+              trigger, to_free_gb, to_free_bytes, used_gb, max_gb, free_gb,
+              library_gb) -> bool:
+    """Should this run go ahead at all? True means stop here.
+
+    Six ways to answer no, and they are not interchangeable: nothing is over
+    its limits (asked separately of a manual run and a scheduled one, because
+    the scheduled side also has to know whether today's window is spent), the
+    redline fast path already freed what was needed, and a scheduled run that
+    arrived before its hour.
+
+    Every one of them is a refusal, so the direction that matters is the one
+    where a mistake lets a run PROCEED. Each has a scenario pinned to the
+    exact line it logs.
+    """
     if _manual_cleanup:
         # Manual Cleanup: the user pressed the button, so prune to every
         # breached target NOW; the deletion delay and the once-per-day window
@@ -7414,7 +7548,7 @@ def main():
         if not (daily_breach or redline_hit):
             log(
                 f"MANUAL CLEANUP: usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
-                f"within all space limits. Nothing to do."
+                "within all space limits. Nothing to do."
             )
             emit_progress(status="done", phase="done",
                           message="Nothing to do — space limits are satisfied.")
@@ -7424,11 +7558,11 @@ def main():
                 message="Nothing to do — space limits are satisfied.",
                 deleted_items=[], marked_items=[],
             )
-            return
+            return True
         log(
             f"MANUAL CLEANUP [{trigger}]: over space limits ({used_gb:.1f} GB used, "
             f"{free_gb:.1f} GB free). Deleting now — the deletion delay and daily "
-            f"schedule apply to automatic runs only."
+            "schedule apply to automatic runs only."
         )
         log(f"Target: free at least {to_free_gb:.1f} GB.")
         log_blank()
@@ -7445,8 +7579,7 @@ def main():
         # out stale or the queue can't cover the target. do_radarr=True so a manual
         # deletion forgets the movie in Radarr exactly like the full scan.
         if _redline_fast_path(to_free_bytes, trigger=trigger, do_radarr=True):
-            return
-
+            return True
     elif immediate_trigger:
         # Redline runs on every cron tick, bypassing the daily schedule AND
         # the deletion delay; waiting defeats an emergency floor. Does not
@@ -7466,8 +7599,7 @@ def main():
         # the sim branch below never takes this). Falls back to the full scan
         # whenever it can't proceed safely; the reason is logged.
         if not _is_sim and _redline_fast_path(to_free_bytes):
-            return
-
+            return True
     else:
         # Headroom and Library Size Cap share the once-per-day window;
         # debug_sim bypasses the schedule.
@@ -7478,7 +7610,7 @@ def main():
                 log(
                     f"DRY RUN [REDLINE ORDER PREVIEW]: {free_gb:.1f} GB free, above the "
                     f"{REDLINE_GB} GB Redline floor — building the standing preview of "
-                    f"what Redline will delete first (ignoring daily schedule)."
+                    "what Redline will delete first (ignoring daily schedule)."
                 )
                 log_blank()
             elif not daily_breach:
@@ -7488,14 +7620,14 @@ def main():
                 log(
                     f"DRY RUN: Usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
                     f"below limit of {max_gb:.1f} GB and under the cap — nothing would be "
-                    f"marked; building the eligible deletion order (ignoring daily schedule)."
+                    "marked; building the eligible deletion order (ignoring daily schedule)."
                 )
                 log_blank()
             else:
                 log(
                     f"DRY RUN [{trigger}]: over space limits "
                     f"({used_gb:.1f} GB used, {free_gb:.1f} GB free). "
-                    f"Simulating cleanup (ignoring daily schedule)."
+                    "Simulating cleanup (ignoring daily schedule)."
                 )
                 if DELETE_DELAY_DAYS > 0 and not _redline_only_mode():
                     log(
@@ -7522,12 +7654,11 @@ def main():
                 else:
                     log(
                         f"Usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
-                        f"within all space limits. Nothing to do."
+                        "within all space limits. Nothing to do."
                     )
                     emit_progress(status="done", phase="done",
                                   message="Nothing to do — space limits are satisfied.")
-                return
-
+                return True
             if not daily_breach:
                 # The daily window is only consumed by an actual cleanup —
                 # a within-limits tick must not burn it, or a breach later the
@@ -7535,12 +7666,11 @@ def main():
                 # calendar day WHEN a limit is breached").
                 log(
                     f"Usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
-                    f"within all space limits. Nothing to do today."
+                    "within all space limits. Nothing to do today."
                 )
                 emit_progress(status="done", phase="done",
                               message="Nothing to do — space limits are satisfied.")
-                return
-
+                return True
             if time.strftime("%H:%M") < DAILY_RUN_TIME:
                 # An eligible day still waits for the scheduled time of day.
                 # The window is only consumed by the cleanup that actually
@@ -7552,8 +7682,7 @@ def main():
                 )
                 emit_progress(status="done", phase="done",
                               message=f"Waiting for today's scheduled run time ({DAILY_RUN_TIME}).")
-                return
-
+                return True
             write_last_cleanup_date()
 
             log(
@@ -7561,215 +7690,26 @@ def main():
                 f"{free_gb:.1f} GB free). Running scheduled daily cleanup."
             )
             log_blank()
+    return False
 
-    # ── Build candidates and run cleanup ────────────────────────────────────
 
-    candidates, build_stats, total_scanned = build_candidates()
+def _delete_and_report(*, candidates, build_stats, total_scanned,
+                       used_gb, max_gb, free_gb, effective_library_gb,
+                       to_free_gb, to_free_bytes, trigger, immediate_trigger,
+                       _manual_cleanup):
+    """Live mode: work the plan, then say what happened.
 
-    # The library size that drives the cap comes straight from disk in
-    # get_library_size_gb() (library_gb above), so it reflects the true current
-    # on-disk total; including files the media server has not cataloged. Using
-    # the one disk figure everywhere keeps the dashboard number, the trigger,
-    # and the deletion target in agreement.
-    effective_library_gb = library_gb
+    The counterpart to _run_simulation, and the only path in the engine that
+    removes anything. It deletes or marks down the scored order until the
+    target is covered, rebuilds the marked-and-eligible queue around what it
+    did, and writes the summary and the report the app notifies from.
 
-    if not candidates:
-        log("No eligible movie files found.")
-        # A Simulate with zero eligible movies is still a completed plan; write
-        # the stamped EMPTY queue so the app knows a Simulate has run under these
-        # exact settings. Without it, an over-limits library whose movies are all
-        # filtered/protected would ghost Live forever with "run Simulate" while
-        # Simulate itself changed nothing.
-        if _is_sim:
-            write_plan_to_queue([], scheduled_count=0)
-        record_identity_mismatches(build_stats)
-        log_issue_block()
-        emit_progress(status="done", phase="done", scanned=total_scanned,
-                      message="No eligible movies to remove.")
-        # Zero eligible is still a completed run; the daily-summary
-        # notification should say so rather than silently not arrive.
-        write_run_report(
-            mode="simulate" if _is_sim else "cleanup",
-            eligible_count=0, marked_count=0, deleted_count=0, bytes_freed=0,
-            redline_only=_redline_only_mode(),
-            message="No eligible movies to remove.",
-            deleted_items=[], marked_items=[],
-        )
-        return
-
-    log_stage("SIMULATION" if _is_sim else "DELETIONS",
-              phase="simulating" if _is_sim else "deleting")
-
-    if _is_sim:
-        simulated_used = usage_info["used"]
-        simulated_freed_bytes = 0
-        simulated_count = 0
-        _sim_planned: list = []   # (candidate, size); becomes the marked queue when a delay is set
-        # The prefix of the plan that covers to_free_bytes; what a Cleanup
-        # would delete RIGHT NOW. In redline-only mode the loop keeps queueing
-        # past the target, so this freezes while simulated_count keeps growing;
-        # in every other mode the loop stops at the target and the two agree.
-        _would_count = 0
-        _would_bytes = 0
-
-        # Every mode plans the ENTIRE eligible list in deletion order; the
-        # whole library's fate is visible up front. Only the prefix covering
-        # the current space target is MARKED (scheduled, delay-clocked); the
-        # rest stays merely eligible.
-        _sim_min_count = len(candidates)
-
-        log(f"DRY RUN [{trigger}]: Simulating deletions — target: free {to_free_gb:.1f} GB.")
-        if _redline_only_mode():
-            log(f"Redline-only mode: all {len(candidates)} eligible movies enter the queue "
-                f"in deletion order. When free space drops below {REDLINE_GB} GB, Redline deletes "
-                f"down this list (re-scored fresh at that moment) until back at the floor. "
-                f"The queue itself is not logged — view or download it from the Marked & "
-                f"Eligible Deletions list.")
-        else:
-            log(f"All {len(candidates)} eligible movies enter the queue in deletion order; "
-                f"only the movies needed to meet the current targets are marked for deletion "
-                f"and logged below. The rest of the queue is not logged — view or download it "
-                f"from the Marked & Eligible Deletions list.")
-        emit_progress(phase="simulating", trigger=trigger, target_bytes=to_free_bytes,
-                      deleted=0, bytes_freed=0, current_title="",
-                      message="Simulating cleanup — no files touched…")
-
-        pending = list(candidates)
-        tie_group: list = []
-        while pending or tie_group:
-            # Target check at the TOP, exactly like the live loop below; a
-            # bottom-of-loop check would pop (and report) one extra movie
-            # whenever the target is already met, diverging from a real run.
-            if simulated_freed_bytes >= to_free_bytes and simulated_count >= _sim_min_count:
-                break
-            candidate = _pop_next_deletion(pending, tie_group, to_free_bytes - simulated_freed_bytes)
-            try:
-                file_size = candidate["path"].stat().st_size
-            except OSError as e:
-                # Missing, permission-denied, or a hiccuping mount; skip the
-                # file rather than abort the whole preview.
-                log(f"DRY RUN: Skipping unreadable file during simulation ({e}): {candidate['path']}")
-                continue
-
-            before_gb = round(bytes_to_gb(simulated_used), 1)
-            simulated_used -= file_size
-            # Part of the covering prefix (what a Cleanup would delete NOW)?
-            # Only those get per-movie log lines; the rest of the plan enters
-            # the queue silently (it is downloadable from the Marked & Eligible
-            # list, and logging thousands of queued entries buried the 10 that
-            # matter).
-            in_target = _would_bytes < to_free_bytes
-            if in_target:
-                _would_bytes += file_size
-                _would_count += 1
-            simulated_freed_bytes += file_size
-            simulated_count += 1
-            after_gb = round(bytes_to_gb(simulated_used), 1)
-
-            if in_target:
-                log(
-                    f"DRY RUN DELETE #{simulated_count}: "
-                    f"{candidate['title']} | "
-                    f"score={round(candidate['retention_score'], 3)} | "
-                    f"imdb={candidate['imdb_rating']} | votes={candidate['imdb_votes']} | year={candidate['release_year']} | "
-                    f"plays={candidate['play_count']} | "
-                    f"last_played={format_epoch(candidate['last_played'])} | "
-                    f"size={bytes_to_gb(file_size):.2f} GB | "
-                    f"added={format_epoch(candidate['added_at'])} | "
-                    f"used {before_gb:.1f} GB -> {after_gb:.1f} GB | "
-                    f"path={candidate['path']}"
-                )
-            elif to_free_bytes > 0 and simulated_count == _would_count + 1:
-                # First entry past the target: one hand-off line instead of a
-                # per-movie line for every queued entry behind it.
-                log(f"Target covered by the {_would_count} movie(s) above — the remaining "
-                    f"{len(pending) + len(tie_group) + 1} eligible movie(s) queue silently "
-                    f"in deletion order.")
-            # The progress tiles report what WOULD delete, never the queue size
-            # — a redline-only preview above the floor reads "Would delete 0".
-            emit_progress(phase="simulating", deleted=_would_count,
-                          bytes_freed=_would_bytes, target_bytes=to_free_bytes,
-                          current_title=candidate["title"])
-
-            _sim_planned.append((candidate, file_size))
-            remove_empty_movie_folder(candidate["path"])
-
-        # The simulation IS the marking step: it writes its plan to the
-        # marked-for-deletion queue (keeping existing marks' clocks) so the
-        # user can review what deletes and when; BEFORE arming Automatic Cleanup. It
-        # never deletes and never consumes the daily window; stale marks not
-        # in this plan drop off. With delay 0 the marks are simply eligible
-        # immediately: the next daily run deletes them.
-        log_blank()
-        # Only the target-covering prefix is scheduled (and delay-clocked);
-        # redline-only schedules nothing; its prefix deletes via the Redline
-        # trigger, not a calendar.
-        _, _, _, _sim_new_items = write_plan_to_queue(
-            _sim_planned, scheduled_count=0 if _redline_only_mode() else _would_count)
-
-        # The summary reports what would delete RIGHT NOW (_would_count,
-        # tracked in the loop) plus the full eligible queue as its own row.
-        _queued_count, _queued_bytes = simulated_count, simulated_freed_bytes
-
-        final_gb = round(bytes_to_gb(usage_info["used"] - _would_bytes), 1)
-        final_free_gb = round(bytes_to_gb(usage_info["total"]) - final_gb, 1)
-        log_run_summary(
-            is_sim=True, trigger=trigger, to_free_gb=to_free_gb,
-            used_gb=used_gb, free_before_gb=round(bytes_to_gb(usage_info["free"]), 1),
-            final_gb=final_gb, final_free_gb=final_free_gb,
-            freed_bytes=_would_bytes, removed_count=_would_count,
-            skipped_under_limit=len(candidates) - simulated_count,
-            effective_library_gb=effective_library_gb, max_gb=max_gb,
-            build_stats=build_stats, total_scanned=total_scanned,
-            library_cap_hit=library_cap_hit,
-            queued_count=_queued_count, queued_bytes=_queued_bytes or 0,
-        )
-
-        log_blank()
-        _rest = simulated_count - _would_count
-        if _redline_only_mode():
-            _sim_msg = summary_message(
-                "Dry run — Redline is breached." if _would_count
-                else "Dry run — nothing is over a limit.",
-                ("Would delete now",
-                 f"{_would_count:,} movie{'' if _would_count == 1 else 's'} "
-                 f"(~{bytes_to_gb(_would_bytes):.1f} GB)" if _would_count else ""),
-                ("Eligible in deletion order",
-                 f"{simulated_count:,} movie{'' if simulated_count == 1 else 's'} "
-                 f"(~{bytes_to_gb(simulated_freed_bytes):.1f} GB)"),
-                ("Deletes when", "free space hits the Redline floor, worst-scored first"),
-            )
-        elif _would_count == 0:
-            _sim_msg = summary_message(
-                "Dry run — space limits are satisfied, nothing marked.",
-                ("Eligible in deletion order",
-                 f"{simulated_count:,} movie{'' if simulated_count == 1 else 's'}"),
-            )
-        else:
-            _sim_msg = summary_message(
-                f"Dry run — would mark {_would_count:,} "
-                f"movie{'' if _would_count == 1 else 's'} for deletion.",
-                ("Marked", f"~{bytes_to_gb(_would_bytes):.1f} GB"),
-                ("Deletes", f"after a {DELETE_DELAY_DAYS}-day delay" if DELETE_DELAY_DAYS > 0
-                            else "at the next daily run"),
-                ("Also eligible", f"{_rest:,} movie{'' if _rest == 1 else 's'}"),
-            )
-        emit_progress(status="done", phase="done", deleted=_would_count,
-                      bytes_freed=_would_bytes, target_bytes=to_free_bytes,
-                      current_title="", message=_sim_msg)
-        # Report for the app's notifications (the app only alerts for the
-        # SCHEDULED daily Simulate; manual ones are decided app-side).
-        write_run_report(
-            mode="simulate", eligible_count=simulated_count,
-            marked_count=0 if _redline_only_mode() else _would_count,
-            deleted_count=0, bytes_freed=0,
-            redline_only=_redline_only_mode(),
-            library_gb=effective_library_gb, message=_sim_msg,
-            deleted_items=[], marked_items=_sim_new_items[:REPORT_ITEMS_CAP],
-        )
-        return
-
-    # Live mode
+    Marking and deleting are the same walk on purpose. A run with a deletion
+    delay set marks the covering prefix and deletes only the marks that have
+    aged past the delay they were made under; a manual Cleanup and a Redline
+    emergency skip the wait. Both count against the same target, so a run that
+    only marks still stops at the right place instead of marking the library.
+    """
     deleted_count = 0
     bytes_freed = 0
     marked_count = 0
@@ -7924,7 +7864,7 @@ def main():
                 entry["size_bytes"] = size_before
                 kept_marks[key] = entry
                 log(f"WARN: deletion did not remove {candidate['title']}; "
-                    f"keeping its existing mark (will retry next run).")
+                    "keeping its existing mark (will retry next run).")
     except SystemExit:
         if use_delay or mark_store_dirty:
             save_pending({**mark_store, **kept_marks}, snapshot_delete_paths=_vanished_keys)
@@ -7966,7 +7906,7 @@ def main():
                           and e.get("marked_at") is not None)
         if unscheduled:
             log(f"Unmarked {unscheduled} movie(s) no longer in the deletion plan "
-                f"(they stay eligible in deletion order).")
+                "(they stay eligible in deletion order).")
         save_pending(_full_queue(), stamp_thresholds=True, snapshot_delete_paths=_vanished_keys)
         if marked_count:
             log_blank()
@@ -7984,6 +7924,12 @@ def main():
         # run, including manual: the queue is the standing preview, so runs only
         # ever trim it (the app tops it back up afterwards).
         save_pending(mark_store, snapshot_delete_paths=_vanished_keys)
+
+    # Keep the stored library measure honest about what this run just removed,
+    # so the Summaries that reuse it for the next few hours aren't stale by
+    # exactly the bytes freed here.
+    if bytes_freed and isinstance(effective_library_gb, (int, float)):
+        _remember_library_size(max(0.0, effective_library_gb - bytes_to_gb(bytes_freed)))
 
     final_info = get_usage_info()
     final_gb = final_info["used_gb"]
@@ -8025,6 +7971,383 @@ def main():
 
     # Note: the daily-run window was already stamped at the start of this run
     # (before cleanup) so any mid-day limit breach is correctly blocked.
+
+
+def _cap_floor_refusal(*, library_cap_hit, library_gb, _is_sim,
+                       _is_debug_cleanup) -> bool:
+    """Would reaching the Library Size Cap delete too much of the library?
+    True means stop here.
+
+    A cap set below the safety floor is the one configuration that can empty a
+    library on purpose: the run would keep deleting until the library fits, and
+    the cap says it should fit in less than MAX_HEADROOM_PCT% of what is there.
+    The app blocks arming on it, but a library that GREW afterwards can cross
+    the floor with the cap unchanged, which is why the check is repeated here
+    against today's size and fails closed.
+
+    Simulate and Debug Cleanup preview past it — they delete nothing, and the
+    preview is how someone sees what the setting would do. Live refuses.
+    """
+    # Fail-closed cap-floor check against TODAY's library size. The cap was
+    # validated when Live was armed, but the library can grow afterwards
+    # (files copied in), and a Cleanup may delete at most MAX_HEADROOM_PCT%
+    # of the library. Mirrors the app's arm-time rule; sim may preview past
+    # it, Live refuses.
+    if (library_cap_hit and isinstance(MAX_HEADROOM_PCT, (int, float))
+            and 0 < MAX_HEADROOM_PCT <= 100):
+        # Compare UNROUNDED: rounding the floor for display first turned it
+        # into 0.0 on small libraries and waved the deletion through.
+        _cap_floor_gb = library_gb * (100 - MAX_HEADROOM_PCT) / 100
+        if MAX_LIBRARY_GB < _cap_floor_gb:
+            # Shown through gb_text, not the raw float: the unrounded floor is
+            # what the comparison needs, but a reader does not need eight
+            # decimal places of it.
+            _floor_msg = (
+                f"Library Size Cap {gb_text(MAX_LIBRARY_GB)} GB is below the safety floor "
+                f"({gb_text(library_gb)} GB library × {100 - MAX_HEADROOM_PCT:g}% = "
+                f"{gb_text(_cap_floor_gb)} GB) — reaching the cap would delete more than "
+                f"{MAX_HEADROOM_PCT:g}% of the library."
+            )
+            if _is_sim or _is_debug_cleanup:
+                # Debug Cleanup ignores the safety percentage like Simulate does (it
+                # deletes nothing); warn but continue so the preview still runs.
+                # A config state the app already blocks on, so it belongs in the
+                # log rather than the run panel's issue list.
+                log(f"NOTE: {_floor_msg} A real Cleanup would refuse to run "
+                    "until the cap or the safety percentage is raised.")
+                log_blank()
+            else:
+                log(f"ABORT: {_floor_msg}")
+                emit_progress(status="error", phase="checking",
+                              message="Library Size Cap is below the safety floor — raise the cap "
+                                      "or the safety percentage, then run again.")
+                return True
+    return False
+
+
+def _read_library_size(*, usage_info, used_gb, free_gb, _is_info):
+    """Measure the library from disk and refresh the dashboard's numbers.
+
+    Read from disk rather than from a media server's catalogue, because a
+    server's cached size lags a deletion for a long time — long enough that
+    the cap would keep firing on space that was already freed.
+
+    Returns the library size in GB, or None when the disk read failed, and the
+    filesystem total. None is a real answer here: it disables the cap for this
+    run rather than pretending the library is 0 GB, which would read as
+    massively under cap and, for the dashboard, blank a number that was
+    perfectly good a minute ago.
+    """
+    # Library size — read directly from disk so it reflects deletions
+    # immediately. Tautulli's cached media-info size can lag reality for a long
+    # time after a file is removed, which would keep the cap triggering after
+    # space was already freed. This needs neither Plex nor Tautulli reachable.
+    emit_progress(message="Reading library size…")
+    # In Summary/debug_info, still surface the Tautulli movie section IDs (via
+    # get_movie_section_ids, which logs them) so the user can see them; e.g. to
+    # set the Radarr section ID; without starting a scan. Guarded so an
+    # unreachable Tautulli never aborts the size read below.
+    if _is_info:
+        try:
+            get_movie_section_ids()
+        except Exception as e:
+            log(f"Movie section IDs unavailable (Tautulli query failed): {e}")
+    library_gb = _recent_library_size_gb() if _is_info else None
+    if library_gb is None:
+        log("Computing library size from disk...")
+        library_gb = get_library_size_gb()
+        _remember_library_size(library_gb)
+    if library_gb is not None:
+        if MAX_LIBRARY_GB is not None:
+            delta = library_gb - MAX_LIBRARY_GB
+            status = f"OVER cap by {delta:.1f} GB" if delta > 0 else f"under cap by {abs(delta):.1f} GB"
+            log(f"Library size: {library_gb:.1f} GB | cap: {MAX_LIBRARY_GB} GB | {status}")
+        else:
+            log(f"Library size: {library_gb:.1f} GB | cap: disabled")
+    else:
+        log("Library size: unavailable (disk read failed)")
+
+    # Refresh dashboard stats (runs in every mode, including the quiet Summary).
+    # library_gb is only written when known, so a disk-read failure keeps the
+    # last good value instead of blanking the dashboard.
+    total_gb = round(bytes_to_gb(usage_info["total"]), 1)
+    _stats = {
+        "library_cap_gb": MAX_LIBRARY_GB,
+        "disk": {
+            "used_gb": used_gb,
+            "total_gb": total_gb,
+            "free_gb": free_gb,
+            "pct_used": round(used_gb / total_gb * 100, 1) if total_gb else 0,
+        },
+    }
+    if library_gb is not None:
+        _stats["library_gb"] = round(library_gb, 1)
+    emit_stats(**_stats)
+    return library_gb, total_gb
+
+
+def main():
+    # Load saved config from JSON file (Docker / web UI mode).
+    _load_config_from_file()
+    # Allow the web UI to trigger a specific run mode without changing the saved config.
+    if _MODE_OVERRIDE:
+        global RUN_MODE
+        RUN_MODE = _MODE_OVERRIDE
+
+    global LOGFILE, _QUIET_PROGRESS
+    if RUN_MODE in ("debug_info", "reconcile"):
+        # Quiet background jobs (storage refresh / config-save queue reconcile): no
+        # progress events, and the log is discarded; lastrun.log stays the last
+        # real run's log and no scratch log files accumulate. Failures still surface
+        # through the subprocess exit code and the UI messages.
+        LOGFILE = Path(_os.devnull)
+        _QUIET_PROGRESS = True
+
+    run_start = time.strftime("%Y-%m-%d_%H-%M-%S")
+    reset_log()
+    # Every run closes its last stage, including the modes that keep a log but
+    # never archive one (info). Registered before _finalize_run, so atexit's
+    # reverse order runs the archiver first, which closes the stage itself, and
+    # leaves this call a no-op.
+    atexit.register(close_stage)
+
+    # Archive this run's log exactly once at process exit; completed, failed,
+    # or (opt-in) interrupted. Registered here, in the engine's main thread, so
+    # SIGTERM from a web-app "Stop" unwinds cleanly and still archives.
+    global _RUN_START, _RUN_ARCHIVABLE
+    _RUN_START = run_start
+    _RUN_ARCHIVABLE = RUN_MODE in ARCHIVABLE_RUN_MODES
+    if _RUN_ARCHIVABLE:
+        try:
+            signal.signal(signal.SIGTERM, _handle_sigterm)
+        except (ValueError, OSError):
+            pass  # not in main thread / unsupported; atexit still covers normal exits
+        atexit.register(_finalize_run)
+
+    debug_startup()
+
+    # Safety gate: only the recognized run modes may proceed. Any other value —
+    # including the Docker default "paused", the fully-stopped "off", a blank
+    # string, or a typo; must NOT
+    # fall through to the live-deletion path below. This guarantees that a direct
+    # or cron invocation with RUN_MODE not set to an executable mode is a no-op,
+    # mirroring the scheduler's own paused check in app.py.
+    if RUN_MODE not in EXECUTABLE_RUN_MODES:
+        log(f"RUN_MODE={RUN_MODE!r}: paused / not an executable mode — no scan or cleanup performed.")
+        emit_progress(schema=1, status="done", phase="done", mode=RUN_MODE,
+                      scanned=0, total=0, eligible=0, deleted=0, bytes_freed=0,
+                      target_bytes=0, trigger="", current_title="",
+                      message="Paused — no scan or cleanup performed.",
+                      started_at=_run_started_at())
+        return
+
+    # Config-save reconcile: rebuild the queue from the stored snapshot, no scan.
+    # A pure recompute (scoring / threshold / filter change) needs no server, so it
+    # runs BEFORE the connection check; a collections/favorites change passes
+    # MEDIAREDUCER_RECONCILE_REFETCH=1 and the fetch itself fails closed if a needed
+    # server is unreachable (the app gates and flags that connection).
+    if RUN_MODE == "reconcile":
+        try:
+            reconcile_from_snapshot(
+                trigger=_os.environ.get("MEDIAREDUCER_RECONCILE_TRIGGER", "config change"),
+                refetch_protection=_os.environ.get("MEDIAREDUCER_RECONCILE_REFETCH", "") == "1")
+        except Exception as e:
+            log(f"Reconcile aborted: {e}")
+        return
+
+    emit_progress(schema=1, status="running", phase="checking", mode=RUN_MODE,
+                  scanned=0, total=0, eligible=0, protected=0, skipped=0,
+                  deleted=0, bytes_freed=0, target_bytes=0, trigger="",
+                  current_title="", message="Checking connections…",
+                  started_at=_run_started_at())
+
+    if not validate_connections():
+        emit_progress(status="error", phase="checking",
+                      message=("Connection check failed: " + _CONNECTION_VALIDATION_ERRORS[0]
+                               + " Fix it in Configuration → Connections.")
+                      if _CONNECTION_VALIDATION_ERRORS
+                      else "Connection check failed — see the log for details.")
+        return
+
+    verify_runtime_api_health()
+
+    _is_sim   = RUN_MODE == "debug_sim"
+    _is_info  = RUN_MODE == "debug_info"
+    # debug_cleanup runs the queue-based preview path (_debug_cleanup_from_queue)
+    # and skips the headroom safety cap (below) like Simulate does.
+    _is_debug_cleanup = RUN_MODE == "debug_cleanup"
+    _cap_active = RUN_MODE in ("debug_sim", "headroom", "debug_cleanup") and MAX_LIBRARY_GB is not None
+
+    usage_info = get_usage_info()
+    used_gb = usage_info["used_gb"]
+    max_gb = usage_info["max_gb"]
+    free_gb = round(bytes_to_gb(usage_info["free"]), 1)
+
+    # Validate Space Thresholds. Summary/debug_info is allowed to continue so it
+    # can show readiness errors; simulation and Live abort because scoring
+    # and deletion decisions depend on these thresholds being sane.
+    _threshold_errors, _total_gb, _max_headroom_gb = _space_threshold_errors(
+        usage_info, enforce_headroom_safety=not (_is_sim or _is_debug_cleanup)
+    )
+    if (
+        _is_sim
+        and _max_headroom_gb is not None
+        and isinstance(HEADROOM_GB, (int, float))
+        and HEADROOM_GB > _max_headroom_gb
+    ):
+        # Logged, not recorded as a run issue: this is a standing configuration
+        # state, not something that went wrong in this run. The app already
+        # refuses to arm Automatic Cleanup on it, ghosts the manual Cleanup
+        # button with the reason, and says so in Cleanup Targets; the run
+        # panel's issue list is for what the run itself hit.
+        log(f"NOTE: HEADROOM_GB={HEADROOM_GB} GB exceeds the safety cap of "
+            f"{MAX_HEADROOM_PCT}% of total filesystem capacity "
+            f"({_total_gb:.1f} GB × {MAX_HEADROOM_PCT}% = {_max_headroom_gb:.1f} GB). "
+            "A real Cleanup would refuse to run: lower HEADROOM_GB or — with "
+            "caution — raise MAX_HEADROOM_PCT.")
+        log_blank()
+
+    if _threshold_errors:
+        for _err in _threshold_errors:
+            log(f"CONFIG ERROR: {_err}")
+        if not _is_info:
+            log("ABORT: Fix Space Thresholds before running simulation or live cleanup.")
+            # Terminal progress emit: the engine exits 0 here, so without this
+            # the dashboard's progress panel would stay on "running" forever.
+            emit_progress(status="error", phase="checking",
+                          message="Space Thresholds are invalid — fix them in Configuration, "
+                                  "then run again. See the detailed log for the exact errors.")
+            return
+        # Same reasoning: the CONFIG ERROR lines above already name each bad
+        # value, and the Configuration tab turns red until they are fixed.
+        log("NOTE: Simulate and Automatic Cleanup stay blocked until the "
+            "Space Thresholds above are fixed.")
+        log_blank()
+
+    # IMDb ratings are required for scoring, so resolve the dataset among the
+    # FIRST checks: a missing file with a broken download aborts here; within
+    # the download timeout; instead of after the whole library fetch, and the
+    # dashboard's manual-setup popup appears right away. Skipped when the run
+    # cannot use IMDb (100% watch history, no rating cutoff) so it neither
+    # checks nor downloads the dataset.
+    if not _is_info and imdb_dataset_needed():
+        emit_progress(phase="checking", message="Checking the IMDb ratings dataset…")
+        ensure_imdb_ratings()
+
+    if _total_gb is None:
+        _total_gb = bytes_to_gb(usage_info["total"])
+    if _max_headroom_gb is None:
+        try:
+            _max_headroom_gb = round(_total_gb * MAX_HEADROOM_PCT / 100, 1)
+        except Exception:
+            _max_headroom_gb = 0
+
+    library_gb, total_gb = _read_library_size(
+        usage_info=usage_info, used_gb=used_gb, free_gb=free_gb, _is_info=_is_info)
+
+    over_limit = used_gb >= max_gb
+    redline_hit = REDLINE_GB is not None and free_gb <= REDLINE_GB
+    library_cap_hit = (_cap_active and MAX_LIBRARY_GB is not None
+                       and library_gb is not None and library_gb > MAX_LIBRARY_GB)
+    # Only Redline is an emergency trigger. The Library Size Cap shares the
+    # headroom's once-per-day window (and the deletion delay).
+    immediate_trigger = redline_hit
+    # Dashboard Cleanup button: prune every breached target now; the delay
+    # and the daily window pace automatic runs, not a deliberate button press.
+    _manual_cleanup = _MANUAL_RUN and not _is_sim and not _is_info
+
+    # ── Info mode: show status and exit ─────────────────────────────────────
+    if _is_info:
+        _report_debug_info(
+            used_gb=used_gb, max_gb=max_gb, free_gb=free_gb, library_gb=library_gb,
+            over_limit=over_limit, redline_hit=redline_hit, _cap_active=_cap_active,
+            _threshold_errors=_threshold_errors, _total_gb=_total_gb)
+        return
+
+    # ── Decide whether to run ────────────────────────────────────────────────
+
+    if _cap_floor_refusal(library_cap_hit=library_cap_hit, library_gb=library_gb,
+                          _is_sim=_is_sim, _is_debug_cleanup=_is_debug_cleanup):
+        return
+
+    to_free_gb, to_free_bytes, trigger, daily_breach = _deletion_target(
+        used_gb=used_gb, max_gb=max_gb, free_gb=free_gb, total_gb=total_gb,
+        library_gb=library_gb, over_limit=over_limit, redline_hit=redline_hit,
+        library_cap_hit=library_cap_hit, immediate_trigger=immediate_trigger,
+        _cap_active=_cap_active, _is_sim=_is_sim, _manual_cleanup=_manual_cleanup)
+
+    # Debug Cleanup mirrors the automatic scheduler tick, working from the standing
+    # marked queue in cache; NO full library scan (candidates are never built
+    # below) and NO deletions. It runs (and persists) the same queue upkeep a
+    # cleanup tick would, then only PREVIEWS the delete-from-queue step.
+    if _is_debug_cleanup:
+        _debug_cleanup_from_queue(
+            to_free_bytes=to_free_bytes, trigger=trigger,
+            breached=bool(daily_breach or redline_hit),
+            used_gb=used_gb, max_gb=max_gb, library_gb=library_gb)
+        return
+
+    if _run_gate(_manual_cleanup=_manual_cleanup, _is_sim=_is_sim,
+                 daily_breach=daily_breach, redline_hit=redline_hit,
+                 immediate_trigger=immediate_trigger, trigger=trigger,
+                 to_free_gb=to_free_gb, to_free_bytes=to_free_bytes,
+                 used_gb=used_gb, max_gb=max_gb, free_gb=free_gb,
+                 library_gb=library_gb):
+        return
+
+    # ── Build candidates and run cleanup ────────────────────────────────────
+
+    candidates, build_stats, total_scanned = build_candidates()
+
+    # The library size that drives the cap comes straight from disk in
+    # get_library_size_gb() (library_gb above), so it reflects the true current
+    # on-disk total; including files the media server has not cataloged. Using
+    # the one disk figure everywhere keeps the dashboard number, the trigger,
+    # and the deletion target in agreement.
+    effective_library_gb = library_gb
+
+    if not candidates:
+        log("No eligible movie files found.")
+        # A Simulate with zero eligible movies is still a completed plan; write
+        # the stamped EMPTY queue so the app knows a Simulate has run under these
+        # exact settings. Without it, an over-limits library whose movies are all
+        # filtered/protected would ghost Live forever with "run Simulate" while
+        # Simulate itself changed nothing.
+        if _is_sim:
+            write_plan_to_queue([], scheduled_count=0)
+        record_identity_mismatches(build_stats)
+        log_issue_block()
+        emit_progress(status="done", phase="done", scanned=total_scanned,
+                      message="No eligible movies to remove.")
+        # Zero eligible is still a completed run; the daily-summary
+        # notification should say so rather than silently not arrive.
+        write_run_report(
+            mode="simulate" if _is_sim else "cleanup",
+            eligible_count=0, marked_count=0, deleted_count=0, bytes_freed=0,
+            redline_only=_redline_only_mode(),
+            message="No eligible movies to remove.",
+            deleted_items=[], marked_items=[],
+        )
+        return
+
+    log_stage("SIMULATION" if _is_sim else "DELETIONS",
+              phase="simulating" if _is_sim else "deleting")
+
+    if _is_sim:
+        _run_simulation(
+            candidates=candidates, build_stats=build_stats,
+            total_scanned=total_scanned, usage_info=usage_info, used_gb=used_gb,
+            max_gb=max_gb, effective_library_gb=effective_library_gb,
+            library_cap_hit=library_cap_hit, to_free_gb=to_free_gb,
+            to_free_bytes=to_free_bytes, trigger=trigger)
+        return
+
+    _delete_and_report(
+        candidates=candidates, build_stats=build_stats, total_scanned=total_scanned,
+        used_gb=used_gb, max_gb=max_gb, free_gb=free_gb,
+        effective_library_gb=effective_library_gb, to_free_gb=to_free_gb,
+        to_free_bytes=to_free_bytes, trigger=trigger,
+        immediate_trigger=immediate_trigger, _manual_cleanup=_manual_cleanup)
 
 
 if __name__ == "__main__":

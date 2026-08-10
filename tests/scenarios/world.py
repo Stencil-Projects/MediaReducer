@@ -13,7 +13,7 @@ Dates are given in DAYS AGO rather than absolute epochs: the grace period and
 staleness are measured against today, so "400 days ago" is the stable fact and
 a fixed timestamp would drift into and out of every filter as the year passes.
 """
-import json, time
+import json, shutil, time
 from pathlib import Path
 
 MB = 1024 * 1024
@@ -108,11 +108,18 @@ def build(base: Path, spec: dict) -> dict:
     monitor = spec.get("monitor", ["movies", "tv"])
     monitored_bytes = sum(f.stat().st_size for d in monitor
                           for f in (lib / d).rglob("*") if f.is_file()) if monitor else 0
+    _free_gb = shutil.disk_usage(lib).free / 1e9
     cfg = {
         "RUN_MODE": "paused", "USE_PLEX": False, "USE_JELLYFIN": True,
         "JELLYFIN_URL": "http://127.0.0.1:0", "JELLYFIN_API_KEY": "k",
         "MONITOR_DIRS": list(monitor),
-        "HEADROOM_GB": 0, "REDLINE_GB": None,
+        "HEADROOM_GB": 0,
+        # Redline fires on FREE space, which is the host's, not the fixture's —
+        # so a scenario asks for it as a multiple of whatever is free right now.
+        # Above 1.0 the floor is already breached and the trigger fires on every
+        # machine; None leaves it disarmed, which is the default everywhere else.
+        "REDLINE_GB": (round(_free_gb * float(spec["redline_x_free"]), 2)
+                       if spec.get("redline_x_free") else None),
         # A fraction of what is monitored, so a run has a real, reachable
         # deficit. Scenarios that need BOTH media types to be taken ask for a
         # deeper one — at half, the movies alone often cover it and the season
@@ -125,9 +132,15 @@ def build(base: Path, spec: dict) -> dict:
         "SCORE_BALANCE": 50, "NEAR_TIE_PTS": 2, "GRACE_PERIOD_DAYS": 30,
         "MAX_IMDB_RATING": None, "SKIP_UNPLAYED_MOVIES": False,
         "PROTECT_JELLYFIN_FAVORITES": False, "MAX_STALENESS_MONTHS": 12,
-        "TV_SEASON_RULE": "all", "TV_MAX_SEASON_EPISODES": 0,
+        "TV_SEASON_ELIGIBILITY": "all", "TV_MAX_SEASON_EPISODES": 0,
         "TV_WATCH_WEIGHT": 100, "TV_SERIES_WATCH_BUMP": 10,
         "MAX_HEADROOM_PCT": 100, "OUTPUT_DIR": str(cfg_dir),
+        # Always in the past by default, so a scheduled run is due. A scenario
+        # asking for "not yet" gets a time ~90 minutes out — computed rather
+        # than fixed, because a fixed late hour turns into a flake for anyone
+        # running the suite at that hour.
+        "DAILY_RUN_TIME": (time.strftime("%H:%M", time.localtime(time.time() + 5400))
+                           if spec.get("run_time_ahead") else "00:00"),
         "IMDB_RATINGS_URL": "http://127.0.0.1:9/never",
     }
     cfg.update(spec.get("config", {}))

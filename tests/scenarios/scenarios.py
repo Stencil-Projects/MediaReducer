@@ -37,14 +37,14 @@ BASE_SHOWS = [
      "seasons": [{"n": 1, "episodes": 4, "mb": 200, "added": 900, "plays": 1}]},
 ]
 
-
-def base(cap_fraction=0.5, **over):
+def base(cap_fraction=0.5, redline_x_free=None, run_time_ahead=False, **over):
     spec = {"movies": [dict(m) for m in BASE_MOVIES],
             "shows": [dict(s, seasons=[dict(x) for x in s["seasons"]]) for s in BASE_SHOWS],
-            "monitor": ["movies", "tv"], "config": {}, "cap_fraction": cap_fraction}
+            "monitor": ["movies", "tv"], "config": {}, "cap_fraction": cap_fraction,
+            "redline_x_free": redline_x_free,
+            "run_time_ahead": run_time_ahead}
     spec["config"].update(over)
     return spec
-
 
 # expect: movies / episodes — may this run remove files of that type?
 #         "some" = at least one, "none" = not one.
@@ -67,8 +67,32 @@ SCENARIOS = [
      {"movies": "some", "episodes": "some"}),
 
     # ── Season rules ─────────────────────────────────────────────────────────
-    ("season-oldest-only", base(TV_SEASON_RULE="oldest_only"), {"episodes": "some"}),
-    ("season-all-but-newest", base(TV_SEASON_RULE="all_but_newest"), {"episodes": "some"}),
+    # One Ended show, three seasons, TV only, and a deficit (half the library)
+    # that WANTS more than the rule allows — the rule is only visible under
+    # pressure. S3 is both the newest-added and big enough that the target
+    # cannot be met without it, so a rule that leaks deletes it.
+    #
+    # These once posed a key that does not exist (TV_SEASON_RULE, with invented
+    # values) and asserted only "some episodes" — which the default rule also
+    # satisfies, so both scenarios passed while testing nothing. The config key
+    # is TV_SEASON_ELIGIBILITY: oldest / except_newest / all, and the
+    # expectations now name the seasons each rule must and must not touch.
+    ("season-oldest-only",
+     {"movies": [], "monitor": ["tv"], "config": {"TV_SEASON_ELIGIBILITY": "oldest"},
+      "shows": [{"name": "Rule Show", "status": "Ended", "imdb": 4.0, "added": 900,
+                 "seasons": [{"n": 1, "episodes": 4, "mb": 150, "added": 900, "plays": 0},
+                             {"n": 2, "episodes": 4, "mb": 150, "added": 500, "plays": 0},
+                             {"n": 3, "episodes": 4, "mb": 600, "added": 100, "plays": 0}]}]},
+     {"episodes": "some", "gone_has": ["/Season 1/"],
+      "gone_not": ["/Season 2/", "/Season 3/"]}),
+    ("season-all-but-newest",
+     {"movies": [], "monitor": ["tv"], "config": {"TV_SEASON_ELIGIBILITY": "except_newest"},
+      "shows": [{"name": "Rule Show", "status": "Ended", "imdb": 4.0, "added": 900,
+                 "seasons": [{"n": 1, "episodes": 4, "mb": 150, "added": 900, "plays": 0},
+                             {"n": 2, "episodes": 4, "mb": 150, "added": 500, "plays": 0},
+                             {"n": 3, "episodes": 4, "mb": 600, "added": 100, "plays": 0}]}]},
+     {"episodes": "some", "gone_has": ["/Season 1/", "/Season 2/"],
+      "gone_not": ["/Season 3/"]}),
     ("episode-cap-holds-back", base(TV_MAX_SEASON_EPISODES=3),
      {"movies": "some", "episodes": "none"}),
     ("episode-cap-off", base(TV_MAX_SEASON_EPISODES=0), {"episodes": "some"}),
@@ -86,6 +110,78 @@ SCENARIOS = [
      {"movies": "none", "episodes": "none", "refused": True}),
     ("delay-30-manual-cleanup", base(DELETE_DELAY_DAYS=30),
      {"movies": "some", "episodes": "some", "repeat": True}),
+    # The delay as it actually protects you. Every cleanup above is fired from
+    # the API and is therefore MANUAL, and manual ignores the delay by design —
+    # so until this landed, no scenario ever reached the mark-and-wait path and
+    # the engine never logged "MARKED for deletion" once in a full sweep.
+    # A scheduled run with a delay set must mark and delete NOTHING today.
+    ("delay-30-scheduled-marks-only", base(DELETE_DELAY_DAYS=30),
+     {"movies": "none", "episodes": "none", "scheduled": True, "marks": True}),
+    # Marking is only half of it. A mark that has aged past its delay has to be
+    # collected on the next scheduled run, or the delay is not a delay — it is
+    # a library that is never cleaned.
+    ("delay-marks-age-out-and-delete", base(DELETE_DELAY_DAYS=7),
+     {"movies": "some", "scheduled": True, "marks": True, "marks_due": True}),
+    # Under every limit, so a scheduled run must decline — and the two ways it
+    # declines are different code with different wording. Neither was reached
+    # by anything: a run that wrongly PROCEEDS here deletes from a library that
+    # was never over its cap.
+    ("under-cap-scheduled-nothing-to-do", base(cap_fraction=3.0),
+     {"movies": "none", "episodes": "none", "scheduled": True,
+      "log_has": "within all space limits. Nothing to do today."}),
+    # Same, but the day's window has already been spent. A different branch,
+    # and the one that must NOT claim the window was used up by this tick.
+    ("day-used-scheduled-nothing-to-do", base(cap_fraction=3.0),
+     {"movies": "none", "episodes": "none", "scheduled": True, "day_used": True,
+      "log_has": "within all space limits. Nothing to do."}),
+    # The same "nothing is over its limits" answer on the MANUAL side. The app
+    # refuses this before the engine starts, so the engine's own check only
+    # matters when the two disagree — which is the only time it matters at all.
+    ("under-cap-manual-nothing-to-do", base(cap_fraction=3.0),
+     {"movies": "none", "episodes": "none", "direct_manual": True,
+      "log_has": "within all space limits. Nothing to do."}),
+    # A scheduled run that arrives BEFORE the daily run time must wait, even
+    # with a breach in front of it. Nothing exercised that refusal, and a run
+    # firing early is a deletion nobody scheduled.
+    ("scheduled-before-run-time", base(run_time_ahead=True),
+     {"movies": "none", "episodes": "none", "scheduled": True, "waits": True}),
+    # Stopping. Every scenario above arms a cap at half the library, which
+    # makes the target BIGGER than everything the filters leave eligible — so
+    # the run takes the whole pool and the rule that stops it never fires.
+    # Deleting the stop condition outright therefore changed nothing anywhere,
+    # and the engine could empty a library instead of freeing a few GB with the
+    # entire table still green. These two arm a shallow cap so the target is a
+    # fraction of the pool, and the run has to stop with movies still standing.
+    # TV is off so the season side does not claim a share of the deficit and
+    # the movie target is the whole of it.
+    ("marks-stop-at-target",
+     base(cap_fraction=0.9, DELETE_DELAY_DAYS=30, TV_CLEANUP_ENABLED=False),
+     {"movies": "none", "episodes": "none", "scheduled": True, "marks": True}),
+    # The same ceiling one run later, on the deletions the marks become.
+    ("deletes-stop-at-target",
+     base(cap_fraction=0.9, TV_CLEANUP_ENABLED=False),
+     {"movies": "some", "episodes": "none", "scheduled": True, "marks": True,
+      "marks_due": True}),
+
+    # The safety floor, end to end. A cap below it would keep deleting until
+    # the library fits inside less than MAX_HEADROOM_PCT% of what is there —
+    # the one setting that can clear most of a library while working exactly as
+    # configured. Every other scenario runs the percentage at 100, which puts
+    # the floor at zero and no cap below it, so the refusal was never reached
+    # by anything. Run directly as a manual cleanup because the app blocks this
+    # state before the engine starts, and the engine's own check is the second
+    # line of defence for a library that grew after the cap was set.
+    ("cap-below-safety-floor-refuses",
+     base(cap_fraction=0.3, MAX_HEADROOM_PCT=15),
+     {"movies": "none", "episodes": "none", "direct_manual": True,
+      "log_has": "ABORT: Library Size Cap"}),
+
+    # Redline is the "space is critical, do not wait" override: it deletes
+    # immediately, delay or no delay. Armed above the free space that actually
+    # exists, so it fires on any machine.
+    ("redline-deletes-immediately",
+     base(DELETE_DELAY_DAYS=30, redline_x_free=2.0),
+     {"movies": "some", "scheduled": True}),
 
     # ── Library shapes ───────────────────────────────────────────────────────
     ("movies-only-library", {"movies": BASE_MOVIES, "shows": [], "monitor": ["movies"],
