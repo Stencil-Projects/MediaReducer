@@ -31,6 +31,19 @@ def sparse(path: Path, size: int) -> None:
         fh.truncate(size)
 
 
+def _ahead_hhmm() -> str:
+    """A daily run time ~90 minutes ahead of now, clamped at 23:59.
+
+    Computed rather than fixed so the suite can run at any hour — but 90
+    minutes past 22:30 crosses midnight, and a wrapped "00:56" is EARLIER
+    than now by the string comparison the engine's wait uses: the fixture
+    then poses "the run time already passed" and fails its own expectation
+    for the last 90 minutes of every day. The clamp shrinks the residual
+    flake window to the single minute of 23:59 itself."""
+    ahead = time.strftime("%H:%M", time.localtime(time.time() + 5400))
+    return ahead if ahead > time.strftime("%H:%M") else "23:59"
+
+
 def build(base: Path, spec: dict) -> dict:
     """Realize `spec` on disk. Returns the world the mock serves.
 
@@ -108,7 +121,8 @@ def build(base: Path, spec: dict) -> dict:
     monitor = spec.get("monitor", ["movies", "tv"])
     monitored_bytes = sum(f.stat().st_size for d in monitor
                           for f in (lib / d).rglob("*") if f.is_file()) if monitor else 0
-    _free_gb = shutil.disk_usage(lib).free / 1e9
+    _du = shutil.disk_usage(lib)
+    _free_gb, _total_gb = _du.free / 1e9, _du.total / 1e9
     cfg = {
         "RUN_MODE": "paused", "USE_PLEX": False, "USE_JELLYFIN": True,
         "JELLYFIN_URL": "http://127.0.0.1:0", "JELLYFIN_API_KEY": "k",
@@ -118,7 +132,16 @@ def build(base: Path, spec: dict) -> dict:
         # so a scenario asks for it as a multiple of whatever is free right now.
         # Above 1.0 the floor is already breached and the trigger fires on every
         # machine; None leaves it disarmed, which is the default everywhere else.
-        "REDLINE_GB": (round(_free_gb * float(spec["redline_x_free"]), 2)
+        #
+        # Capped strictly BELOW total capacity: the threshold validator refuses
+        # a redline above what the filesystem could ever hold, and on a host
+        # more than half free, 2x free is above total — the armed floor then
+        # failed validation and the run aborted before deleting anything,
+        # which read as "redline did not delete" on exactly the healthiest
+        # runners. The midpoint of free and total is always above free (still
+        # breached, still fires) and always below total (still valid).
+        "REDLINE_GB": (round(min(_free_gb * float(spec["redline_x_free"]),
+                                 (_free_gb + _total_gb) / 2), 2)
                        if spec.get("redline_x_free") else None),
         # A fraction of what is monitored, so a run has a real, reachable
         # deficit. Scenarios that need BOTH media types to be taken ask for a
@@ -139,8 +162,7 @@ def build(base: Path, spec: dict) -> dict:
         # asking for "not yet" gets a time ~90 minutes out — computed rather
         # than fixed, because a fixed late hour turns into a flake for anyone
         # running the suite at that hour.
-        "DAILY_RUN_TIME": (time.strftime("%H:%M", time.localtime(time.time() + 5400))
-                           if spec.get("run_time_ahead") else "00:00"),
+        "DAILY_RUN_TIME": (_ahead_hhmm() if spec.get("run_time_ahead") else "00:00"),
         "IMDB_RATINGS_URL": "http://127.0.0.1:9/never",
     }
     cfg.update(spec.get("config", {}))
