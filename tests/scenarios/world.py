@@ -31,17 +31,25 @@ def sparse(path: Path, size: int) -> None:
         fh.truncate(size)
 
 
-def _ahead_hhmm() -> str:
-    """A daily run time ~90 minutes ahead of now, clamped at 23:59.
+def wait_clock() -> tuple:
+    """(tz, hhmm) for the waits-for-the-run-time scenario: a synthetic POSIX
+    zone whose wall clock reads ~noon RIGHT NOW, and a run time 90 minutes
+    ahead on that clock.
 
-    Computed rather than fixed so the suite can run at any hour — but 90
-    minutes past 22:30 crosses midnight, and a wrapped "00:56" is EARLIER
-    than now by the string comparison the engine's wait uses: the fixture
-    then poses "the run time already passed" and fails its own expectation
-    for the last 90 minutes of every day. The clamp shrinks the residual
-    flake window to the single minute of 23:59 itself."""
-    ahead = time.strftime("%H:%M", time.localtime(time.time() + 5400))
-    return ahead if ahead > time.strftime("%H:%M") else "23:59"
+    Ahead-of-now cannot be posed on the real clock near midnight: at 23:59
+    no same-day future HH:MM exists at all, so first the computed time
+    wrapped ("00:56" reads as already-passed) and then the 23:59 clamp still
+    lost the final minute — CI fired at 23:59:07 and failed the scenario.
+    Moving the ENGINE's clock to noon (the harness exports this TZ to that
+    one subprocess; TIME_ZONE stays auto, so the env zone rules) makes "90
+    minutes ahead" exist at every real-world hour, with no residual window.
+
+    POSIX TZ offsets are hours WEST of UTC: local = UTC - offset, so noon
+    wants offset = utc_hour - 12 ("MRW11" at 23:00 UTC puts the wall clock
+    at 12:00)."""
+    now = time.gmtime()
+    minutes = 12 * 60 + now.tm_min + 90
+    return f"MRW{now.tm_hour - 12}", f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def build(base: Path, spec: dict) -> dict:
@@ -162,7 +170,7 @@ def build(base: Path, spec: dict) -> dict:
         # asking for "not yet" gets a time ~90 minutes out — computed rather
         # than fixed, because a fixed late hour turns into a flake for anyone
         # running the suite at that hour.
-        "DAILY_RUN_TIME": (_ahead_hhmm() if spec.get("run_time_ahead") else "00:00"),
+        "DAILY_RUN_TIME": (wait_clock()[1] if spec.get("run_time_ahead") else "00:00"),
         "IMDB_RATINGS_URL": "http://127.0.0.1:9/never",
     }
     cfg.update(spec.get("config", {}))

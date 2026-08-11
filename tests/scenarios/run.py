@@ -276,6 +276,10 @@ def run_scenario(name, spec, expect):
                     _c.execute("DELETE FROM meta WHERE key='last_cleanup_date'")
             _phase = "manual-direct" if expect.get("direct_manual") else "scheduled"
             env2 = dict(env, MEDIAREDUCER_MODE_OVERRIDE="headroom")
+            if expect.get("waits"):
+                # The engine's clock moves to the same synthetic noon the
+                # config's run time was computed on — see world.wait_clock.
+                env2["TZ"] = W.wait_clock()[0]
             if expect.get("direct_manual"):
                 env2["MEDIAREDUCER_MANUAL"] = "1"
             else:
