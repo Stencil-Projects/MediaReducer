@@ -94,7 +94,7 @@ CFG = {
 # drives the target.
 A.disk_stats = lambda: {"used_gb": 500.0, "total_gb": 1000.0, "free_gb": 500.0}
 A.library_stats = lambda: {"library_gb": 60.0}
-A._space_threshold_state = lambda cfg, disk, lib: {"safety_blocked": False}
+A._space_threshold_state = lambda cfg=None, disk=None, lib=None, **k: {"safety_blocked": False}
 
 # Media-server inventory (the fetchers have their own test): S2 was watched
 # two days ago (high keep), S1 never — so the 10 GB pool deficit takes S1 and
@@ -324,6 +324,33 @@ r = A._run_tv_cleanup_pass(dict(CFG, MAX_LIBRARY_GB=100), execute=True, immediat
 check("a manual cleanup still respects a season the plan stopped taking",
       not r["deleted_seasons"] and (S1 / "ep1.mkv").exists(), r)
 
+# ── A vanished season releases its claim on the deficit ────────────────────
+# It was priced into the pool at its server-reported size and the engine
+# subtracts that share from the MOVIE target before it runs. Freeing nothing
+# and clearing the mark without releasing the claim is not a wash: the movie
+# side under-covers the deficit by exactly those bytes, every day, and the
+# season is gone so nothing will ever free them. The report shape is pinned in
+# test_review_fixes; this is the consequence — the pass has to re-stamp.
+reset_files()
+reset_state()
+A._run_tv_cleanup_pass(CFG, execute=True)               # marks S1
+_st = A._tv_cleanup_state()
+_st["marked"][MARK_KEY]["marked_at"] -= 3 * 86400       # due
+A._save_tv_cleanup_state(_st)
+shutil.rmtree(S1)                                        # gone outside MediaReducer
+_stamps, _real_stamp = [], A._stamp_tv_share
+A._stamp_tv_share = lambda b: _stamps.append(b)
+try:
+    r = A._run_tv_cleanup_pass(CFG, execute=True)
+finally:
+    A._stamp_tv_share = _real_stamp
+check("a season whose files all vanished is counted vanished, not deleted",
+      r["vanished_seasons"] == 1 and not r["deleted_seasons"], r)
+check("...and the pass re-stamps the share so the engine stops reserving it",
+      _stamps and _stamps[-1] == 0, _stamps)
+check("...and the mark clears (the files really are gone)",
+      MARK_KEY not in A._tv_cleanup_state()["marked"])
+
 # ── Stop means stop, even mid-pass ──────────────────────────────────────────
 # The engine-kill can't reach this app-side loop; the stop event must.
 reset_files()
@@ -444,7 +471,7 @@ check("disarmed TV contributes zero eligible seasons however stale the state",
 # The space-safety refusal is a RUN-WIDE fact the thresholds module reports —
 # the season report holds (marks nothing) but carries NO user-facing abort.
 _orig_sts = A._space_threshold_state
-A._space_threshold_state = lambda cfg, disk, lib: {"safety_blocked": True}
+A._space_threshold_state = lambda cfg=None, disk=None, lib=None, **k: {"safety_blocked": True}
 r = A._run_tv_cleanup_pass(CFG, execute=True)
 A._space_threshold_state = _orig_sts
 check("the safety refusal holds the season side without a TV-specific abort",

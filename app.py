@@ -535,7 +535,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.17"
+APP_VERSION = "1.0.0-alpha.18"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -6895,6 +6895,48 @@ def api_debug_cache():
 
 _REPORT_SECRET_KEYS = ("TAUTULLI_API_KEY", "PLEX_TOKEN", "JELLYFIN_API_KEY",
                        "RADARR_API_KEY", "SONARR_API_KEY") + notify.SECRET_KEYS
+
+
+# The debug popups are share targets too — each has a Copy and a Download —
+# and they are the ones opened when something is broken, so their text is
+# largely server replies and interpolated exception messages. None of them
+# prints a credential on purpose; the risk is the accident, and a Plex URL
+# carries its token in the query string, so an error message that quotes a URL
+# quotes a token with it.
+#
+# Secrets only, deliberately: the full report replaces hostnames too, and doing
+# that here would blank out the exact thing these popups exist to show — which
+# host the app is talking to and whether that is the one you meant.
+#
+# Done as a response hook rather than at each `return jsonify(...)`, because
+# there are eleven of those and the twelfth is the one that would forget.
+_DEBUG_TEXT_PATHS = ("/api/debug/", "/api/collections")
+
+
+@app.after_request
+def _scrub_debug_secrets(response):
+    try:
+        if not request.path.startswith(_DEBUG_TEXT_PATHS):
+            return response
+        if not (response.content_type or "").startswith("application/json"):
+            return response
+        body = response.get_data(as_text=True)
+        cfg = load_config()
+        found = False
+        for key in _REPORT_SECRET_KEYS:
+            value = cfg.get(key)
+            for v in (value if isinstance(value, list) else [value]):
+                v = str(v or "").strip()
+                # Short values are not credentials and would maul ordinary text
+                # if replaced; every real key here is far longer.
+                if len(v) >= 8 and v in body:
+                    body = body.replace(v, f"<{key.lower()}>")
+                    found = True
+        if found:
+            response.set_data(body)
+    except Exception:
+        pass
+    return response
 _REPORT_URL_KEYS = ("TAUTULLI_URL", "PLEX_URL", "JELLYFIN_URL", "RADARR_URL",
                     "SONARR_URL", "IMDB_RATINGS_URL",
                     # The notification servers are the user's own hosts exactly

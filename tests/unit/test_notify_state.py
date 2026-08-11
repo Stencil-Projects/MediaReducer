@@ -38,7 +38,7 @@ def check(name, cond):
     ok = ok and cond
 
 sent: list = []
-notify._deliver = lambda urls, title, body: (sent.append((title, body)), (True, "stub"))[1]
+notify._deliver = lambda urls, title, body, **k: (sent.append((title, body)), (True, "stub"))[1]
 
 CFG = {"RUN_MODE": "headroom", "NOTIFY_ENABLED": True, "NOTIFY_ON_MARKED_CHANGES": True,
        "NOTIFY_ON_LOW_SPACE": True, "NOTIFY_SHOW_MOVIES": True, "NOTIFY_LOW_SPACE_GB": 25,

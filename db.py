@@ -679,8 +679,15 @@ def reset_store(db_path) -> None:
     exists. Missing files are ignored (a concurrent reset already removed them).
 
     Every sidecar is attempted even when one fails, and a failure is raised
-    rather than swallowed: a leftover -wal replays old rows back into the fresh
-    database, so a half-done reset is worse than a reported one."""
+    rather than swallowed: the caller is Clear Cache, and a reset that could
+    not remove the .db but reported success leaves the old plan in place under
+    a UI that has just said it is gone.
+
+    Not because of the -wal, which is what this used to say. An orphaned WAL
+    does NOT replay into the database that replaces it — its header salt no
+    longer matches, so SQLite discards it (checked, not assumed). The sidecars
+    are removed because a reset should leave nothing behind, not because
+    leaving one would resurrect rows."""
     with _init_lock:
         _initialized.discard(str(Path(db_path)))
         failed = []

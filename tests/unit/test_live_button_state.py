@@ -9,7 +9,7 @@ import app as A
 
 A._connection_health_for_ui = lambda cfg: {"critical_ok": True, "required_tooltip": ""}
 A._has_monitored_dirs = lambda cfg=None: True
-A._space_threshold_state = lambda cfg, disk=None: {
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: {
     "ok_for_simulate": True, "ok_for_cleanup": True,
     "simulate_tooltip": "", "cleanup_tooltip": "", "has_library_cap": False}
 A.library_stats = lambda: {"library_gb": 500}
@@ -40,7 +40,7 @@ st = A._cleanup_button_state(cfg, None)
 check("unknown disk fails open", st["simulate_disabled"] is False)
 
 # A real threshold problem keeps its own tooltip.
-A._space_threshold_state = lambda cfg, disk=None: {
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: {
     "ok_for_simulate": True, "ok_for_cleanup": False,
     "simulate_tooltip": "",
     "cleanup_tooltip": "Set a Headroom target, Redline, or Library Size Cap to enable Automatic Cleanup.",
@@ -51,7 +51,7 @@ check("simulate stays enabled alongside a live threshold problem", st["simulate_
 
 # Breached without a plan for the CURRENT thresholds: Cleanup ghosts (a manual
 # Cleanup deletes immediately), Simulate stays available to build the plan.
-A._space_threshold_state = lambda cfg, disk=None: {
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: {
     "ok_for_simulate": True, "ok_for_cleanup": True, "simulate_required": True,
     "simulate_required_message": "Over space limits — run Simulate to review the deletion plan first.",
     "simulate_tooltip": "", "cleanup_tooltip": "", "has_library_cap": False}

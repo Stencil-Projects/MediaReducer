@@ -130,7 +130,12 @@ A._rebuild_store_if_damaged(reason="test cleanup")
 seed_store()
 _held = sqlite3.connect(str(p), isolation_level=None)
 _held.execute("BEGIN EXCLUSIVE")
-check("a store locked by another writer is NOT called damaged",
+# This proves the probe reads THROUGH a live writer — WAL readers are not
+# blocked, so a busy store is judged on its contents like any other. It does
+# NOT reach the OperationalError arm, which is what the wording used to claim:
+# nothing here fails the open, so the branch is exercised in
+# test_store_mechanics by injecting the error the arm is named for.
+check("a store locked by another writer is judged on its contents, not its lock",
       db.store_is_readable(p) is True)
 check("and so it is not rebuilt out from under that writer",
       A._rebuild_store_if_damaged(reason="test") is False)
@@ -140,8 +145,13 @@ with db.connect(p) as conn:
     check("the locked store still holds its contents",
           db.get_meta(conn, "last_cleanup_date") == "2026-08-01")
 
+# A path that EXISTS and cannot be opened. A missing one returns at the
+# absent-store line above without ever attempting the open, which is how this
+# check used to pass while testing something else entirely.
+_undirectory = Path(_OUT) / "store-is-a-directory.db"
+_undirectory.mkdir(exist_ok=True)
 check("a store that cannot be opened at all is NOT called damaged",
-      db.store_is_readable(Path(_OUT, "no-such-dir", "x.db")) is True)
+      db.store_is_readable(_undirectory) is True)
 
 # ── A rebuild never runs while the engine has the store open ────────────────
 # The pre-run check has to sit INSIDE the run lock and past the busy guards:

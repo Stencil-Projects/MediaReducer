@@ -16,7 +16,7 @@ engine.PLEX_URL = "http://x"
 engine.PLEX_TOKEN = "t"
 engine._plex_movie_section_ids_direct = lambda: ["1"]
 # Plex answers fine but lists ZERO matching collections (renamed/deleted).
-engine.plex_request = lambda p: (200, {"MediaContainer": {"Directory": [
+engine.plex_request = lambda p, timeout=15: (200, {"MediaContainer": {"Directory": [
     {"title": "Some Other Collection", "ratingKey": "9"}]}})
 
 ok = True

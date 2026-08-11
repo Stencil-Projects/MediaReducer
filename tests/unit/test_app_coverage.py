@@ -39,12 +39,12 @@ def _fake_run_script(mode_override=None, manual=False):
 A.run_script = _fake_run_script
 A._refresh_connection_health_cache = lambda cfg=None, probe=True: {"critical_ok": True}
 A.disk_stats = lambda: {}
-A._space_threshold_state = lambda cfg=None, disk=None, **k: {
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: {
     "ok_for_simulate": True, "ok_for_cleanup": True, "simulate_required": False}
 A._has_monitored_dirs = lambda cfg=None: True
 # Skip the "already satisfied" precheck (degrade-don't-block else branch) so the
 # route proceeds straight to the launch regardless of disk state.
-A.run_summary_sync = lambda timeout=600: (False, "precheck skipped", {})
+A.run_summary_sync = lambda timeout=600, **k: (False, "precheck skipped", {})
 A._run_active = False
 
 client = A.app.test_client()

@@ -64,6 +64,38 @@ def snapshot(lib):
     return out
 
 
+def spec_files(spec):
+    """How many media files the spec asks to exist, twin copy included."""
+    n = len(spec.get("movies") or [])
+    for sh in spec.get("shows") or []:
+        eps = sum(int(sn.get("episodes", 6)) for sn in sh["seasons"])
+        n += eps
+        if (spec.get("twin") or ("", "", None))[2] == sh["name"]:
+            n += eps          # copytree'd into the second monitored tree
+    return n
+
+
+def check_fixture(name, spec, before):
+    """The library the scenario asked for is really on disk before it runs.
+
+    Eleven of these forty scenarios assert only that NOTHING was deleted —
+    grace holding everything back, a season too big to be a unit, two shows
+    the resolver must refuse to choose between. An EMPTY library satisfies
+    every one of those perfectly. So a fixture that quietly built nothing (a
+    renamed spec key, a builder that stopped laying files down) would not
+    fail: it would turn the strongest safety claims in the suite into passes
+    that prove the opposite of what they say.
+
+    Counted rather than merely non-empty, because the failure that matters is
+    partial — a show whose seasons never materialised while its movies did."""
+    want, got = spec_files(spec), len(before)
+    if got != want:
+        bad(name, "fixture", f"the spec asks for {want} media files, "
+                             f"the library holds {got} — the run below proves nothing")
+        return False
+    return True
+
+
 def wait_for_run(limit=300):
     """Wait for a just-POSTed run to START, then to finish.
 
@@ -265,6 +297,8 @@ def run_scenario(name, spec, expect):
 
         lib = base / "library"
         before = snapshot(lib)
+        if not check_fixture(name, spec, before):
+            return
         # Simulate then Cleanup is enough to judge one factor. The repeat cycle
         # costs as much again and only pays off where a SECOND pass can differ —
         # a stale plan, a re-mark, an already-satisfied target — so the scenarios

@@ -656,7 +656,7 @@ import importlib
 import notify as _notify
 importlib.reload(_notify)
 _fired = []
-_notify._deliver = lambda urls, t, b: (_fired.append(t), (True, "stub"))[1]
+_notify._deliver = lambda urls, t, b, **k: (_fired.append(t), (True, "stub"))[1]
 A.pending_deletion_entries = lambda cfg=None, with_lines=True: []
 A._read_run_report = lambda: {"mode": "simulate", "eligible_count": 5,
                               "marked_count": 0, "marked_items": []}

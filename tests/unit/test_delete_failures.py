@@ -48,7 +48,7 @@ def check(name, cond, extra=""):
 
 logged, issues, deleted_log = [], [], []
 E.log = lambda msg, *a, **k: logged.append(str(msg))
-E.record_issue = lambda kind, detail="": issues.append((kind, detail))
+E.record_issue = lambda kind, detail="", **k: issues.append((kind, detail))
 E.log_deleted = lambda title, path, size, **kw: deleted_log.append((title, str(path), size))
 
 n = 0

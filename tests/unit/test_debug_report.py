@@ -57,7 +57,7 @@ CFG = {
 
 A.load_config = lambda: dict(CFG)
 A.output_dir = lambda: tmp
-A._connection_health_state = lambda cfg, probe=False: {
+A._connection_health_state = lambda cfg=None, **k: {
     "critical_ok": False, "severity": "error",
     "plex_connected": False, "tautulli_connected": False,
     "jellyfin_connected": False, "radarr_connected": False,

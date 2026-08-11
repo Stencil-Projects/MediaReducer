@@ -31,7 +31,7 @@ A._refresh_connection_health_cache = lambda cfg, probe=True: {"critical_ok": Tru
 A.run_summary_sync = lambda *a, **k: (True, "ok", {"library_gb": 100.0})
 A.run_summary = lambda: (calls.__setitem__("summary", calls["summary"] + 1), (True, "ok"))[1]
 A.cached_disk_stats = lambda s=None: {"total_gb": 1000, "used_gb": 500, "free_gb": 500, "pct_used": 50}
-A._space_threshold_state = lambda cfg, disk, library_gb=None: dict(_threshold)
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: dict(_threshold)
 A._deletion_limits_exceeded = lambda cfg, disk, lib: False
 A.run_script = lambda *a, **k: calls.__setitem__("run", calls["run"] + 1)
 A._restart_schedule_clock = lambda: calls.__setitem__("clock", calls["clock"] + 1)

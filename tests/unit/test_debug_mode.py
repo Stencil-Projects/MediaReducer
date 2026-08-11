@@ -95,15 +95,15 @@ check("Debug Cleanup button surfaces no safety-percentage reason",
 
 # ── /api/run gating ──────────────────────────────────────────────────────────
 _launched = {}
-A.run_script = lambda mode_override=None, manual=False: (_launched.update(mode=mode_override) or (True, "started"))
+A.run_script = lambda mode_override=None, manual=False, scheduled=False: (_launched.update(mode=mode_override) or (True, "started"))
 A._refresh_connection_health_cache = lambda cfg=None, probe=True: {"critical_ok": True}
 A.disk_stats = lambda: {}
 A._has_monitored_dirs = lambda cfg=None: True
-A.run_summary_sync = lambda timeout=600: (False, "skip", {})   # degrade-don't-block → straight to launch
+A.run_summary_sync = lambda timeout=600, **k: (False, "skip", {})   # degrade-don't-block → straight to launch
 A._run_active = False
 # ok_for_simulate True but ok_for_cleanup False (over the 15% cap): debug_cleanup must
 # still run (it uses the Simulate gate); a real headroom run would be blocked.
-A._space_threshold_state = lambda cfg=None, disk=None, **k: {
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: {
     "ok_for_simulate": True, "ok_for_cleanup": False, "simulate_required": False,
     "cleanup_tooltip": "over the safety cap"}
 client = A.app.test_client()
@@ -121,14 +121,14 @@ check("a real live run is refused while Debug mode is on", r.status_code == 400)
 # simulate_required True (no Simulate yet, or settings moved) it is refused with a
 # "run Simulate first" hint instead of launching a run that can only say so.
 A.load_config = lambda: {"DEBUG_MODE": True, "OUTPUT_DIR": _OUT}
-A._space_threshold_state = lambda cfg=None, disk=None, **k: {
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: {
     "ok_for_simulate": True, "ok_for_cleanup": False, "simulate_required": True,
     "simulate_required_message": "Run Simulate first."}
 _launched.clear()
 r = client.post("/api/run", json={"mode": "debug_cleanup"}, headers=HDR)
 check("debug_cleanup is refused when no current plan exists (simulate_required)",
       r.status_code == 400 and _launched.get("mode") is None)
-A._space_threshold_state = lambda cfg=None, disk=None, **k: {
+A._space_threshold_state = lambda cfg=None, disk=None, library_gb=None, **k: {
     "ok_for_simulate": True, "ok_for_cleanup": False, "simulate_required": False,
     "cleanup_tooltip": "over the safety cap"}
 
