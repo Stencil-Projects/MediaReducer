@@ -147,9 +147,15 @@ check("a non-member stays unprotected", rows["Delta"]["protected"] is False)
 # ── _jellyfin_date_to_epoch, directly ────────────────────────────────────────
 check("blank/None date -> 0", E._jellyfin_date_to_epoch("") == 0 and E._jellyfin_date_to_epoch(None) == 0)
 check("garbage date -> 0 (never raises)", E._jellyfin_date_to_epoch("not-a-date") == 0)
+# Pinned to the ACTUAL epoch, not just to each other: the two neighbouring
+# checks above want 0, so comparing these two only proves they agree — a parser
+# that returned 0 for everything passed all three, and a "last played" of 0 is
+# a movie that reads as never watched.
+check("a UTC timestamp parses to its epoch",
+      E._jellyfin_date_to_epoch("2020-01-02T03:04:05Z") == 1577934245)
 check("fractional seconds and Z are ignored",
-      E._jellyfin_date_to_epoch("2020-01-02T03:04:05.999Z")
-      == E._jellyfin_date_to_epoch("2020-01-02T03:04:05Z"))
+      E._jellyfin_date_to_epoch("2020-01-02T03:04:05.999Z") == 1577934245
+      and E._jellyfin_date_to_epoch("2020-01-02T03:04:05") == 1577934245)
 
 # ── Fail-closed: a configured protected collection that isn't found aborts ────
 E.JELLYFIN_PROTECTED_COLLECTIONS = {"Nonexistent"}

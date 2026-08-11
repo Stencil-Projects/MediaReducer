@@ -49,6 +49,37 @@ check("an unmeasured library never trips the cap",
 check("junk numbers read as absent, not as zero-limit",
       S.pool_deficit_gb("x", "y", "z", "w") == 0.0)
 
+# ── The overshoot note ──────────────────────────────────────────────────────
+# Both executors print this and neither pinned it, so a threshold typed one
+# zero out silenced it everywhere and nothing said so. It is the only place a
+# run admits to taking more than it needed, and the reason it exists is that
+# nobody was subtracting two numbers in a log to notice.
+#
+# Both conditions have to hold, and they answer different questions: 1 GB of
+# excess is "is this worth a sentence", half the target again is "is this
+# proportionally bad". A 40 GB target overshot by 2 GB is neither.
+check("a run that took far more than it needed says so",
+      "40.0 GB" in S.overshoot_note(40 * GB, 2 * GB)
+      and "2.0 GB" in S.overshoot_note(40 * GB, 2 * GB)
+      and "38.0 GB more than needed" in S.overshoot_note(40 * GB, 2 * GB),
+      S.overshoot_note(40 * GB, 2 * GB))
+check("an ordinary run that lands a little past its goal says nothing",
+      S.overshoot_note(int(2.2 * GB), 2 * GB) == "",
+      S.overshoot_note(int(2.2 * GB), 2 * GB))
+check("...and neither does a big proportional overshoot of a tiny target",
+      S.overshoot_note(int(1.4 * GB), int(0.5 * GB)) == "",
+      S.overshoot_note(int(1.4 * GB), int(0.5 * GB)))
+check("...nor a big absolute overshoot that is still proportionally small",
+      S.overshoot_note(140 * GB, 100 * GB) == "", S.overshoot_note(140 * GB, 100 * GB))
+check("both thresholds are inclusive: exactly 1 GB over AND exactly half again speaks",
+      S.overshoot_note(3 * GB, 2 * GB) != "", S.overshoot_note(3 * GB, 2 * GB))
+check("...and a byte under either one is quiet",
+      S.overshoot_note(3 * GB - 1, 2 * GB) == ""
+      and S.overshoot_note(int(1.9 * GB), 1 * GB) == "")
+check("no target, an undershoot, or junk is never a note",
+      S.overshoot_note(40 * GB, 0) == "" and S.overshoot_note(0, 40 * GB) == ""
+      and S.overshoot_note(None, 2 * GB) == "" and S.overshoot_note("x", "y") == "")
+
 # ── The delay clock ─────────────────────────────────────────────────────────
 # Calendar days, not 24h blocks: 23:59 and 00:01 marks age the same.
 _jan1_late = time.mktime((2026, 1, 1, 23, 59, 0, 0, 0, -1))
@@ -106,6 +137,13 @@ check("no grace setting or no added date never holds",
       S.grace_rung(_now - 5 * 86400, 0, _now) is False
       and S.grace_rung(0, 30, _now) is False
       and S.grace_rung("junk", 30, _now) is False)
+# The edge, not just either side of it. 5 days against a 30-day grace and 40
+# days against it agree on every OFF-BY-ONE version of this rule, so the day
+# the grace actually ends went unpinned: a "30 day" grace that released on day
+# 29 passed. The IMDb cutoff above has this check; the grace period did not.
+check("the grace ends ON the day it names: a moment inside holds, exactly on releases",
+      S.grace_rung(_now - (30 * 86400 - 1), 30, _now) is True
+      and S.grace_rung(_now - 30 * 86400, 30, _now) is False)
 
 check("unplayed skip holds only unplayed items and only when on",
       S.unplayed_rung(0, True) is True and S.unplayed_rung(3, True) is False

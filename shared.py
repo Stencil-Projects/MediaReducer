@@ -24,6 +24,104 @@ import time as _time
 
 # ── The pool deficit ─────────────────────────────────────────────────────────
 
+# ── Numeric config domains ───────────────────────────────────────────────────
+# ONE table of what each numeric setting may be. The app and the engine have
+# genuinely different jobs with it — the app REFUSES a bad value (a save is
+# rejected, a hand-edited file is flagged and locks the run buttons), the
+# engine COERCES to something usable and records an error that aborts the run —
+# so their code stays separate. What must never differ is the rule itself, and
+# it used to: each side spelled the bounds out at its own call site, and they
+# had drifted apart on five keys. A null HEADROOM_GB was a lockout to the app
+# and a silent 0 (redline-only mode) to the engine; REDLINE_GB 0 was refused by
+# one and armed by the other; a fractional GRACE_PERIOD_DAYS or DELETE_DELAY_DAYS
+# was refused by the app and quietly truncated by the engine; and
+# IMDB_RATINGS_MAX_AGE_DAYS disagreed about whether 0 was allowed. The app is
+# the gate and the engine is what actually deletes, so a gate that disagrees
+# with the actor is not a gate.
+#
+# nullable means the setting has an OFF state written as null/blank — not that
+# a missing key is acceptable (an absent key falls back to its default before
+# it ever reaches here).
+_NUM = {
+    "HEADROOM_GB":              (0,      None, False, False, "must be a number of GB, zero or greater"),
+    "REDLINE_GB":               (0,      None, False, True,  "must be a number of GB above zero, or null"),
+    "MAX_HEADROOM_PCT":         (0,      100,  False, False, "must be a percentage above 0 and at most 100"),
+    "MAX_LIBRARY_GB":           (0,      None, False, True,  "must be a number of GB above zero, or null"),
+    "GRACE_PERIOD_DAYS":        (0,      None, True,  False, "must be a whole number of days, zero or greater"),
+    # Floor of 1: a marked movie is never deleted the same day, so 0 has no
+    # meaning here and the GUI never writes it.
+    "DELETE_DELAY_DAYS":        (1,      365,  True,  False, "must be a whole number of days from 1 to 365"),
+    "LOG_RETENTION_DAYS":       (0,      None, True,  False, "must be a whole number of days, zero or greater"),
+    "IMDB_RATINGS_MAX_AGE_DAYS": (1,     None, False, False, "must be a number of days, one or greater"),
+    "SCORE_BALANCE":            (0,      100,  False, False, "must be a number from 0 to 100"),
+    "MAX_IMDB_RATING":          (0,      10,   False, True,  "must be a number from 0 to 10, or null"),
+    "NEAR_TIE_PTS":             (0.5,    25,   False, True,  "must be a number from 0.5 to 25 points, or null"),
+    "TV_SERIES_WATCH_BUMP":     (0,      25,   False, False, "must be a number of points from 0 to 25"),
+    "TV_WATCH_WEIGHT":          (100,    200,  False, False, "must be a percentage from 100 to 200"),
+    # 0 is the off switch: no season is ever too big. The GUI writes it, so
+    # unlike DELETE_DELAY_DAYS's 0 this is a real value, not a lockout.
+    "TV_MAX_SEASON_EPISODES":   (0,      999,  True,  False, "must be a whole number of episodes from 0 to 999 (0 turns it off)"),
+    "MAX_STALENESS_MONTHS":     (1,      120,  False, False, "must be a number of months from 1 to 120"),
+}
+# Keys whose minimum is a floor the value must stay ABOVE rather than reach.
+# Spelled here rather than as a fractional bound (the engine used 0.000001 for
+# the percentage) so the rule reads as what it means.
+_EXCLUSIVE_MIN = {"REDLINE_GB", "MAX_HEADROOM_PCT", "MAX_LIBRARY_GB"}
+
+NUMERIC_KEYS = tuple(_NUM)
+
+
+def numeric_rule(key):
+    """(min, max, integer, nullable, text) for a numeric setting, or None when
+    the key is not one."""
+    return _NUM.get(key)
+
+
+def is_blank(value) -> bool:
+    """The spellings of "not set" a config file or a form field can carry."""
+    return value is None or (isinstance(value, str)
+                             and value.strip().lower() in ("", "none", "null"))
+
+
+def coerce_number(key, raw):
+    """(value, error) for one numeric setting, against the one rule table.
+
+    value is the number to use — int when it is whole, None for a nullable
+    setting that is switched off — and is None whenever there is an error, so a
+    caller that ignores the error cannot accidentally use a rejected value.
+    error is the human sentence, or "" when the value is fine.
+
+    Bools are refused rather than read as 0/1: JSON true in a threshold is a
+    mistake, and silently arming a 1 GB floor from it is the wrong direction.
+    """
+    rule = _NUM.get(key)
+    if rule is None:
+        return None, ""
+    low, high, integer, nullable, text = rule
+    if is_blank(raw):
+        return (None, "") if nullable else (None, text)
+    if isinstance(raw, bool):
+        return None, text
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, text
+    # inf/nan slip past every comparison below (nan fails them all, and a
+    # bound-less field never catches inf), so they go first.
+    if value != value or value in (float("inf"), float("-inf")):
+        return None, text
+    if key in _EXCLUSIVE_MIN:
+        if value <= low:
+            return None, text
+    elif value < low:
+        return None, text
+    if high is not None and value > high:
+        return None, text
+    if integer and not float(value).is_integer():
+        return None, text
+    return (int(value) if float(value).is_integer() else value), ""
+
+
 def pool_deficit_gb(used_gb, used_limit_gb, library_gb, cap_gb) -> float:
     """GB a day's deletions must free: the LARGER of the headroom overage
     (used space past its limit) and the Library Size Cap overage (the cap

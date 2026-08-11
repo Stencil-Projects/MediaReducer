@@ -123,8 +123,8 @@ check("...so the gate reads the RECORDED rung, not the re-resolution",
 series = lib / "tv" / "Gone Show"
 series.mkdir(parents=True)
 orig_rel, orig_json = A._tv_season_relpaths, A._json_request
-A._tv_season_relpaths = lambda cfg, sid, n: ([(Path("Season 1/e1.mkv"), 100),
-                                              (Path("Season 1/e2.mkv"), 100)], None)
+A._tv_season_relpaths = lambda cfg, sid, n, name="": ([(Path("Season 1/e1.mkv"), 100),
+                                                       (Path("Season 1/e2.mkv"), 100)], None)
 A._json_request = lambda *a, **k: None
 report = {"skipped": [], "deleted_seasons": [], "deleted_files": 0,
           "freed_bytes": 0, "vanished_seasons": 0, "vanished_bytes": 0}

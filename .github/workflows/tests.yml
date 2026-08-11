@@ -82,13 +82,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyflakes pyyaml
 
-      - name: Install Playwright
+      - name: Install Playwright and ESLint
         # Pinned like requirements.txt: a browser-automation library that moves
         # under CI turns an unrelated change into a red build. Bump deliberately.
         # package.json/package-lock.json are gitignored, so this is a fresh
         # install every run rather than a restored lockfile.
+        #
+        # ESLint is not a runtime dependency either. test_js_lint skips itself
+        # without it, so install it here or that test quietly does nothing —
+        # the same arrangement as pyflakes above, for the same reason.
         run: |
-          npm install --no-save playwright@1.61.1
+          npm install --no-save playwright@1.61.1 eslint@10.1.0
           npx playwright install --with-deps chromium
 
       - name: Point the tests at the browser that was just installed

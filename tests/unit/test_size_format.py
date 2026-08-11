@@ -75,7 +75,7 @@ check("every reclaimed size has exactly one decimal",
 # The "nothing reclaimed yet" zero is written as a literal in three places and
 # must match what the formatter produces for zero, or one zero prints two ways.
 zero = r(0)
-for rel in ("templates/dashboard.html", "app.py"):
+for rel in ("templates/dashboard.html", "static/js/dashboard.js", "app.py"):
     text = (ROOT / rel).read_text()
     stale = re.findall(r"""['"]0 GB['"]""", text)
     check(f"{rel} has no stale '0 GB' literal beside a '{zero}' formatter",

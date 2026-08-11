@@ -132,38 +132,40 @@ check("a played movie with no history rows still counts one viewer",
 check("an unplayed movie counts none",
       E._distinct_users_for_row({"play_count": 0, "_plex_users": 0}) == 0)
 
-# ── Config coercion helpers ──────────────────────────────────────────────────
+# ── Config coercion ──────────────────────────────────────────────────────────
+# The bounds themselves are shared with the app and their agreement is pinned
+# in test_config_rule_parity; what belongs here is the ENGINE's half of the
+# contract — that a rejected value records an error (which aborts a simulation
+# or a cleanup) and falls back to the caller's default rather than to None.
 E.CONFIG_ERRORS = []
-check("_coerce_config_number parses an int-valued float to int",
-      E._coerce_config_number("5.0", "X") == 5)
-check("_coerce_config_number keeps a real fractional value",
-      E._coerce_config_number("2.5", "X") == 2.5)
-check("_coerce_config_number rejects non-numbers to the default",
-      E._coerce_config_number("abc", "X", default=7) == 7 and "X must be a number." in E.CONFIG_ERRORS)
+check("a whole-numbered value comes back as an int",
+      E._num("SCORE_BALANCE", "50.0") == 50)
+check("a genuinely fractional value keeps its fraction",
+      E._num("NEAR_TIE_PTS", "2.5") == 2.5)
+check("a non-number takes the default AND records an error",
+      E._num("SCORE_BALANCE", "abc", default=7) == 7 and E.CONFIG_ERRORS)
 E.CONFIG_ERRORS = []
-check("_coerce_config_number enforces min",
-      E._coerce_config_number("-1", "X", min_value=0, default=0) == 0 and E.CONFIG_ERRORS)
+check("an out-of-range value takes the default AND records an error",
+      E._num("SCORE_BALANCE", "-1", default=0) == 0 and E.CONFIG_ERRORS)
 E.CONFIG_ERRORS = []
-check("_coerce_config_number allow_none maps blank to None",
-      E._coerce_config_number("", "X", allow_none=True) is None)
+check("a blank value is None for a setting that can be switched off",
+      E._num("NEAR_TIE_PTS", "") is None and not E.CONFIG_ERRORS)
+check("...and an error for one that cannot",
+      E._num("SCORE_BALANCE", "", default=50) == 50 and E.CONFIG_ERRORS)
 # The scripted-POST non-finite vector: a hand-edited Infinity/NaN must be
 # rejected OUTRIGHT — even a bound-less field would otherwise let it through
 # (every comparison with nan is False, and inf passes any lone lower bound).
 E.CONFIG_ERRORS = []
-check("_coerce_config_number rejects inf outright (no bound needed)",
-      E._coerce_config_number("1e999", "X", default=0) == 0 and E.CONFIG_ERRORS)
+check("inf is rejected outright, even where no upper bound applies",
+      E._num("HEADROOM_GB", "1e999", default=0) == 0 and E.CONFIG_ERRORS)
 E.CONFIG_ERRORS = []
-check("_coerce_config_number rejects nan outright",
-      E._coerce_config_number("NaN", "X", default=0) == 0 and E.CONFIG_ERRORS)
+check("nan is rejected outright",
+      E._num("HEADROOM_GB", "NaN", default=0) == 0 and E.CONFIG_ERRORS)
 E.CONFIG_ERRORS = []
-check("_coerce_config_positive_or_none rejects a non-finite value",
-      E._coerce_config_positive_or_none("Infinity", "Y", default=None) is None and E.CONFIG_ERRORS)
-
-check("_coerce_config_positive_or_none maps blank/none to None",
-      E._coerce_config_positive_or_none("none", "Y") is None)
+check("the error names the setting, so the log says which one to fix",
+      E._num("SCORE_BALANCE", "abc", default=0) == 0
+      and E.CONFIG_ERRORS and E.CONFIG_ERRORS[0].startswith("SCORE_BALANCE "))
 E.CONFIG_ERRORS = []
-check("_coerce_config_positive_or_none rejects <= 0",
-      E._coerce_config_positive_or_none("0", "Y", default=None) is None and E.CONFIG_ERRORS)
 
 check("_coerce_string_list splits comma/newline strings, trims, dedups",
       E._coerce_string_list("a, b\nb , c", "L") == ["a", "b", "c"])

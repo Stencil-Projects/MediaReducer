@@ -100,6 +100,22 @@ check("a pool within its cap takes nothing",
       not takes0 and share0["target_bytes"] == 0
       and share0["tv_share_bytes"] == 0, share0)
 
+# An EXACT score tie goes to the LARGER item, which the merge states and
+# nothing checked. It decides how many things a run destroys to free the same
+# bytes: with a 3 GB deficit and two equally-scored candidates, taking the 6 GB
+# season ends the run, while taking the 4 GB movie first would need a second
+# item for the rest. Same score means the pool has nothing left to prefer with,
+# so the tiebreak is "fewest units disturbed".
+A.library_stats = lambda: {"library_gb": 103.0}
+db.read_pending_doc = lambda p: {"entries": {
+    "/m/tie.mkv": {"score": 10.0, "size_bytes": 4 * GB}}}
+tied = season(10.0, 7)
+tied["size_bytes"] = 6 * GB
+takes_tie, share_tie = A._merged_pool_takes([tied], CFG)
+check("an exact score tie is taken larger-first, so one item covers the deficit",
+      share_tie["target_bytes"] == 3 * GB and share_tie["tv_share_bytes"] == 6 * GB
+      and share_tie["movie_share_bytes"] == 0 and tied["take"] is True, share_tie)
+
 # No movie plan yet: seasons alone cover what they can.
 A.library_stats = lambda: {"library_gb": 110.0}
 db.read_pending_doc = lambda p: {}

@@ -59,7 +59,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from scoring_constants import SCORING, FINGERPRINT as SCORING_FINGERPRINT, season_retention_score
 from flask import (Flask, g, has_request_context, jsonify, render_template, request,
-                   send_from_directory)
+                   send_from_directory, url_for)
 
 import db  # shared SQLite persistence (metadata cache, library snapshot, queue, meta)
 import notify  # best-effort outbound alerting (apprise wrapper); never raises
@@ -355,33 +355,64 @@ def _security_headers(response):
     return response
 
 
-@app.after_request
-def _cache_vendor_assets(response):
-    """Let the browser keep the vendored Bootstrap/Inter files forever.
+# Files whose bytes behind a URL never change, so the browser can keep them
+# forever. Two ways to earn that: static/vendor pins its version in the
+# filename, and this app's own scripts carry a content stamp from asset_url().
+_IMMUTABLE_STATIC = ("/static/vendor/", "/static/js/")
 
-    Everything under static/vendor is third-party and version-pinned in its
-    filename, so the bytes behind a URL never change — which is exactly what
-    "immutable" promises. Without it Flask revalidates each one on every
-    navigation, turning a cached asset back into a round trip."""
+
+@app.template_global()
+def asset_url(filename: str) -> str:
+    """A /static URL for one of this app's own files, stamped with its content.
+
+    The vendored files pin a version in the name; ours cannot, because they
+    change with every edit. Without a stamp the browser has to revalidate each
+    one on every navigation — the round trips this app moved into the page in
+    the first place — and with a stamp that is only the release version, a fix
+    published without a version bump is served from cache and the page runs
+    yesterday's code. The size and modification time answer both: a changed
+    file is a different URL, and an unchanged one is never refetched."""
+    url = url_for("static", filename=filename)
     try:
-        if request.path.startswith("/static/vendor/") and response.status_code == 200:
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        st = (Path(app.static_folder) / filename).stat()
+    except OSError:
+        return url
+    return f"{url}?v={st.st_size:x}-{int(st.st_mtime):x}"
+
+
+@app.after_request
+def _cache_static_assets(response):
+    """Let the browser keep the version-pinned and content-stamped files forever.
+
+    Both kinds carry their identity in the URL, so the bytes behind one never
+    change — which is exactly what "immutable" promises. Without it Flask
+    revalidates each on every navigation, turning a cached asset back into a
+    round trip. Our own files only qualify when the request actually carries
+    the stamp: a hand-typed /static/js/base.js has no identity in it, and
+    caching that for a year is how a stale script outlives the container."""
+    try:
+        if response.status_code != 200 or not request.path.startswith(_IMMUTABLE_STATIC):
+            return response
+        if request.path.startswith("/static/js/") and not request.args.get("v"):
+            return response
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     except Exception:
         pass
     return response
 
 
-# Vendored CSS/JS compressed once and kept, keyed by file identity. Flask serves
+# Static CSS/JS compressed once and kept, keyed by file identity. Flask serves
 # static files in passthrough mode, which the hook below would otherwise skip —
-# leaving Bootstrap's 233 KB uncompressed on the one load that matters most.
-# Only the few text files land here; woff2 is already compressed and its media
-# type isn't in the list above, so it never reaches this.
+# leaving Bootstrap's 233 KB uncompressed on the one load that matters most,
+# and this app's own scripts (another ~350 KB) beside it. Only the text files
+# land here; woff2 is already compressed and its media type isn't in the list
+# above, so it never reaches this.
 _static_gzip_cache: dict = {}
 _static_gzip_lock = threading.Lock()
 
 
 def _gzipped_static(url_path: str):
-    """The gzipped bytes of a vendored static file, or None if it can't be read.
+    """The gzipped bytes of a static file, or None if it can't be read.
     Read from disk rather than off the response, which is a passthrough wrapper."""
     try:
         fp = Path(app.static_folder) / url_path[len("/static/"):]
@@ -410,8 +441,11 @@ def _compress_response(response):
     2 KB more, and the page is served on every navigation. Skipped for
     already-encoded responses, and for streamed ones — a direct_passthrough body
     (send_from_directory for an archived log) must reach the client untouched.
-    The vendored static files are the exception: they are passthrough too, but
-    they are few, never change, and are compressed once into the memo above."""
+    The immutable static files are the exception: they are passthrough too, but
+    they are few, change only when the URL does, and are compressed once into
+    the memo above. That exception is what keeps this app's own scripts from
+    going over the wire uncompressed now that they are files rather than markup
+    inside an already-gzipped page."""
     try:
         if (response.status_code < 200 or response.status_code >= 300
                 or "Content-Encoding" in response.headers):
@@ -420,7 +454,7 @@ def _compress_response(response):
         if not ctype.startswith(_COMPRESSIBLE_TYPES):
             return response
         if response.direct_passthrough:
-            if not request.path.startswith("/static/vendor/"):
+            if not request.path.startswith(_IMMUTABLE_STATIC):
                 return response
             response.headers.add("Vary", "Accept-Encoding")
             if "gzip" not in (request.headers.get("Accept-Encoding") or "").lower():
@@ -501,7 +535,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.16"
+APP_VERSION = "1.0.0-alpha.17"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -692,31 +726,9 @@ def _config_num(value):
 # Numeric GUI rules: key, skip-mode for the disabled spelling (None = value
 # required when the key is present, "null" = literal null allowed, "blank" =
 # null or blank string allowed), acceptance test, message.
-_CONFIG_NUM_RULES = (
-    ("HEADROOM_GB", None, lambda n: n >= 0, "must be a number of GB, zero or greater"),
-    ("REDLINE_GB", "null", lambda n: n > 0, "must be a number of GB above zero, or null"),
-    ("MAX_HEADROOM_PCT", None, lambda n: 0 < n <= 100, "must be a percentage above 0 and at most 100"),
-    ("MAX_LIBRARY_GB", "null", lambda n: n > 0, "must be a number of GB above zero, or null"),
-    ("GRACE_PERIOD_DAYS", None, lambda n: n >= 0 and float(n).is_integer(), "must be a whole number of days, zero or greater"),
-    # Floor of 1 (a marked movie is never deleted the same day), so 0 has no valid
-    # meaning — the GUI never writes it. A hand-edited 0 locks out like any other
-    # out-of-range edit rather than being silently reinterpreted.
-    ("DELETE_DELAY_DAYS", None, lambda n: 1 <= n <= 365 and float(n).is_integer(), "must be a whole number of days from 1 to 365"),
-    ("LOG_RETENTION_DAYS", None, lambda n: n >= 0, "must be a number of days, zero or greater"),
-    ("IMDB_RATINGS_MAX_AGE_DAYS", None, lambda n: n >= 1, "must be a number of days, one or greater"),
-    ("SCORE_BALANCE", None, lambda n: 0 <= n <= 100, "must be a number from 0 to 100"),
-    # 0 is accepted as a disabled spelling (a cutoff of 0 matches nothing, so the
-    # clamp reads it as None); the GUI writes null, not 0.
-    ("MAX_IMDB_RATING", "blank", lambda n: 0 <= n <= 10, "must be a number from 0 to 10, or null"),
-    ("NEAR_TIE_PTS", "blank", lambda n: 0.5 <= n <= 25, "must be a number from 0.5 to 25 points, or null"),
-    ("TV_SERIES_WATCH_BUMP", None, lambda n: 0 <= n <= 25, "must be a number of points from 0 to 25"),
-    ("TV_WATCH_WEIGHT", None, lambda n: 100 <= n <= 200, "must be a percentage from 100 to 200"),
-    # 0 is the off switch: no season is ever too big. The GUI writes it, so
-    # unlike DELETE_DELAY_DAYS's 0 this is a real value, not a lockout.
-    ("TV_MAX_SEASON_EPISODES", None, lambda n: 0 <= n <= 999 and float(n).is_integer(),
-     "must be a whole number of episodes from 0 to 999 (0 turns it off)"),
-    ("MAX_STALENESS_MONTHS", None, lambda n: 1 <= n <= 120, "must be a number of months from 1 to 120"),
-)
+# The numeric rules live in shared.py so the engine cannot disagree with them —
+# see the table there for why. This side's job is to REFUSE: a bad value fails
+# the save and flags the file, which locks the run buttons until it is fixed.
 
 
 def _config_file_issues(saved: dict) -> list[dict]:
@@ -728,15 +740,12 @@ def _config_file_issues(saved: dict) -> list[dict]:
     def bad(key, message):
         issues.append({"key": key, "message": message})
 
-    for key, skip, ok, message in _CONFIG_NUM_RULES:
+    for key in shared.NUMERIC_KEYS:
         if key not in saved:
-            continue
-        v = saved[key]
-        if (skip == "null" and v is None) or (skip == "blank" and _is_blank(v)):
-            continue
-        n = _config_num(v)
-        if n is None or not ok(n):
-            bad(key, message)
+            continue          # absent keys take their default, never an error
+        _v, err = shared.coerce_number(key, saved[key])
+        if err:
+            bad(key, err)
     # Cross-field check on the EFFECTIVE values (defaults fill missing keys, so
     # deleting HEADROOM_GB can't smuggle in an oversized redline). Skipped while
     # either field is itself flagged: its range message already covers it, and
@@ -4979,7 +4988,8 @@ def _tv_log_deleted(entry: dict, path, size_bytes: int) -> None:
         pass   # the file is already gone; the record is best-effort
 
 
-def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None]:
+def _tv_season_relpaths(cfg: dict, sid: str, season_n,
+                        series_name: str = "") -> tuple[list, str | None]:
     """The season's episode files as (path RELATIVE to the series folder,
     byte size the server reports or 0), freshly listed by the media server
     that indexed the row (never from the stored inventory). The size lets the
@@ -4987,7 +4997,10 @@ def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None
     is the authority for what actually gets freed. Returns (files, error):
     any gap — the server not answering, no series path, a file outside the
     series folder — comes back as an error string and the caller skips the
-    season, fail closed."""
+    season, fail closed.
+
+    series_name is what the series folder is called on OUR side. It is only
+    consulted when Plex states no folder of its own; see below."""
     conn = _effective_connection_values(cfg)
     base, files = "", []
 
@@ -5042,8 +5055,21 @@ def _tv_season_relpaths(cfg: dict, sid: str, season_n) -> tuple[list, str | None
                         if isinstance(p, dict) and p.get("file"):
                             files.append((str(p["file"]), _size(p.get("size"))))
             if not base and files:
-                parent = PurePosixPath(files[0][0]).parent
-                base = str(parent.parent if parent.parent.name else parent)
+                # Plex states no Location for the series, so the folder these
+                # paths are relative TO has to come from the paths themselves.
+                # It is identified rather than guessed: walk up from an episode
+                # to the ancestor named the same as our series folder.
+                #
+                # Counting a fixed two levels up instead was right for a
+                # library with season folders and wrong for a flat one, where
+                # it landed above the series. Every relative path then carried
+                # the series name twice, nothing matched on disk, and the
+                # season was recorded as already gone with its episodes still
+                # sitting there — the mark cleared and nothing freed.
+                for parent in PurePosixPath(files[0][0]).parents:
+                    if parent.name and parent.name == series_name:
+                        base = str(parent)
+                        break
         else:
             return [], "no usable media-server id"
     except Exception as e:
@@ -5169,7 +5195,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
     # 2) The season's files, as the media server that indexed the series
     #    knows them — relative paths joined to OUR resolved series folder
     #    (the server's absolute paths are in its own container namespace).
-    rels, err = _tv_season_relpaths(cfg, sid, entry.get("season"))
+    rels, err = _tv_season_relpaths(cfg, sid, entry.get("season"), series_dir.name)
     if err:
         return skip(err)
 

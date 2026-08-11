@@ -552,11 +552,11 @@ reset_files()
 # logs, docs — speaks that way. A reintroduced "TV pass" fails here.
 _root = Path(__file__).resolve().parents[2]
 _offenders = []
-for _rel in ("templates", "app.py", "engine.py", "notify.py", "shared.py",
-             "README.md", "ARCHITECTURE.md"):
+for _rel in ("templates", "static/js", "app.py", "engine.py", "notify.py",
+             "shared.py", "README.md", "ARCHITECTURE.md"):
     _p = _root / _rel
     for f in ([_p] if _p.is_file() else sorted(_p.rglob("*"))):
-        if f.is_file() and f.suffix in {".py", ".html", ".md"} \
+        if f.is_file() and f.suffix in {".py", ".html", ".md", ".js"} \
                 and "tv pass" in f.read_text(errors="replace").lower():
             _offenders.append(str(f.relative_to(_root)))
 check("the words 'TV pass' appear nowhere users read", not _offenders, _offenders)

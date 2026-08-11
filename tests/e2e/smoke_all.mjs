@@ -248,7 +248,14 @@ for (const path of ['/', '/config', '/explorer']) {
       renderProgress({ schema: 1, status: 'done', phase: 'done', mode: 'debug_sim',
         stage: 'DRY RUN SUMMARY', scanned: 2880, eligible: 2201, deleted: 0,
         bytes_freed: 0, message: 'Dry run.' });
-      const arrow = el => (getComputedStyle(el, '::after').content || '').includes('↖');
+      // The mark is a masked shape, not a glyph, so its presence is the mask
+      // rather than the ::after content — an element with no ::after at all
+      // reports 'none' for both, which is what the inert box below relies on.
+      const arrow = el => {
+        const cs = getComputedStyle(el, '::after');
+        const m = cs.maskImage || cs.webkitMaskImage || 'none';
+        return m !== 'none' && m.includes('svg');
+      };
       const box = id => {
         const el = document.getElementById(id);
         return { jumpable: el.classList.contains('log-jumpable'), arrow: arrow(el) };

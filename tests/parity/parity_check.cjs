@@ -1,13 +1,19 @@
 // Engine <-> Score Explorer scoring parity: replays the grid produced by
-// gen_py_scores.py through the page's ACTUAL JS (extracted from the
-// template) and fails on any drift > 0.01 points.
+// gen_py_scores.py through the page's ACTUAL JS and fails on any drift > 0.01
+// points.
+//
+// Three functions are lifted out of explorer.js and eval'd, rather than the
+// file being required: it is a classic script written for a browser, so
+// loading the whole of it here would want a DOM. Lifting them is what makes
+// this a check on the shipped code instead of on a copy of it.
+//
 // Usage: node parity_check.cjs <dir-with-scoring.json-and-py_scores.json>
 const { readFileSync } = require('fs');
 const path = require('path');
 
 const dataDir = process.argv[2] || '.';
 const repoRoot = path.join(__dirname, '..', '..');
-const html = readFileSync(path.join(repoRoot, 'templates', 'deletion_score_explorer.html'), 'utf8');
+const html = readFileSync(path.join(repoRoot, 'static', 'js', 'explorer.js'), 'utf8');
 const SCORING = JSON.parse(readFileSync(path.join(dataDir, 'scoring.json'), 'utf8'));
 const py = JSON.parse(readFileSync(path.join(dataDir, 'py_scores.json'), 'utf8'));
 

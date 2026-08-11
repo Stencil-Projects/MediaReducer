@@ -84,6 +84,13 @@ check("...and the other size picks the other copy",
 check("a size matching NEITHER copy resolves nothing (never guess)",
       E.resolve_under_library("/films/Heat (1995)/Heat (1995).mkv",
                               expected_size=42) is None)
+# ...and a size matching BOTH resolves nothing either. Heat's two copies differ
+# in size, so they can never reach this arm; the twins can, and until now only
+# the (filename, size) rescue below was ever asked to refuse them. Taking the
+# first of two files the server cannot tell apart deletes a coin flip.
+check("a size matching BOTH copies is still never guessed between",
+      E.resolve_under_library("/films/Twin (2021)/Twin (2021).mkv",
+                              expected_size=400) is None)
 
 # ── Flat server layouts: the root name is a weak folder identity ────────────
 # A server that sees files FLAT ("/movies/Flat Film.mkv") reports its mount

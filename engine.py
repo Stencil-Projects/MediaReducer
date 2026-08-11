@@ -2001,49 +2001,21 @@ def _monitor_dirs_from_config(cfg):
     return monitor_dirs
 
 
-def _coerce_config_number(raw, name, *, allow_none=False, min_value=None, max_value=None, default=None):
-    """Coerce numeric config values safely and record manual-edit errors."""
-    if raw is None or (allow_none and str(raw).strip().lower() in ("", "none", "null")):
-        return None if allow_none else default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        CONFIG_ERRORS.append(f"{name} must be a number.")
-        return default
-    if not math.isfinite(value):
-        # inf/nan slip past the min/max comparisons below (every comparison with
-        # nan is False, and a bound-less field never catches inf), so reject them
-        # up front — a hand-edited "Infinity"/"NaN" must not become a threshold.
-        CONFIG_ERRORS.append(f"{name} must be a finite number.")
-        return default
-    if min_value is not None and value < min_value:
-        CONFIG_ERRORS.append(f"{name} must be {min_value} or greater.")
-        return default
-    if max_value is not None and value > max_value:
-        CONFIG_ERRORS.append(f"{name} must be {max_value} or lower.")
-        return default
-    if float(value).is_integer():
-        return int(value)
-    return value
+def _num(name, raw, *, default=None):
+    """One numeric setting, judged by the SHARED rule table and recorded as a
+    config error when it fails.
 
-
-def _coerce_config_positive_or_none(raw, name, *, default=None):
-    """Coerce optional positive numeric config values safely."""
-    if raw is None or str(raw).strip().lower() in ("", "none", "null"):
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        CONFIG_ERRORS.append(f"{name} must be a number, or null to disable it.")
+    The bounds used to be spelled out at each call site here and again in the
+    app's validator, and the two had drifted on five keys — the app refusing
+    what this silently accepted and used. Now both read the same table, so a
+    value the Configuration page will not save is a value this will not run on.
+    A rejected value falls back to `default` AND leaves an error behind, which
+    aborts simulation and live cleanup (Summary still reports so the reason is
+    visible)."""
+    value, err = shared.coerce_number(name, raw)
+    if err:
+        CONFIG_ERRORS.append(f"{name} {err}.")
         return default
-    if not math.isfinite(value):
-        CONFIG_ERRORS.append(f"{name} must be a finite number, or null to disable it.")
-        return default
-    if value <= 0:
-        CONFIG_ERRORS.append(f"{name} must be greater than zero, or null to disable it.")
-        return default
-    if float(value).is_integer():
-        return int(value)
     return value
 
 
@@ -2146,8 +2118,8 @@ def _load_config_from_file():
     _PLAN_CONFIG_RAW["_SCORING_CURVES"] = SCORING_FINGERPRINT
 
     if "RUN_MODE"                   in _c: RUN_MODE                   = _c["RUN_MODE"]
-    if "HEADROOM_GB"                in _c: HEADROOM_GB                = _coerce_config_number(_c["HEADROOM_GB"], "HEADROOM_GB", min_value=0, default=0)
-    if "REDLINE_GB"                 in _c: REDLINE_GB                 = _coerce_config_number(_c["REDLINE_GB"], "REDLINE_GB", allow_none=True, min_value=0, default=None)
+    if "HEADROOM_GB"                in _c: HEADROOM_GB                = _num("HEADROOM_GB", _c["HEADROOM_GB"], default=0)
+    if "REDLINE_GB"                 in _c: REDLINE_GB                 = _num("REDLINE_GB", _c["REDLINE_GB"], default=None)
     if "REDLINE_ONLY_MODE"          in _c: REDLINE_ONLY_MODE          = _coerce_config_bool(_c["REDLINE_ONLY_MODE"])
     # DERIVED, whatever the file says: the headroom trigger is armed iff its
     # value is >= 1, so the flag (GUI: "the Headroom checkbox is unticked")
@@ -2155,17 +2127,17 @@ def _load_config_from_file():
     # flag set, or 0 with it clear; resolves to what the VALUE says instead of
     # erroring, because the value is the half that changes behavior.
     REDLINE_ONLY_MODE = not (isinstance(HEADROOM_GB, (int, float)) and HEADROOM_GB > 0)
-    if "MAX_LIBRARY_GB"             in _c: MAX_LIBRARY_GB             = _coerce_config_positive_or_none(_c["MAX_LIBRARY_GB"], "MAX_LIBRARY_GB", default=None)
+    if "MAX_LIBRARY_GB"             in _c: MAX_LIBRARY_GB             = _num("MAX_LIBRARY_GB", _c["MAX_LIBRARY_GB"], default=None)
     # Defensive floor of 1 so a run never deletes the same day, whatever
     # config.json holds (the app rejects a below-1 value before a run starts).
-    if "DELETE_DELAY_DAYS"          in _c: DELETE_DELAY_DAYS          = max(1, int(_coerce_config_number(_c["DELETE_DELAY_DAYS"], "DELETE_DELAY_DAYS", min_value=0, max_value=365, default=1)))
+    if "DELETE_DELAY_DAYS"          in _c: DELETE_DELAY_DAYS          = max(1, int(_num("DELETE_DELAY_DAYS", _c["DELETE_DELAY_DAYS"], default=1)))
     if "DAILY_RUN_TIME" in _c:
         _drt = str(_c["DAILY_RUN_TIME"] or "").strip()
         DAILY_RUN_TIME = _drt if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", _drt) else "00:00"
-    if "MAX_HEADROOM_PCT"           in _c: MAX_HEADROOM_PCT           = _coerce_config_number(_c["MAX_HEADROOM_PCT"], "MAX_HEADROOM_PCT", min_value=0.000001, max_value=100, default=15)
-    if "GRACE_PERIOD_DAYS"          in _c: GRACE_PERIOD_DAYS          = _coerce_config_number(_c["GRACE_PERIOD_DAYS"], "GRACE_PERIOD_DAYS", min_value=0, default=GRACE_PERIOD_DAYS)
+    if "MAX_HEADROOM_PCT"           in _c: MAX_HEADROOM_PCT           = _num("MAX_HEADROOM_PCT", _c["MAX_HEADROOM_PCT"], default=15)
+    if "GRACE_PERIOD_DAYS"          in _c: GRACE_PERIOD_DAYS          = _num("GRACE_PERIOD_DAYS", _c["GRACE_PERIOD_DAYS"], default=GRACE_PERIOD_DAYS)
     if "SKIP_UNPLAYED_MOVIES"       in _c: SKIP_UNPLAYED_MOVIES       = _coerce_config_bool(_c["SKIP_UNPLAYED_MOVIES"])
-    if "MAX_IMDB_RATING"            in _c: MAX_IMDB_RATING            = _coerce_config_number(_c["MAX_IMDB_RATING"], "MAX_IMDB_RATING", allow_none=True, min_value=0, max_value=10, default=None)
+    if "MAX_IMDB_RATING"            in _c: MAX_IMDB_RATING            = _num("MAX_IMDB_RATING", _c["MAX_IMDB_RATING"], default=None)
     # A cutoff of 0 matches nothing, so it reads as disabled; the same as
     # null. The app clamps it identically (_clamp_max_imdb_rating) and its
     # file validator deliberately accepts a hand-edited 0; without this mirror
@@ -2192,18 +2164,18 @@ def _load_config_from_file():
     _PLAN_CONFIG_RAW["MOVIE_CLEANUP_ENABLED"] = MOVIE_CLEANUP_ENABLED
 
     # SCORE_BALANCE is the only scoring knob; unknown keys are ignored.
-    if "SCORE_BALANCE" in _c: SCORE_BALANCE = _coerce_config_number(_c["SCORE_BALANCE"], "SCORE_BALANCE", min_value=0, max_value=100, default=SCORE_BALANCE)
+    if "SCORE_BALANCE" in _c: SCORE_BALANCE = _num("SCORE_BALANCE", _c["SCORE_BALANCE"], default=SCORE_BALANCE)
     HISTORY_WEIGHT, QUALITY_WEIGHT = score_balance_weights(SCORE_BALANCE)
     # Near-tie window in score points; None turns file size optimization off.
-    if "NEAR_TIE_PTS" in _c: NEAR_TIE_PTS = _coerce_config_number(_c["NEAR_TIE_PTS"], "NEAR_TIE_PTS", allow_none=True, min_value=0.5, max_value=25, default=2.0)
-    if "MAX_STALENESS_MONTHS" in _c: MAX_STALENESS_MONTHS = _coerce_config_number(_c["MAX_STALENESS_MONTHS"], "MAX_STALENESS_MONTHS", min_value=1, max_value=120, default=SCORING["RECENCY_DEFAULT_MONTHS"])
+    if "NEAR_TIE_PTS" in _c: NEAR_TIE_PTS = _num("NEAR_TIE_PTS", _c["NEAR_TIE_PTS"], default=2.0)
+    if "MAX_STALENESS_MONTHS" in _c: MAX_STALENESS_MONTHS = _num("MAX_STALENESS_MONTHS", _c["MAX_STALENESS_MONTHS"], default=SCORING["RECENCY_DEFAULT_MONTHS"])
     if "RADARR_OVERSEERR_SECTION_ID" in _c:
         _section = str(_c["RADARR_OVERSEERR_SECTION_ID"]).strip() if _c["RADARR_OVERSEERR_SECTION_ID"] is not None else ""
         RADARR_OVERSEERR_SECTION_ID = None if _section.lower() in ("", "none", "null") else _section
         RADARR_OVERSEERR_SECTION_ID_SOURCE = "disabled" if RADARR_OVERSEERR_SECTION_ID is None else ("auto" if _section.lower() == "auto" else "manual")
     if _c.get("IMDB_RATINGS_URL"):      IMDB_RATINGS_URL      = str(_c["IMDB_RATINGS_URL"]).strip()
-    if "IMDB_RATINGS_MAX_AGE_DAYS"  in _c: IMDB_RATINGS_MAX_AGE_DAYS  = _coerce_config_number(_c["IMDB_RATINGS_MAX_AGE_DAYS"], "IMDB_RATINGS_MAX_AGE_DAYS", min_value=0, default=IMDB_RATINGS_MAX_AGE_DAYS)
-    if "LOG_RETENTION_DAYS"         in _c: LOG_RETENTION_DAYS         = max(0, parse_int(_c["LOG_RETENTION_DAYS"], LOG_RETENTION_DAYS))
+    if "IMDB_RATINGS_MAX_AGE_DAYS"  in _c: IMDB_RATINGS_MAX_AGE_DAYS  = _num("IMDB_RATINGS_MAX_AGE_DAYS", _c["IMDB_RATINGS_MAX_AGE_DAYS"], default=IMDB_RATINGS_MAX_AGE_DAYS)
+    if "LOG_RETENTION_DAYS"         in _c: LOG_RETENTION_DAYS         = _num("LOG_RETENTION_DAYS", _c["LOG_RETENTION_DAYS"], default=LOG_RETENTION_DAYS)
     if "KEEP_INTERRUPTED_LOGS"      in _c: KEEP_INTERRUPTED_LOGS      = _coerce_config_bool(_c["KEEP_INTERRUPTED_LOGS"])
     # Connection fields in config.json are the actual saved values. A blank
     # URL with its credential present falls back to the default address the

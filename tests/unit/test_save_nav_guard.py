@@ -9,7 +9,9 @@ blocked) is unmistakable.
     with the animated .pending-ellipsis dots.
 
 Marker-level render checks — the same style as test_app_coverage — so a regression
-that drops the guard or reverts to a static/absent label is caught."""
+that drops the guard or reverts to a static/absent label is caught. The markup
+and the scripts it loads are read together (see _pagejs): the guard is in
+config.js and explorer.js, and the HTML alone no longer contains it."""
 import os
 import re
 import sys
@@ -17,8 +19,10 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("MEDIAREDUCER_CONFIG", tempfile.mktemp())
 import app as A
+from _pagejs import page
 
 ok = True
 def check(name, cond):
@@ -29,9 +33,7 @@ def check(name, cond):
 client = A.app.test_client()
 
 def _html(path):
-    r = client.get(path)
-    assert r.status_code == 200, (path, r.status_code)
-    return r.get_data(as_text=True)
+    return page(client, path)
 
 # ── Configuration page ────────────────────────────────────────────────────────
 cfg = _html("/config")

@@ -97,6 +97,16 @@ check("an in-flight run is cancelled by a newer one",
       tests.get("concurrency", {}).get("cancel-in-progress") is True,
       tests.get("concurrency"))
 
+# ── The checks that skip themselves when a tool is missing ───────────────────
+# Both are deliberate: a contributor's laptop runs the suite without pyflakes
+# or ESLint and still gets a useful answer. Here that would be a green build
+# proving less than it looks like it does, so the workflow has to install them.
+_tests_yml = (WF / "tests.yml").read_text()
+for tool, why in (("pyflakes", "test_no_undefined_names"),
+                  ("eslint", "test_js_lint")):
+    check(f"CI installs {tool}, or {why} silently checks nothing",
+          re.search(rf"\b{tool}[@=\s]", _tests_yml) is not None)
+
 # ── The release gate ─────────────────────────────────────────────────────────
 # The image is what deletes people's files. It must not be buildable without
 # the suite passing on the exact commit being tagged.

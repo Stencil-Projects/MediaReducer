@@ -105,13 +105,26 @@ declared category nothing raises.
   on both sides exists once here.
 - **`cli.py`** — `mediareducer` / `mr` inside the container. A thin HTTP client
   for the same API the UI uses, so there is no second code path to keep in sync.
-- **`templates/`** — `base.html` (shared layout, CSS design system, JS helpers)
-  plus `dashboard.html`, `config.html`, `deletion_score_explorer.html`. The disk
-  bar appears on two tabs, so its CSS (`.disk-bar*`) and renderer
-  (`prRenderDiskBar`) live in `base.html`. The renderer scopes every lookup to
-  the root element it is handed and finds parts by class, so each page keeps its
-  own ids. Thresholds are arguments rather than globals: the Dashboard draws
-  what is saved, Configuration draws what the pending form would save.
+- **`templates/`** — `base.html` (shared layout and the CSS design system) plus
+  `dashboard.html`, `config.html`, `deletion_score_explorer.html`. Each carries
+  a short inline preamble of the values its render decided, and nothing else:
+  the code is in `static/js/`.
+- **`static/js/`** — the browser code, as files a parser can read.
+  `form-fields.js` and `base.js` load on every page; `config.js`,
+  `dashboard.js` and `explorer.js` load on one each. They are classic scripts,
+  not modules — no bundler, no build step — so every top-level name lands in
+  one shared scope, which is how a page assembled from four files works.
+  `eslint.config.mjs` derives that scope per page rather than listing it, so
+  `no-undef` catches a name the preamble stopped rendering; `test_js_lint`
+  runs it, and refuses a function declaration back inside a template. Loaded
+  `defer` and stamped with a content hash by `asset_url()`, which is what lets
+  them be cached `immutable` the way the vendored files are.
+  The disk bar appears on two tabs, so its CSS (`.disk-bar*`) lives in
+  `base.html` and its renderer (`prRenderDiskBar`) in `form-fields.js`. The
+  renderer scopes every lookup to the root element it is handed and finds parts
+  by class, so each page keeps its own ids. Thresholds are arguments rather than
+  globals: the Dashboard draws what is saved, Configuration draws what the
+  pending form would save.
 - **A status pill wears the color of the button that does the thing.** The
   header badge, the run pill and Last Run's mode pill each borrow a button's
   rest colors: red is Cleanup (a run that deletes, or the mode that will),
