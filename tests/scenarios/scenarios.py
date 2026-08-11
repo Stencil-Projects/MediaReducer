@@ -163,6 +163,22 @@ SCENARIOS = [
      {"movies": "some", "episodes": "none", "scheduled": True, "marks": True,
       "marks_due": True}),
 
+    # The season side's own stop-at-target, and the only shape that can breach
+    # its ceiling. A TV-only library of four equal seasons with a deficit of a
+    # tenth: one season covers it several times over, so a correct run takes
+    # exactly one and a split that keeps walking takes two — which is past the
+    # deficit plus one whole season, the ceiling check_run enforces. Every
+    # other scenario has a deficit so large relative to its TV that even a
+    # badly broken split stays inside the bound, so without this the season
+    # ceiling could not fail and would prove nothing.
+    ("seasons-stop-at-target",
+     {"movies": [], "monitor": ["tv"], "cap_fraction": 0.9,
+      "config": {"TV_SEASON_ELIGIBILITY": "all"},
+      "shows": [{"name": "Quad Show", "status": "Ended", "imdb": 4.0, "added": 900,
+                 "seasons": [{"n": n, "episodes": 4, "mb": 500, "added": 900 - n, "plays": 0}
+                             for n in (1, 2, 3, 4)]}]},
+     {"movies": "none", "episodes": "some"}),
+
     # The safety floor, end to end. A cap below it would keep deleting until
     # the library fits inside less than MAX_HEADROOM_PCT% of what is there —
     # the one setting that can clear most of a library while working exactly as

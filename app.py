@@ -501,7 +501,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.15"
+APP_VERSION = "1.0.0-alpha.16"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -4667,6 +4667,43 @@ def _pool_deletion_target_bytes(cfg: dict) -> int:
         _threshold_gb_or_none(cfg.get("MAX_LIBRARY_GB"))) * 1_000_000_000)
 
 
+def _least_wasteful_index(pool, remaining, near_tie):
+    """Index of the next item to take from the worst-first pool.
+
+    The head, unless the near-tied band at the head holds MORE than what is
+    left to free — then only some of that band needs to go. Those scores are
+    equivalent by definition, so the least wasteful cover wins: the SMALLEST
+    item that still finishes the job, movie or season alike. When nothing in
+    the band covers it alone, the largest goes first (fastest progress), which
+    is the movie loop's rule too.
+
+    This is the only place the two media types are compared by size, and it is
+    deliberately the last question asked: score decides which items reach the
+    boundary at all, and this decides only which of several equally-scored
+    ones is the cheapest way to finish. Without it the type with the bigger
+    unit — always TV — overshot every small deficit by a whole season while a
+    near-tied movie would have covered it with a fraction of the waste.
+    """
+    if not near_tie or remaining <= 0:
+        return 0
+    head = pool[0][0]
+    band = []
+    for i, t in enumerate(pool):
+        if t[0] - head > near_tie:
+            break
+        band.append(i)
+    # Short-circuit, not a guard: when the whole band is needed every member is
+    # taken whatever order they go in, so this cannot change the outcome — it
+    # skips the work and mirrors the condition the movie loop uses to decide
+    # whether a tie group forms at all.
+    if sum(pool[i][1] for i in band) <= remaining:
+        return 0
+    covers = [i for i in band if pool[i][1] >= remaining]
+    if covers:
+        return min(covers, key=lambda i: (pool[i][1], pool[i][0]))
+    return max(band, key=lambda i: (pool[i][1], -pool[i][0]))
+
+
 def _merged_pool_takes(season_order: list, cfg: dict) -> tuple[dict, dict]:
     """Split the pool's daily deficit between MOVIES and SEASONS with one
     merged deletion order: every eligible movie (the engine's queue, scores
@@ -4689,25 +4726,26 @@ def _merged_pool_takes(season_order: list, cfg: dict) -> tuple[dict, dict]:
                 movies.append((float(e.get("score") or 0.0), _entry_size_bytes(e)))
     except Exception:
         movies = []   # no movie plan yet: seasons cover what they can
-    merged = ([((e["score"], -(e["size_bytes"] or 0)), "season", e) for e in season_order]
-              + [((sc, -sz), "movie", sz) for sc, sz in movies])
-    merged.sort(key=lambda t: t[0])
+    # One queue, both types, worst-first; an exact score tie goes to the LARGER
+    # item. A season the pass could never act on (no server id, no resolved
+    # folder) is left out entirely rather than skipped mid-walk: it must never
+    # claim share bytes, or the engine would subtract them from the movie
+    # target and NOBODY would ever free them.
+    pool = [(e["score"], e["size_bytes"] or 0, "season", e) for e in season_order
+            if e.get("sid") and e.get("path")]
+    pool += [(sc, sz, "movie", None) for sc, sz in movies]
+    pool.sort(key=lambda t: (t[0], -t[1]))
+    near_tie = _config_num(cfg.get("NEAR_TIE_PTS"))
     covered = 0
-    for _, kind, item in merged:
-        if covered >= share["target_bytes"]:
-            break
+    while pool and covered < share["target_bytes"]:
+        _score, size, kind, item = pool.pop(
+            _least_wasteful_index(pool, share["target_bytes"] - covered, near_tie))
         if kind == "season":
-            # A season the pass could never act on (no server id, no resolved
-            # folder) must not claim share bytes: the engine would subtract
-            # them from the movie target and NOBODY would ever free them.
-            if not (item.get("sid") and item.get("path")):
-                continue
             item["take"] = True
-            share["tv_share_bytes"] += item["size_bytes"] or 0
-            covered += item["size_bytes"] or 0
+            share["tv_share_bytes"] += size
         else:
-            share["movie_share_bytes"] += item
-            covered += item
+            share["movie_share_bytes"] += size
+        covered += size
     takes = {_tv_mark_key(e): e for e in season_order if e["take"]}
     return takes, share
 
@@ -4902,6 +4940,14 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -
         if report["freed_bytes"] or report["vanished_bytes"]:
             _stamp_tv_share(max(0, pool["tv_share_bytes"] - report["freed_bytes"]
                                 - report["vanished_bytes"]))
+
+    # Same note the engine prints for movies, for the season side's own share:
+    # a season is the biggest deletion unit there is, so this is where a small
+    # deficit most often costs far more than it asked for.
+    _over = shared.overshoot_note(pool["tv_share_bytes"], pool["target_bytes"])
+    if _over:
+        report["overshoot_note"] = _over
+        print(f"TV cleanup: NOTE — the season side {_over}", flush=True)
 
     _finish()
     if report["deleted_files"] or report["vanished_seasons"]:

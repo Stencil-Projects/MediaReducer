@@ -4717,11 +4717,19 @@ NEAR_TIE_PTS = 2.0
 
 def _pop_from_tie_group(tie_group: list, remaining_bytes, *, quiet=False):
     """Pick from the boundary tie group: if any single member covers the
-    remaining target, the lowest-scoring one that covers it goes; otherwise
-    the largest tied file goes first. quiet suppresses the log line (the tick's
+    remaining target, the SMALLEST one that covers it goes; otherwise the
+    largest tied file goes first. quiet suppresses the log line (the tick's
     mark re-selection runs this in a convergence loop and must not spam).
 
-    When score and size both tie, the earliest member wins — the comparison is
+    Smallest-that-covers, not lowest-scoring-that-covers. Everything in this
+    group is near-tied — that is what put it here — so the scores are
+    equivalent by definition, and letting a fraction of a point decide sent a
+    42 GB file to cover a 2 GB need while a 4 GB file scoring one point higher
+    survived. Inside the band, size is the only difference that means
+    anything; score still decides everything about which items reach the band
+    at all.
+
+    When size and score both tie, the earliest member wins — the comparison is
     strict, and the group arrives in plan order, which is where the remaining
     tiebreaks live (never-watched, lowest IMDb rating, oldest added). Comparing
     titles here instead ordered them alphabetically, so the movie deleted was
@@ -4731,7 +4739,7 @@ def _pop_from_tie_group(tie_group: list, remaining_bytes, *, quiet=False):
     for i, c in enumerate(tie_group):
         size = parse_int(c.get("file_size"), 0)
         if size >= remaining_bytes:
-            key = (c["retention_score"], size)
+            key = (size, c["retention_score"])
             if best_key is None or key < best_key:
                 best_key = key
                 best_i = i
@@ -7924,6 +7932,14 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
         # run, including manual: the queue is the standing preview, so runs only
         # ever trim it (the app tops it back up afterwards).
         save_pending(mark_store, snapshot_delete_paths=_vanished_keys)
+
+    # Say it out loud when this run took materially more than it needed. Both
+    # numbers were already in the log; nobody should have to subtract them to
+    # find out a 2 GB deficit cost them a 42 GB file.
+    _over = shared.overshoot_note(planned_bytes, to_free_bytes)
+    if _over:
+        log_blank()
+        log(f"NOTE: this run {_over}")
 
     # Keep the stored library measure honest about what this run just removed,
     # so the Summaries that reuse it for the next few hours aren't stale by

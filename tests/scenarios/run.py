@@ -127,9 +127,10 @@ def check_run(name, phase, cfg, spec, before, after, base):
     # and both leave a scenario reporting "some movies were removed": deleting
     # the target gate outright went through the entire table unnoticed.
     #
-    # Seasons are excluded on purpose. They are removed by the app's season
-    # executor against its own share of the deficit, not by this loop, so
-    # counting them here would measure two targets against one.
+    # Seasons are excluded from THIS check on purpose: they are removed by the
+    # app's season executor against its own share of the deficit, not by this
+    # loop, so counting them here would measure two targets against one. They
+    # get their own ceiling below, against the pool deficit.
     log_p = base / "config" / "lastrun.log"
     run_log = log_p.read_text(errors="replace") if log_p.exists() else ""
     _t = re.search(r"Target to free: ([\d.]+) GB", run_log)
@@ -141,6 +142,36 @@ def check_run(name, phase, cfg, spec, before, after, base):
             bad(name, phase, "freed far past the run's target",
                 f"{freed / 1e9:.2f} GB freed against a {target / 1e9:.2f} GB "
                 f"target (largest single file {biggest / 1e9:.2f} GB)")
+    # The SEASON side's own ceiling. The movie check above measures against the
+    # engine's target, which already has the season share subtracted, so it can
+    # say nothing about how much TV went — and the exclusion note below used to
+    # leave the season side with no upper bound under test at all. A season is
+    # the biggest deletion unit there is, so that is the side where an
+    # unbounded overshoot costs the most.
+    #
+    # Every number here is measured, not reported: the deficit from the cap in
+    # the config against the monitored bytes on disk BEFORE the run, and the
+    # season sizes from the files that actually disappeared. Reading the app's
+    # own "pool deficit" line instead would let a mutation that zeroes that
+    # figure make the ceiling vacuous.
+    seasons_gone = {p: s for p, s in removed.items() if "/Season " in p}
+    cap_gb = cfg.get("MAX_LIBRARY_GB")
+    if seasons_gone and cap_gb:
+        monitored_before = sum(
+            s for p, s in before.items()
+            if any(p.startswith(m + "/") for m in monitored))
+        deficit = max(0, monitored_before - float(cap_gb) * 1_000_000_000)
+        by_season: dict = {}
+        for p, s in seasons_gone.items():
+            by_season[str(Path(p).parent)] = by_season.get(str(Path(p).parent), 0) + s
+        freed_tv, biggest = sum(seasons_gone.values()), max(by_season.values())
+        # One whole season of slack: the walk stops at the first unit covering
+        # what is left, and that unit can be a season.
+        if freed_tv > deficit + biggest:
+            bad(name, phase, "seasons freed far past the pool deficit",
+                f"{freed_tv / 1e9:.2f} GB of seasons against a {deficit / 1e9:.2f} GB "
+                f"deficit (largest season removed {biggest / 1e9:.2f} GB)")
+
     # The same ceiling on the marked side, read from the QUEUE rather than
     # from the run's own summary line. The summary prints a figure the loop
     # computes from the very counter that decides when to stop, so a mutation

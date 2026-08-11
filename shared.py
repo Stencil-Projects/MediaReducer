@@ -47,6 +47,34 @@ def pool_deficit_gb(used_gb, used_limit_gb, library_gb, cap_gb) -> float:
 
 # ── The delay clock ──────────────────────────────────────────────────────────
 
+def overshoot_note(freed_bytes, target_bytes) -> str:
+    """A sentence naming the excess when a deletion freed materially more than
+    it needed, else "".
+
+    Deletion units are atomic — a movie file, a whole season — so a run stops
+    at the FIRST item that covers what is left, and that item can be far
+    bigger than the remainder. The selection step keeps the waste as small as
+    the near-tied candidates allow, but when nothing near-tied is small enough
+    the excess is real and irreversible, and both numbers were already in the
+    log for anyone who thought to subtract them. This says it out loud.
+
+    Deliberately quiet about small change: at least 1 GB over AND at least
+    half the target again, so an ordinary run that lands a little past its
+    goal says nothing.
+    """
+    try:
+        freed, target = float(freed_bytes), float(target_bytes)
+    except (TypeError, ValueError):
+        return ""
+    excess = freed - target
+    if target <= 0 or excess < 1_000_000_000 or freed < target * 1.5:
+        return ""
+    return (f"freed {freed / 1e9:.1f} GB to satisfy a {target / 1e9:.1f} GB target "
+            f"— {excess / 1e9:.1f} GB more than needed. Deletion units are whole "
+            "files and whole seasons, so a run stops at the first item that "
+            "covers the rest.")
+
+
 def delete_on_date(marked_at, delay_days):
     """The calendar date a mark becomes deletable: the LOCAL date it was
     marked plus the delay it was marked under. Whole calendar days — a mark
