@@ -5813,12 +5813,14 @@ def _remember_library_size(gb) -> None:
 
 
 def _tv_share_bytes() -> int:
-    """Bytes of the current pool deficit the app's season side has claimed,
-    from the merged movie+season deletion order it computes (one pool, one
-    score scale). The movie side frees the remainder, so the two executors
-    cover the one deficit exactly once. A stamp older than 26 hours reads as
-    0 — the season side stopped running (disarmed, aborted, or the app is
-    down), and the fail direction is the movie side covering everything."""
+    """Bytes of the pool deficit claimed for seasons — stamped by the last
+    full-scan run's own merge of its fresh movie scores against that run's
+    season order (one pool, one score scale), and reduced by the app's season
+    side as it executes the takes. The movie side frees the remainder, so the
+    two executors cover the one deficit exactly once. A stamp older than 26
+    hours reads as 0 — no full-scan run has merged recently (disarmed,
+    aborted, or the app is down), and the fail direction is the movie side
+    covering everything."""
     try:
         with db.connect(DB_FILE) as conn:
             share = db.get_meta(conn, "tv_share")
@@ -5828,6 +5830,125 @@ def _tv_share_bytes() -> int:
     except Exception:
         pass
     return 0
+
+
+def _least_wasteful_index(pool, remaining, near_tie):
+    """Index of the next item to take from the worst-first pool.
+
+    The head, unless the near-tied band at the head holds MORE than what is
+    left to free — then only some of that band needs to go. Those scores are
+    equivalent by definition, so the least wasteful cover wins: the SMALLEST
+    item that still finishes the job, movie or season alike. When nothing in
+    the band covers it alone, the largest goes first (fastest progress), the
+    same rule the movie deletion loop applies at its own boundary.
+
+    This is the only place the two media types are compared by size, and it is
+    deliberately the last question asked: score decides which items reach the
+    boundary at all, and this decides only which of several equally-scored
+    ones is the cheapest way to finish. Without it the type with the bigger
+    unit — always TV — would overshoot every small deficit by a whole season
+    while a near-tied movie covered it with a fraction of the waste.
+    """
+    if not near_tie or remaining <= 0:
+        return 0
+    head = pool[0][0]
+    band = []
+    for i, t in enumerate(pool):
+        if t[0] - head > near_tie:
+            break
+        band.append(i)
+    # Short-circuit, not a guard: when the whole band is needed every member is
+    # taken whatever order they go in, so this cannot change the outcome — it
+    # skips the work and mirrors the condition the movie loop uses to decide
+    # whether a tie group forms at all.
+    if sum(pool[i][1] for i in band) <= remaining:
+        return 0
+    covers = [i for i in band if pool[i][1] >= remaining]
+    if covers:
+        return min(covers, key=lambda i: (pool[i][1], pool[i][0]))
+    return max(band, key=lambda i: (pool[i][1], -pool[i][0]))
+
+
+def _season_order_for_run():
+    """THIS run's eligible season order — stamped by the app's season side
+    minutes ago, matched by run identity like the season report. None when no
+    same-run order exists (a standalone run, a season-side abort, TV disarmed
+    or switched off): the merge is then movies-only and the previous takes
+    stamp is left to age out rather than being overwritten by a run that
+    never saw the seasons."""
+    try:
+        with db.connect(DB_FILE) as conn:
+            doc = db.get_meta(conn, "tv_season_order")
+        if (isinstance(doc, dict)
+                and shared.same_run(doc.get("run_started_at"), _run_started_at())):
+            return [e for e in (doc.get("entries") or [])
+                    if isinstance(e, dict) and e.get("key")]
+    except Exception:
+        pass
+    return None
+
+
+def _split_pool_with_seasons(candidates, daily_deficit_bytes):
+    """The pool split, computed from THIS run's numbers on both sides: the
+    fresh scan's scored candidates against the season order the app stamped
+    minutes ago. Returns (tv_share_bytes, takes) — takes in pick order,
+    [{key, size_bytes}, ...] — or (0, None) when no same-run order exists.
+
+    The covering prefix of the merged worst-first order decides who frees
+    what: seasons inside it are the season side's to execute — it marks and
+    deletes these takes on its NEXT pass, which costs no latency, since marks
+    wait out the deletion delay anyway and plan-currency guarantees a
+    full-scan run precedes any deleting one — and the movie bytes inside it
+    are this run's own share. An exact score tie goes to the larger item
+    (fewest units disturbed); at the boundary the near-tie band takes the
+    least wasteful cover (_least_wasteful_index)."""
+    order = _season_order_for_run()
+    if order is None:
+        return 0, None
+    if not order or daily_deficit_bytes <= 0:
+        return 0, []
+    pool = [(float(e.get("score") or 0.0), int(e.get("size_bytes") or 0),
+             "season", e.get("key")) for e in order]
+    pool += [(float(c.get("retention_score") or 0.0),
+              int(c.get("file_size") or 0), "movie", None) for c in candidates]
+    pool.sort(key=lambda t: (t[0], -t[1]))
+    covered, tv_share, takes = 0, 0, []
+    while pool and covered < daily_deficit_bytes:
+        _score, size, kind, key = pool.pop(
+            _least_wasteful_index(pool, daily_deficit_bytes - covered, NEAR_TIE_PTS))
+        if kind == "season":
+            tv_share += size
+            takes.append({"key": key, "size_bytes": size})
+        covered += size
+    return tv_share, takes
+
+
+def _movie_target_after_split(raw_daily_bytes, tv_share_bytes,
+                              redline_deficit_gb, is_sim):
+    """The movie side's target once the fresh merge has claimed the season
+    share: the daily remainder, still combined with any Redline deficit for a
+    Simulate (which previews the full plan). Returns (gb, bytes). Clamped at
+    zero — a share above the deficit means the seasons cover everything."""
+    daily_after_gb = bytes_to_gb(max(0, int(raw_daily_bytes) - int(tv_share_bytes)))
+    gb = max(daily_after_gb, float(redline_deficit_gb or 0.0)) if is_sim else daily_after_gb
+    return gb, int(gb * 1_000_000_000)
+
+
+def _stamp_tv_takes(takes, tv_share_bytes) -> None:
+    """Persist the merge's season takes for the app's season side to execute,
+    and refresh the share stamp the between-run upkeep subtracts. Best-effort:
+    a failed write leaves the previous stamp to age out through its freshness
+    window rather than aborting the run."""
+    try:
+        with db.transaction(DB_FILE) as conn:
+            db.set_meta(conn, "tv_takes",
+                        {"run_started_at": _run_started_at(), "at": time.time(),
+                         "entries": list(takes)})
+            db.set_meta(conn, "tv_share",
+                        {"bytes": int(max(0, tv_share_bytes)), "at": time.time()})
+    except Exception as e:
+        log(f"WARN could not persist the season takes ({e}); "
+            "the previous stamp ages out on its own.")
 
 
 def _season_side_report() -> dict:
@@ -8412,6 +8533,30 @@ def main():
     # the one disk figure everywhere keeps the dashboard number, the trigger,
     # and the deletion target in agreement.
     effective_library_gb = library_gb
+
+    # ── The pool split, from this run's scan ─────────────────────────────────
+    # Runs BEFORE the no-candidates return: a library whose movies are all
+    # filtered still has a pool, and its deficit is the seasons' to cover.
+    # With a same-run season order the fresh merge replaces the pre-scan stamp
+    # subtraction in _deletion_target for the daily target — a manual Cleanup
+    # keeps "free it now" (no subtraction) and a Redline emergency stays
+    # movie-only, so neither is recomputed.
+    _raw_daily_bytes = int(shared.pool_deficit_gb(
+        used_gb, max_gb, effective_library_gb, MAX_LIBRARY_GB) * 1e9)
+    _tv_share_fresh, _tv_takes = _split_pool_with_seasons(candidates, _raw_daily_bytes)
+    if _tv_takes is not None:
+        _stamp_tv_takes(_tv_takes, _tv_share_fresh)
+        if not _manual_cleanup and not immediate_trigger:
+            _redline_now_gb = (max(0.0, (REDLINE_GB or 0) - free_gb)
+                               if redline_hit else 0.0)
+            to_free_gb, to_free_bytes = _movie_target_after_split(
+                _raw_daily_bytes, _tv_share_fresh, _redline_now_gb, _is_sim)
+            if _tv_share_fresh > 0 or _raw_daily_bytes > 0:
+                log(f"Pool split from this run's scan: seasons take "
+                    f"{bytes_to_gb(_tv_share_fresh):.1f} GB "
+                    f"({len(_tv_takes)} season(s)) — movies target "
+                    f"{to_free_gb:.1f} GB of the "
+                    f"{bytes_to_gb(_raw_daily_bytes):.1f} GB daily deficit.")
 
     if not candidates:
         log("No eligible movie files found.")

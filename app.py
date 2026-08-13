@@ -4651,9 +4651,10 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
     the no-IMDb-data rule (on the series rating, when IMDb is in use), and the
     skip-unplayed switch (a season with no watch history).
 
-    Sizing lives in _merged_pool_takes: seasons and the engine's movie queue
-    sort into ONE order there, and the covering prefix of the pool's deficit
-    decides which seasons (take=True) and how many movie-bytes go.
+    Sizing lives in the engine's _split_pool_with_seasons: this order merges
+    with the fresh movie scan into ONE order there, and the covering prefix of
+    the pool's deficit decides which seasons the pass takes (take=True) and
+    how many movie-bytes the engine targets.
     """
     now = now or time.time()
     ss = _season_score_settings(cfg)
@@ -4903,99 +4904,88 @@ def _pool_deletion_target_bytes(cfg: dict) -> int:
         _threshold_gb_or_none(cfg.get("MAX_LIBRARY_GB"))) * 1_000_000_000)
 
 
-def _least_wasteful_index(pool, remaining, near_tie):
-    """Index of the next item to take from the worst-first pool.
-
-    The head, unless the near-tied band at the head holds MORE than what is
-    left to free — then only some of that band needs to go. Those scores are
-    equivalent by definition, so the least wasteful cover wins: the SMALLEST
-    item that still finishes the job, movie or season alike. When nothing in
-    the band covers it alone, the largest goes first (fastest progress), which
-    is the movie loop's rule too.
-
-    This is the only place the two media types are compared by size, and it is
-    deliberately the last question asked: score decides which items reach the
-    boundary at all, and this decides only which of several equally-scored
-    ones is the cheapest way to finish. Without it the type with the bigger
-    unit — always TV — overshot every small deficit by a whole season while a
-    near-tied movie would have covered it with a fraction of the waste.
-    """
-    if not near_tie or remaining <= 0:
-        return 0
-    head = pool[0][0]
-    band = []
-    for i, t in enumerate(pool):
-        if t[0] - head > near_tie:
-            break
-        band.append(i)
-    # Short-circuit, not a guard: when the whole band is needed every member is
-    # taken whatever order they go in, so this cannot change the outcome — it
-    # skips the work and mirrors the condition the movie loop uses to decide
-    # whether a tie group forms at all.
-    if sum(pool[i][1] for i in band) <= remaining:
-        return 0
-    covers = [i for i in band if pool[i][1] >= remaining]
-    if covers:
-        return min(covers, key=lambda i: (pool[i][1], pool[i][0]))
-    return max(band, key=lambda i: (pool[i][1], -pool[i][0]))
-
-
-def _merged_pool_takes(season_order: list, cfg: dict) -> tuple[dict, dict]:
-    """Split the pool's daily deficit between MOVIES and SEASONS with one
-    merged deletion order: every eligible movie (the engine's queue, scores
-    and sizes as the last plan stored them) and every eligible season
-    (season_order, the same 0-100 scale) sorted together worst-first, ties to
-    the larger item. The seasons inside the covering prefix get take=True —
-    those are the season side's to delete; the movie bytes inside it are the
-    movie share. The engine learns the split via the tv_share stamp and
-    subtracts the SEASON share from its own target, so the two executors
-    cover the one deficit exactly once."""
-    share = {"target_bytes": _pool_deletion_target_bytes(cfg),
-             "tv_share_bytes": 0, "movie_share_bytes": 0}
-    if share["target_bytes"] <= 0:
-        return {}, share
-    movies = []
-    try:
-        doc = db.read_pending_doc(db_path())
-        for e in (doc.get("entries") or {}).values():
-            if isinstance(e, dict):
-                movies.append((float(e.get("score") or 0.0), _entry_size_bytes(e)))
-    except Exception:
-        movies = []   # no movie plan yet: seasons cover what they can
-    # One queue, both types, worst-first; an exact score tie goes to the LARGER
-    # item. A season the pass could never act on (no server id, no resolved
-    # folder) is left out entirely rather than skipped mid-walk: it must never
-    # claim share bytes, or the engine would subtract them from the movie
-    # target and NOBODY would ever free them.
-    pool = [(e["score"], e["size_bytes"] or 0, "season", e) for e in season_order
-            if e.get("sid") and e.get("path")]
-    pool += [(sc, sz, "movie", None) for sc, sz in movies]
-    pool.sort(key=lambda t: (t[0], -t[1]))
-    near_tie = _config_num(cfg.get("NEAR_TIE_PTS"))
-    covered = 0
-    while pool and covered < share["target_bytes"]:
-        _score, size, kind, item = pool.pop(
-            _least_wasteful_index(pool, share["target_bytes"] - covered, near_tie))
-        if kind == "season":
-            item["take"] = True
-            share["tv_share_bytes"] += size
-        else:
-            share["movie_share_bytes"] += size
-        covered += size
-    takes = {_tv_mark_key(e): e for e in season_order if e["take"]}
-    return takes, share
-
-
 def _stamp_tv_share(share_bytes) -> None:
-    """Persist the season share of the pool deficit for the engine, which
-    subtracts it from its own movie target (engine reads it with a freshness
-    window, so a stale stamp fails toward the movie side covering it all)."""
+    """Refresh the season share of the pool deficit — the figure the engine
+    and the between-run upkeep subtract from the movie target. The engine
+    restamps it from its own fresh merge at every full-scan run; this side
+    writes it when the pass executes takes (pending bytes), reduces it as
+    seasons are freed, and zeroes it on the paths where seasons will free
+    nothing. Read with a freshness window, so a stale stamp fails toward the
+    movie side covering it all."""
     try:
         with db.transaction(db_path()) as conn:
             db.set_meta(conn, "tv_share", {"bytes": int(max(0, share_bytes)),
                                            "at": time.time()})
     except Exception:
         pass
+
+
+def _stamp_tv_season_order(order: list, run_started_at) -> None:
+    """Persist this run's eligible season order for the engine, which merges
+    it against the fresh movie scan to compute the pool split. Keyed to the
+    run (shared.same_run), so a standalone engine run — or one whose season
+    side aborted, or ran with TV off — matches nothing and merges movies-only.
+    Only actionable seasons are stamped: one without a server id or a resolved
+    folder can never be deleted, so it must never claim share bytes the movie
+    side would then leave uncovered."""
+    try:
+        entries = [{"key": _tv_mark_key(e), "score": e.get("score"),
+                    "size_bytes": int(e.get("size_bytes") or 0)}
+                   for e in order if e.get("sid") and e.get("path")]
+        with db.transaction(db_path()) as conn:
+            db.set_meta(conn, "tv_season_order",
+                        {"run_started_at": run_started_at, "at": time.time(),
+                         "entries": entries})
+    except Exception:
+        pass
+
+
+def _engine_takes_for_pass(order: list, cfg: dict) -> tuple[dict, dict]:
+    """The season takes this pass executes: the engine's last stamped merge —
+    its fresh movie scan against that run's season order, both halves from one
+    moment — intersected with TODAY's eligible plan and truncated to TODAY's
+    pool deficit. Returns (takes, pool) in the shape the pass reports from.
+
+    Freshness-gated (≤26h), deliberately NOT run-matched: the stamp is the
+    PREVIOUS full-scan run's merge. Executing it costs no latency — marks wait
+    out the deletion delay anyway, and plan-currency guarantees a full-scan
+    run precedes any deleting one — while both sides of the merge come from
+    one run instead of fresh seasons against day-old movie scores. A missing
+    or stale stamp reads as no takes: seasons unmark, the movie side covers
+    everything.
+
+    The intersection and the truncation are this side's only judgments: a
+    season that left today's eligible plan is never re-marked whatever the
+    stamp says, and once today's deficit is covered the tail of the stamp
+    unmarks — the deficit shrank since the merge, and marks only ever mirror
+    what a deletion would still need."""
+    pool = {"target_bytes": _pool_deletion_target_bytes(cfg),
+            "tv_share_bytes": 0, "movie_share_bytes": 0}
+    takes: dict = {}
+    try:
+        with db.connect(db_path()) as conn:
+            doc = db.get_meta(conn, "tv_takes")
+    except Exception:
+        doc = None
+    fresh = (isinstance(doc, dict)
+             and time.time() - float(doc.get("at") or 0) <= 26 * 3600)
+    if not fresh or pool["target_bytes"] <= 0:
+        return takes, pool
+    by_key = {_tv_mark_key(e): e for e in order if e.get("sid") and e.get("path")}
+    budget = pool["target_bytes"]
+    for t in (doc.get("entries") or []):
+        e = by_key.get(t.get("key") if isinstance(t, dict) else None)
+        if e is None:
+            continue
+        if budget <= 0:
+            break
+        e["take"] = True
+        takes[_tv_mark_key(e)] = e
+        size = int(e.get("size_bytes") or 0)
+        pool["tv_share_bytes"] += size
+        budget -= size
+    pool["movie_share_bytes"] = max(0, pool["target_bytes"] - pool["tv_share_bytes"])
+    return takes, pool
 
 
 def _tv_marked_count() -> int:
@@ -5132,7 +5122,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
         print(f"TV cleanup is off — {report['cleanup_off']} season(s) planned "
               f"but not eligible", flush=True)
         return _finish()
-    takes, pool = _merged_pool_takes(plan["order"], cfg)
+    takes, pool = _engine_takes_for_pass(plan["order"], cfg)
     report["pool_target_gb"] = round(pool["target_bytes"] / 1e9, 1)
     report["tv_share_gb"] = round(pool["tv_share_bytes"] / 1e9, 1)
     report["movie_share_gb"] = round(pool["movie_share_bytes"] / 1e9, 1)
@@ -5151,6 +5141,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
     except (TypeError, ValueError):
         delay = 1
     now = time.time()
+    _gone_keys: set = set()   # seasons freed or vanished THIS pass
     _new_marked_bytes = 0   # this pass's own marks — the overshoot note's subject
     for k, e in takes.items():
         if k not in marked:
@@ -5187,6 +5178,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
                     continue
             if _delete_tv_season(cfg, e, report):
                 del marked[k]
+                _gone_keys.add(k)
         # The share was stamped from PRE-deletion disk numbers; the engine
         # measures AFTER these deletions and would subtract the freed bytes a
         # second time. Re-stamp with only the share still PENDING (marked,
@@ -5198,6 +5190,16 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
         if report["freed_bytes"] or report["vanished_bytes"]:
             _stamp_tv_share(max(0, pool["tv_share_bytes"] - report["freed_bytes"]
                                 - report["vanished_bytes"]))
+
+    # The order the engine merges minutes from now, minus the seasons this
+    # pass just freed: their files are gone and the fresh disk numbers already
+    # reflect them, so leaving them in the order would have the engine claim
+    # bytes no season will free. Stamped only on this path — the abort, off,
+    # safety and disarmed paths return earlier, so the engine sees no same-run
+    # order there and merges movies-only.
+    _stamp_tv_season_order(
+        [e for e in plan["order"] if _tv_mark_key(e) not in _gone_keys],
+        run_started_at)
 
     # Same note the engine prints for movies, for the season side's own share:
     # a season is the biggest deletion unit there is, so this is where a small
@@ -7013,7 +7015,7 @@ def api_debug_cache():
             pex = plan["excluded"]
             _pool = {"target_bytes": 0, "tv_share_bytes": 0, "movie_share_bytes": 0}
             if tv_cleanup_on:
-                _, _pool = _merged_pool_takes(porder, _tv_cfg)
+                _, _pool = _engine_takes_for_pass(porder, _tv_cfg)
             total_gb = sum(e["size_bytes"] for e in porder) / 1e9
             tv_state = _tv_cleanup_state()
             tv_marked = tv_state.get("marked") or {}

@@ -421,15 +421,16 @@ asked to unmonitor a season before deletion.
 With a media server connected, TV cleanup on, and a Headroom target or Library
 Size Cap armed, every run handles seasons right before movies. It refreshes from
 the live servers (if any configured source fails to answer, the season side
-aborts without touching a file), rebuilds the season plan, merges it with the
-movie queue into one worst-first order, and walks that until the pool's deficit
-is covered. Seasons in that stretch are **marked**; the movies in it stay the
-movie cleanup's job — the two sides split one deficit, never double-covering it.
+aborts without touching a file) and rebuilds the season plan; the run's scan
+then merges that plan with the freshly scored movies into one worst-first
+order, and the covering prefix of the pool's deficit decides the split.
+Seasons in that stretch are **marked**; the movies in it stay the movie
+cleanup's job — the two sides split one deficit, never double-covering it.
 
-Under Automatic Cleanup, due marks the fresh plan still takes are deleted and
-recorded in `deleted.log`. With **Optional Sonarr cleanup** on the season is
-unmonitored first — a refusal from Sonarr leaves it intact and still marked —
-and Sonarr is asked to rescan afterwards.
+Under Automatic Cleanup, due marks the current split still takes are deleted
+and recorded in `deleted.log`. With **Optional Sonarr cleanup** on the season
+is unmonitored first — a refusal from Sonarr leaves it intact and still marked
+— and Sonarr is asked to rescan afterwards.
 
 A season leaves the marked list the moment the plan stops taking it: the cap was
 raised, the show got protected or favorited, someone started watching, or enough

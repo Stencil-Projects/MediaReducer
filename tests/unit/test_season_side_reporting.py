@@ -64,7 +64,7 @@ ROWS = [{"title": f"Show {i}", "tv_seasons": [{"n": 1}]} for i in range(41)]
 
 A._tv_fresh_rows_strict = lambda cfg: list(ROWS)
 A._tv_season_plan = lambda rows, cfg, now=None: {"order": list(SEASONS), "excluded": {}}
-A._merged_pool_takes = lambda order, cfg: (
+A._engine_takes_for_pass = lambda order, cfg: (
     {}, {"target_bytes": 0, "tv_share_bytes": 0, "movie_share_bytes": 0})
 
 CFG = {"OUTPUT_DIR": _OUT, "MONITOR_DIRS": ["/library/Movies HD", "/library/TV Shows"],
@@ -106,7 +106,7 @@ check("...and claims no bytes for the cap arithmetic",
 A._space_threshold_state = lambda *a, **k: {"safety_blocked": False}
 BIG = [SEASONS[0] | {"size_bytes": 42 * GB}]
 A._tv_season_plan = lambda rows, cfg, now=None: {"order": list(BIG), "excluded": {}}
-A._merged_pool_takes = lambda order, cfg: (
+A._engine_takes_for_pass = lambda order, cfg: (
     {A._tv_mark_key(BIG[0]): BIG[0]},
     {"target_bytes": 2 * GB, "tv_share_bytes": 42 * GB, "movie_share_bytes": 0})
 _state.clear(); _state.update({"marked": {}})
@@ -117,7 +117,7 @@ rep2 = A._run_tv_cleanup_pass(dict(CFG), execute=False, run_started_at=1001.5)
 check("a pass that only CARRIED it stays quiet",
       not rep2.get("overshoot_note"), rep2.get("overshoot_note"))
 A._tv_season_plan = lambda rows, cfg, now=None: {"order": list(SEASONS), "excluded": {}}
-A._merged_pool_takes = lambda order, cfg: (
+A._engine_takes_for_pass = lambda order, cfg: (
     {}, {"target_bytes": 0, "tv_share_bytes": 0, "movie_share_bytes": 0})
 
 # ── 4. The report is matched to a RUN, not to a clock ─────────────────────

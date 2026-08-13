@@ -171,6 +171,18 @@ A._json_request = fake_json_request
 
 MARK_KEY = "jellyfin:5|S1"
 
+# The pass executes the takes the last full-scan ENGINE run stamped from its
+# fresh merge (tv_takes meta); this test's subject is the pass mechanics, so
+# stamp what that run would have: the 10 GB deficit takes S1 and only S1.
+# reset_state() clears the marks, never this stamp — as in production, where
+# the stamp outlives any one pass and ages out through its freshness window.
+def stamp_takes(entries=({"key": MARK_KEY, "size_bytes": 10 * GB},)):
+    with A.db.transaction(A.db_path()) as conn:
+        A.db.set_meta(conn, "tv_takes", {"run_started_at": 999.0,
+                                         "at": time.time(),
+                                         "entries": list(entries)})
+stamp_takes()
+
 # ── Pass 1: marking, never same-day deletion ────────────────────────────────
 reset_state()
 r = A._run_tv_cleanup_pass(CFG, execute=True)

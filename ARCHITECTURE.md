@@ -538,27 +538,37 @@ is the deletion unit, and Sonarr is optional and cleanup-only.
   movie ladder calls), the latest season of any show not known ended, and the
   `TV_SEASON_ELIGIBILITY` mode (oldest-only default / except the most recently
   ADDED / all).
-- *The one pool* (`_merged_pool_takes` ↔ engine `_tv_share_bytes`): one deficit
-  — `shared.pool_deficit_gb`, max(headroom overage, Library Size Cap overage;
-  the cap measures every monitored dir, TV included), the same function the
-  engine sizes its movie marks with. Seasons and the engine's movie queue sort
-  into ONE worst-first order; seasons inside the covering prefix are the season
-  side's to take, and their byte share is stamped in db meta `tv_share`. The engine
-  subtracts a FRESH stamp (≤26h) from its movie target; a stale or missing
-  stamp reads 0, so stopped or aborted season handling fails toward the movie side
-  covering everything. Redline stays a movie-only emergency.
+- *The one pool* (engine `_split_pool_with_seasons` ↔ app
+  `_engine_takes_for_pass`): one deficit — `shared.pool_deficit_gb`,
+  max(headroom overage, Library Size Cap overage; the cap measures every
+  monitored dir, TV included). The SPLIT is computed by the engine from the
+  run's own numbers on both sides: the season side stamps its eligible order
+  (db meta `tv_season_order`, matched by run identity), the engine merges it
+  with the fresh scan's scores into ONE worst-first order, and the covering
+  prefix decides everything — the seasons inside it are stamped as `tv_takes`
+  for the season side to execute, their byte share goes to `tv_share`, and
+  the movie target becomes the remainder (`_movie_target_after_split`). Both
+  halves of the merge come from one moment; the season side executes the
+  takes on its NEXT pass, which costs no latency — marks wait out the
+  deletion delay anyway, and plan-currency guarantees a full-scan run
+  precedes any deleting one. Every gate fails toward the movie side covering
+  everything: an order from another run reads as no seasons (a standalone
+  engine run claims nothing it cannot free), and a stale stamp (>26h) reads
+  as 0. Redline stays a movie-only emergency.
 - *The season side* (`_run_tv_cleanup_pass`, fired by `run_script`'s worker before
   every engine launch): fail-closed strict fetch → the same safety-percentage
   refusal the movie side makes (a run-wide fact — it surfaces once, via the
   Space Thresholds module, never as a season-specific abort) → reconcile
-  marks with the fresh take prefix (a
-  mark the plan stops taking is dropped, never deleted) → on a real Cleanup,
+  marks with the engine's stamped takes, intersected with TODAY's eligible
+  plan and truncated to TODAY's deficit (a mark the takes stop covering is
+  dropped, never deleted) → on a real Cleanup,
   delete due marks: optional Sonarr season-unmonitor FIRST (refusal skips the
   season), episode files freshly listed by the media server and joined to the
   resolved folder under the same escape/symlink guards as movies, one
-  `deleted.log` line per file, empty season dirs tidied, Sonarr rescan.
-  Marks live in db meta `tv_cleanup`, keyed by server id + season, each aging
-  its own `DELETE_DELAY_DAYS` clock.
+  `deleted.log` line per file, empty season dirs tidied, Sonarr rescan →
+  stamp the season order (minus anything just freed) for the engine that
+  launches next. Marks live in db meta `tv_cleanup`, keyed by server id +
+  season, each aging its own `DELETE_DELAY_DAYS` clock.
 - *Surfaces*: season rows rank in the Filtering table's one deletion order,
   the marked & eligible window intersplices both types with a Type column and
   both count in the Dashboard's marked/eligible numbers, and the run
@@ -597,7 +607,7 @@ a healthy store is far worse than one failed run.
 | File | Written by | Purpose |
 | --- | --- | --- |
 | `config.json` | app | Saved settings (single source of truth for both processes). |
-| `mediareducer.db` | engine + app | SQLite store (`db.py`), four tables: `metadata_cache` (per-movie API facts, so a rescan skips the slow per-movie lookups), `movies` (the **library snapshot** every completed scan rewrites, and the Filtering & Scoring table — TV series ride here as `media_type='tv'` rows with their seasons as a JSON blob, each scan replacing only its own type), `queue` (the marked & eligible MOVIE deletion queue plus its plan-currency stamp) and `meta` (kv: **schedule state**, where the app burns and reopens the daily window, **storage stats**, the code/schema guards, plus the season marks + last report under `tv_cleanup` and its pool share under `tv_share`). |
+| `mediareducer.db` | engine + app | SQLite store (`db.py`), four tables: `metadata_cache` (per-movie API facts, so a rescan skips the slow per-movie lookups), `movies` (the **library snapshot** every completed scan rewrites, and the Filtering & Scoring table — TV series ride here as `media_type='tv'` rows with their seasons as a JSON blob, each scan replacing only its own type), `queue` (the marked & eligible MOVIE deletion queue plus its plan-currency stamp) and `meta` (kv: **schedule state**, where the app burns and reopens the daily window, **storage stats**, the code/schema guards, plus the season marks + last report under `tv_cleanup`, the run's season order under `tv_season_order`, the engine's merge results under `tv_takes`, and the pool share under `tv_share`). |
 | `lastrun.log` | engine | Most recent run log (overwritten each run; the engine archives it into `logs/` at run exit). |
 | `logs/` | engine + app | Archived run logs — every Simulate, Cleanup, and Debug Cleanup (quiet Summary refreshes are skipped); Reset MediaReducer archives the final `lastrun.log` here too. |
 | `deleted.log` | engine (app can truncate) | Deletion history (survives startup); the dashboard's Erase button empties it. |
