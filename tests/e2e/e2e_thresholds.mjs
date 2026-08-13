@@ -261,13 +261,23 @@ check('the "nothing armed" note explains the consequence', endState.note);
 // under the pointer. So mid-edit only Automatic Cleanup ghosts.
 check('Automatic Cleanup ghosts as soon as the form has nothing armed',
       endState.cleanup, `cleanup=${endState.cleanup}`);
+// Monitor Only applies the server's saved-state verdict VERBATIM — the page
+// computes nothing of its own, so the saved state reaches this radio the way
+// it does in production: a status poll (or a save response) carrying
+// monitor_lock_reason. The server half of the contract — that this reason is
+// really produced for a nothing-armed config — is pinned by
+// test_monitor_mode_gate.py against _monitor_mode_lock_reason itself.
 const savedOff = await p.evaluate(() => {
   _savedConfig = { ..._savedConfig, HEADROOM_GB: 0, REDLINE_GB: null, MAX_LIBRARY_GB: null };
-  _updateRunModeAvailability();
+  window.prOnStatusPoll({
+    run_mode: 'off', run_active: false, summary_active: false,
+    monitor_lock_reason: 'Arm a space threshold first — a Headroom target, '
+      + 'Redline floor, or Library Size Cap gives Monitor Only something to preview.',
+  });
   return { monitor: document.getElementById('mode-paused')?.disabled,
            reason: document.getElementById('desc-paused')?.textContent };
 });
-check('Monitor Only ghosts once nothing armed is the SAVED state',
+check('Monitor Only ghosts once the poll reports nothing armed in the SAVED state',
       savedOff.monitor, `monitor=${savedOff.monitor}`);
 check('...naming the fix rather than just going gray',
       /Arm a space threshold/.test(savedOff.reason), savedOff.reason);

@@ -2185,6 +2185,36 @@ def _notifications_muted_by_mode(cfg: dict) -> bool:
     return mode == "off" or not notify.flag(cfg, "NOTIFY_IN_MONITOR_ONLY")
 
 
+def _pending_marked_changes(cfg: dict) -> dict:
+    """The marked-queue diff the 15-minute check would announce, computed
+    WITHOUT advancing any baseline: {sig, prev_sig, baseline, new_items,
+    marked_total, redated}. new_items is empty on the first observation
+    (nothing to compare yet) and when nothing changed. Shared by the tick
+    check — which owns every baseline write — and the notification debug
+    preview, which must never write: a preview that advanced the baseline
+    would consume the very trigger it exists to show, and the real alert
+    would silently never go out."""
+    sig, marked = _marked_queue_state(cfg)
+    prev = _read_notify_meta("notify_marked_state")
+    prev_sig = (prev or {}).get("sig") if isinstance(prev, dict) else None
+    prev_marked = (prev or {}).get("marked") if isinstance(prev, dict) else None
+    out = {"sig": sig, "prev_sig": prev_sig,
+           "baseline": {"sig": sig, "marked": marked},
+           "new_items": [], "marked_total": len(marked), "redated": False}
+    if prev_sig is None or prev_sig == sig:
+        return out
+    prev_paths = set(prev_marked or {})
+    new_items = [dict(v) for p, v in marked.items() if p not in prev_paths]
+    if not new_items and isinstance(prev_marked, dict):
+        # No additions — but a re-dated existing mark (delay change) also
+        # deserves one alert, presented as the current marked set.
+        new_items = [dict(v) for p, v in marked.items()
+                     if p in prev_marked and prev_marked[p].get("delete_on") != v["delete_on"]]
+        out["redated"] = bool(new_items)
+    out["new_items"] = new_items
+    return out
+
+
 def _check_marked_change_notification() -> None:
     """After a 15-minute maintenance pass: if the scheduled-marks set changed
     since the last baseline (new marks, or the delay-reset button re-dating
@@ -2196,11 +2226,8 @@ def _check_marked_change_notification() -> None:
         cfg = load_config()
         if _notifications_muted_by_mode(cfg):
             return
-        sig, marked = _marked_queue_state(cfg)
-        prev = _read_notify_meta("notify_marked_state")
-        prev_sig = (prev or {}).get("sig") if isinstance(prev, dict) else None
-        prev_marked = (prev or {}).get("marked") if isinstance(prev, dict) else None
-        if prev_sig == sig:
+        st = _pending_marked_changes(cfg)
+        if st["prev_sig"] == st["sig"]:
             return
         # The baseline (which also stores the marked map so the NEXT diff can
         # name exactly which movies are new) advances immediately when nothing
@@ -2208,31 +2235,56 @@ def _check_marked_change_notification() -> None:
         # the send succeeded: storing first meant one failed delivery lost
         # those marks forever, since the next tick compared against a baseline
         # that already contained them.
-        baseline = {"sig": sig, "marked": marked}
-        if prev_sig is None:
+        baseline = st["baseline"]
+        if st["prev_sig"] is None:
             _store_notify_meta("notify_marked_state", baseline)
             return   # first observation; baseline only, nothing to compare
         if not (notify.flag(cfg, "NOTIFY_ENABLED") and notify.flag(cfg, "NOTIFY_ON_MARKED_CHANGES")):
             _store_notify_meta("notify_marked_state", baseline)
             return
-        prev_paths = set(prev_marked or {})
-        new_items = [dict(v) for p, v in marked.items() if p not in prev_paths]
-        redated = False
-        if not new_items and isinstance(prev_marked, dict):
-            # No additions — but a re-dated existing mark (delay change) also
-            # deserves one alert, presented as the current marked set.
-            new_items = [dict(v) for p, v in marked.items()
-                         if p in prev_marked and prev_marked[p].get("delete_on") != v["delete_on"]]
-            redated = bool(new_items)
-        if not new_items:
+        if not st["new_items"]:
             _store_notify_meta("notify_marked_state", baseline)
             return   # marks only dropped off; nothing new to announce
         sent, _detail = notify.dispatch_marked_changes(
-            cfg, new_items=new_items, marked_total=len(marked), redated=redated)
+            cfg, new_items=st["new_items"], marked_total=st["marked_total"],
+            redated=st["redated"])
         if sent:
             _store_notify_meta("notify_marked_state", baseline)
     except Exception:
         pass
+
+
+def _low_space_zone(cfg: dict, disk: dict | None) -> dict | None:
+    """The approaching-Redline geometry: {free_gb, redline, margin, in_zone},
+    or None when no Redline floor is set. Raises on unreadable values —
+    callers decide how quiet to be (the tick check's outer guard swallows it,
+    the debug preview drops the section). Shared by the check and the preview
+    so the two can never disagree about whether space is 'low'."""
+    redline = cfg.get("REDLINE_GB")
+    if redline is None:
+        return None
+    redline = float(redline)
+    try:
+        margin = max(1.0, float(cfg.get("NOTIFY_LOW_SPACE_GB")
+                                  or notify.NUMBER_DEFAULTS["NOTIFY_LOW_SPACE_GB"]))
+    except (TypeError, ValueError):
+        margin = 25.0
+    free_gb = float((disk or {}).get("free_gb"))
+    return {"free_gb": free_gb, "redline": redline, "margin": margin,
+            "in_zone": redline < free_gb <= redline + margin}
+
+
+def _low_space_items(cfg: dict) -> list | None:
+    """The movie list a low-space warning names, or None with the privacy
+    toggle off. Marked entries are first in line; without any (redline-only
+    mode above the floor has a zero deficit, so nothing reads as marked) the
+    queue front IS the deletion order an emergency would follow."""
+    if not notify.flag(cfg, "NOTIFY_SHOW_MOVIES"):
+        return None
+    entries = pending_deletion_entries(cfg, with_lines=True)
+    front = [e for e in entries if e.get("marked")] or entries
+    return [{"title": e.get("title"), "size": e.get("size_bytes")}
+            for e in front][:15]
 
 
 def _check_low_space_notification(cfg: dict, disk: dict | None) -> None:
@@ -2245,23 +2297,16 @@ def _check_low_space_notification(cfg: dict, disk: dict | None) -> None:
     try:
         state = _read_notify_meta("notify_low_space")
         state = state if isinstance(state, dict) else {}
-        redline = cfg.get("REDLINE_GB")
-        if redline is None:
+        zone = _low_space_zone(cfg, disk)
+        if zone is None:
             # No floor to watch. Clear a stale flag so the same floor re-armed
             # later still warns on its next approach.
             if state.get("warned"):
                 _store_notify_meta("notify_low_space", {"warned": False})
             return
-        redline = float(redline)
-        try:
-            margin = max(1.0, float(cfg.get("NOTIFY_LOW_SPACE_GB")
-                                      or notify.NUMBER_DEFAULTS["NOTIFY_LOW_SPACE_GB"]))
-        except (TypeError, ValueError):
-            margin = 25.0
-        free_gb = float((disk or {}).get("free_gb"))
+        redline, margin, free_gb = zone["redline"], zone["margin"], zone["free_gb"]
         armed_for = (state.get("redline"), state.get("margin"))
-        in_zone = redline < free_gb <= redline + margin
-        if not in_zone:
+        if not zone["in_zone"]:
             # Above the zone (recovered) or already below the floor (the
             # emergency cleanup's own notification takes over): re-arm. This
             # runs even with the alert toggled off, so a stale "warned" flag
@@ -2274,17 +2319,8 @@ def _check_low_space_notification(cfg: dict, disk: dict | None) -> None:
             return
         if state.get("warned") and armed_for == (redline, margin):
             return   # already warned for this exact floor/margin; no spam
-        items = None
-        if notify.flag(cfg, "NOTIFY_SHOW_MOVIES"):
-            entries = pending_deletion_entries(cfg, with_lines=True)
-            # Marked entries are first in line; without any (redline-only mode
-            # above the floor has a zero deficit, so nothing reads as marked)
-            # the queue front IS the deletion order an emergency would follow.
-            front = [e for e in entries if e.get("marked")] or entries
-            items = [{"title": e.get("title"), "size": e.get("size_bytes")}
-                     for e in front][:15]
         sent, _detail = notify.dispatch_low_space(cfg, free_gb=free_gb, redline_gb=redline,
-                                                  margin_gb=margin, items=items)
+                                                  margin_gb=margin, items=_low_space_items(cfg))
         # Only a DELIVERED warning is a warning: storing "warned" on a failed
         # send silenced the alert until free space recovered past the margin
         # and dropped again — the next tick retries instead.
@@ -2293,6 +2329,59 @@ def _check_low_space_notification(cfg: dict, disk: dict | None) -> None:
                                {"warned": True, "redline": redline, "margin": margin})
     except Exception:
         pass
+
+
+def _enrich_run_report(report: dict, tv_pass_report: dict | None = None) -> dict:
+    """Attach the app's own queue view to an engine run report before it
+    becomes the summary message: total marked, the next-deletion forecast, the
+    marks that PREDATE the run with their due dates (the summary's "Already
+    marked" section — the run's own new marks are listed separately), and the
+    run's season side. Mutates and returns `report`; best-effort throughout,
+    like the dispatch path always was. Shared by that dispatch and the
+    notification debug preview so the two can never word the same run
+    differently."""
+    try:
+        fresh_cfg = load_config()
+        fc = pending_delete_forecast(fresh_cfg)
+        _sig, marked = _marked_queue_state(fresh_cfg)
+        report.setdefault("marked_total", len(marked))
+        report.setdefault("next_event_on", fc.get("event_on"))
+        report.setdefault("next_event_ripe", bool(fc.get("ripe")))
+        new_items = report.get("marked_items") or []
+        new_paths = {str(it.get("path") or "") for it in new_items}
+        # Only a TRUNCATED marked_items list (the engine
+        # caps it at _MARKED_ITEMS_CAP) leaves new-mark
+        # paths unknown here, which would misfile them as
+        # "already marked"; skip the section only then.
+        # marked_count can't answer this: a Simulate
+        # reports the total it would delete now, not how
+        # many of those marks are new, so comparing the two
+        # hid the list on every day the marks carried over.
+        if len(new_items) < _MARKED_ITEMS_CAP:
+            report.setdefault("existing_marked_items", [
+                {"title": v.get("title"), "delete_on": v.get("delete_on")}
+                for p, v in marked.items() if p not in new_paths])
+        # The seasons this run handled ride the same
+        # message, folded into the run's own numbers —
+        # one cleanup, one report. A season-side
+        # fail-closed abort means movies covered the
+        # whole deficit. Passed in per run, never read
+        # from a global the NEXT run may already have
+        # overwritten.
+        tvp = tv_pass_report
+        if isinstance(tvp, dict):
+            report.setdefault("seasons", {
+                "marked_new": tvp.get("marked_new") or 0,
+                "held_by_delay": tvp.get("held_by_delay") or 0,
+                "deleted_seasons": len(tvp.get("deleted_seasons") or []),
+                "skipped": len(tvp.get("skipped") or []),
+                "freed_bytes": tvp.get("freed_bytes") or 0,
+                "aborted": tvp.get("aborted"),
+                "marked_total": len(_tv_cleanup_state().get("marked") or {}),
+            })
+    except Exception:
+        pass
+    return report
 
 
 def _dispatch_run_notifications(effective_mode: str | None, returncode: int, stopped: bool,
@@ -2371,52 +2460,7 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
                     _prog = {}
                 if returncode == 0 and not _prog:
                     if report:
-                        # Enrich with the app's own queue view: total marked,
-                        # the next-deletion forecast (date / "at the next run"),
-                        # and the marks that PREDATE this run with their due
-                        # dates — the daily summary's "Already marked" section
-                        # (the run's own new marks are listed separately).
-                        try:
-                            fresh_cfg = load_config()
-                            fc = pending_delete_forecast(fresh_cfg)
-                            _sig, marked = _marked_queue_state(fresh_cfg)
-                            report.setdefault("marked_total", len(marked))
-                            report.setdefault("next_event_on", fc.get("event_on"))
-                            report.setdefault("next_event_ripe", bool(fc.get("ripe")))
-                            new_items = report.get("marked_items") or []
-                            new_paths = {str(it.get("path") or "") for it in new_items}
-                            # Only a TRUNCATED marked_items list (the engine
-                            # caps it at _MARKED_ITEMS_CAP) leaves new-mark
-                            # paths unknown here, which would misfile them as
-                            # "already marked"; skip the section only then.
-                            # marked_count can't answer this: a Simulate
-                            # reports the total it would delete now, not how
-                            # many of those marks are new, so comparing the two
-                            # hid the list on every day the marks carried over.
-                            if len(new_items) < _MARKED_ITEMS_CAP:
-                                report.setdefault("existing_marked_items", [
-                                    {"title": v.get("title"), "delete_on": v.get("delete_on")}
-                                    for p, v in marked.items() if p not in new_paths])
-                            # The seasons this run handled ride the same
-                            # message, folded into the run's own numbers —
-                            # one cleanup, one report. A season-side
-                            # fail-closed abort means movies covered the
-                            # whole deficit. Passed in per run, never read
-                            # from a global the NEXT run may already have
-                            # overwritten.
-                            tvp = tv_pass_report
-                            if isinstance(tvp, dict):
-                                report.setdefault("seasons", {
-                                    "marked_new": tvp.get("marked_new") or 0,
-                                    "held_by_delay": tvp.get("held_by_delay") or 0,
-                                    "deleted_seasons": len(tvp.get("deleted_seasons") or []),
-                                    "skipped": len(tvp.get("skipped") or []),
-                                    "freed_bytes": tvp.get("freed_bytes") or 0,
-                                    "aborted": tvp.get("aborted"),
-                                    "marked_total": len(_tv_cleanup_state().get("marked") or {}),
-                                })
-                        except Exception:
-                            pass
+                        _enrich_run_report(report, tv_pass_report)
                         summary_sent, _detail = notify.dispatch_run_report(cfg, report)
                 elif not is_debug:
                     # The failure in the words the dashboard is showing for the
@@ -2514,7 +2558,8 @@ def run_script(mode_override: str | None = None, manual: bool = False,
                     # target first, the run freed less than it was asked for.
                     _tv_report = _run_tv_cleanup_pass(_tv_pass_cfg,
                                                       execute=_tv_exec,
-                                                      immediate=manual)
+                                                      immediate=manual,
+                                                      run_started_at=_run_started_at)
                 else:
                     _stamp_tv_share(0)
             except Exception as e:
@@ -2821,6 +2866,18 @@ def run_summary_sync(timeout: int = 600, *, defer_reconcile: bool = False) -> tu
 # real run or a Summary, and it queues behind one that's already in flight.
 _reconcile_queued = None   # (refetch: bool, trigger: str) waiting for the active job
 _reconcile_held = None      # a refetch reconcile held because a needed server was down
+# A queue rebuild is running or about to. _summary_active alone cannot say so —
+# a plain Summary refresh sets it too — and the difference is what the page
+# tells the user: a stale plan with a rebuild already under way must not be
+# reported as "run Simulate again", because nobody has to.
+_reconcile_active = False
+
+
+def _plan_rebuilding() -> bool:
+    """True while a config-save queue rebuild is running or waiting to run.
+    Includes the QUEUED and HELD cases: both end in a rebuild, so neither is a
+    moment to ask the user for a Simulate."""
+    return bool(_reconcile_active or _reconcile_queued or _reconcile_held)
 # Ticks a held reconcile has been passed over for a Redline emergency, and the
 # cap on that (~1 hour at the 15-minute cadence); see _scheduled_tick_body.
 _reconcile_deferred_ticks = 0
@@ -2859,13 +2916,14 @@ def _maybe_launch_queued_reconcile() -> None:
 
 
 def _reconcile_worker(refetch: bool, trigger: str) -> None:
-    global _summary_active, _summary_queued
+    global _summary_active, _summary_queued, _reconcile_active
     try:
         _run_reconcile_subprocess(CONFIG_PATH, refetch=refetch, trigger=trigger)
     except Exception:
         pass
     with _run_lock:
         _summary_active = False
+        _reconcile_active = False
         # Consume a Summary queued while this reconcile held the flag — the same
         # handshake the other two owners of this flag make. run_summary() already
         # answered its caller "Summary refresh queued", so it has to happen; and a
@@ -2882,13 +2940,14 @@ def run_reconcile(*, refetch: bool, trigger: str) -> None:
     """Launch a background queue reconcile. If a run/Summary is in flight, queue it
     to fire on completion (the refetch flag is sticky — if either the queued or the
     new request needs a server lookup, the coalesced one does)."""
-    global _summary_active, _reconcile_queued
+    global _summary_active, _reconcile_queued, _reconcile_active
     with _run_lock:
         if _run_active or _summary_active:
             prev = _reconcile_queued
             _reconcile_queued = ((prev[0] if prev else False) or refetch, trigger)
             return
         _summary_active = True
+        _reconcile_active = True
     _pause_scheduler_for_run()
     threading.Thread(target=_reconcile_worker, args=(refetch, trigger),
                      daemon=True, name="engine-reconcile").start()
@@ -2897,6 +2956,15 @@ def run_reconcile(*, refetch: bool, trigger: str) -> None:
 # Plan-affecting settings that reconcile in place on save. PURE keys recompute from
 # the snapshot with no server call; REFETCH keys change a protection SOURCE, so the
 # reconcile re-fetches the live protected/favorite sets first.
+#
+# No TV_* key is here, and that is not an omission. The movie queue is STORED, so
+# nothing recomputes it on read and a save has to rebuild it. Seasons are not
+# stored at all — _tv_eligible_entries derives them from the snapshot against the
+# current config every time they are read — so the next status poll already
+# reflects a saved TV change and a reconcile would rebuild nothing. Adding one
+# here would spawn a run whose first act is to filter TV rows back out
+# (reconcile_from_snapshot is movie-only by design) and redo the movie queue for
+# nothing. test_settings_take_effect_on_save pins both halves.
 _RECONCILE_PURE_KEYS = (
     "SCORE_BALANCE", "GRACE_PERIOD_DAYS", "MAX_IMDB_RATING", "NEAR_TIE_PTS",
     "MAX_STALENESS_MONTHS", "SKIP_UNPLAYED_MOVIES", "MOVIE_CLEANUP_ENABLED",
@@ -3103,6 +3171,30 @@ def _scan_lock_reason(cfg: dict) -> str:
     return "Run Simulate first — this enables automatically once the scan finishes."
 
 
+def _monitor_mode_lock_reason(cfg: dict) -> str:
+    """Why the Monitor Only RADIO is unavailable — '' when it is selectable.
+
+    _scan_lock_reason's verdict, minus its scan half for a mode that is already
+    running scheduled scans (paused/headroom): the active mode's own radio must
+    never ghost under it, and Automatic Cleanup's daily scan satisfies Monitor
+    Only by construction. The setup and armed-trigger halves are never waived —
+    a running mode with its media server deselected is still missing its setup.
+
+    This is the ONE source for the radio's availability: the page render and
+    the /api/status poll both serve it verbatim, so the client has nothing of
+    its own to recompute (recomputing is how the render and the poll drifted
+    apart)."""
+    reason = _scan_lock_reason(cfg)
+    if not reason:
+        return ""
+    if (cfg.get("RUN_MODE") in ("paused", "headroom")
+            and (cfg.get("USE_PLEX") or cfg.get("USE_JELLYFIN"))
+            and _has_monitored_dirs(cfg)
+            and _any_space_trigger_armed(cfg)):
+        return ""
+    return reason
+
+
 def _todays_daily_run_epoch(cfg: dict | None = None):
     """Epoch of today's configured daily run time (DAILY_RUN_TIME) in the app's
     local/configured timezone. An unparseable DAILY_RUN_TIME falls back to
@@ -3264,17 +3356,39 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
     limit_gb = None
     safety_ok = True
     safety_message = ""
-    if headroom_ok and max_pct_ok and total_gb and total_gb > 0:
+    if max_pct_ok and total_gb and total_gb > 0:
+        # A property of the filesystem and the percentage alone — no threshold
+        # value is involved — so the page can show it even while the field is
+        # blank or mid-edit, which is when knowing the ceiling helps most.
         limit_gb = round(total_gb * max_pct / 100, 1)
-        # The safety cap bounds the free-space floor the system maintains: the
-        # Headroom target normally, the Redline floor in redline-only mode.
+    # The safety cap bounds the free-space floor the system maintains: the
+    # Headroom target normally, the Redline floor in redline-only mode.
+    _maintained_gb = None
+    if headroom_ok:
         _maintained_gb = headroom_gb if headroom_gb > 0 else (
             redline_gb if (redline_ok and redline_gb) else None)
-        safety_ok = _maintained_gb is None or _maintained_gb <= limit_gb
+    if _maintained_gb is not None and limit_gb is None:
+        # A floor to enforce and no filesystem size to judge it against, so the
+        # check cannot run. It used to be skipped, which meant an unreadable
+        # disk did not relax the limit — it removed it, and the button that
+        # deletes stayed live with nothing standing between it and any value at
+        # all. A safety rule that disappears when its input does is not a
+        # safety rule; hold Cleanup until the reading comes back.
+        safety_ok = False
+        safety_message = ("Can't read the filesystem size, so the safety percentage "
+                          "can't be checked — Cleanup is held until it can.")
+        safety_errors.append(safety_message)
+    elif _maintained_gb is not None:
+        safety_ok = _maintained_gb <= limit_gb
         if not safety_ok:
-            safety_message = ("Redline floor is over the safety percentage."
-                              if headroom_gb == 0 else
-                              "Headroom target is over the safety percentage.")
+            # Name the limit. "Over the safety percentage" alone leaves the
+            # reader to guess which total the percentage is OF — and the wrong
+            # guess is easy to reach, because the cap rule right below measures
+            # against the library instead.
+            _which = "Redline floor" if headroom_gb == 0 else "Headroom target"
+            safety_message = (f"{_which} is over the safety percentage — at most "
+                              f"{limit_gb:,.0f} GB ({max_pct:g}% of the "
+                              f"{total_gb:,.0f} GB filesystem).")
             safety_errors.append(safety_message)
 
     # The same safety percentage caps how much a Library Size Cap may delete in a cleanup
@@ -3288,11 +3402,61 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
     cap_floor_gb = None
     cap_safety_ok = True
     cap_safety_message = ""
-    if cap_configured and max_pct_ok and library_gb_val and library_gb_val > 0:
-        cap_floor_gb = round(library_gb_val * (100 - max_pct) / 100, 1)
+    #
+    # Measured against the library NET OF WHAT IS ALREADY MARKED, because those
+    # bytes are spoken for: they are on the way out, held only by the deletion
+    # delay. Against the raw size the guard fires on its own tail — a legal cap
+    # with marks waiting out the delay, a library that keeps growing meanwhile,
+    # and the floor climbs over a cap nobody touched. The trip then pauses
+    # Automatic Cleanup, which is what would have brought the library back
+    # under. Netting them out cannot excuse a cap that is simply set too low:
+    # subtracting the queue lowers the floor by 85% of the queue, so a gap the
+    # queue does not cover still trips.
+    #
+    # CLAMPED to one pass's worth. A queue bigger than the safety percentage is
+    # not evidence the cap is fine — it is the symptom of a cap far below the
+    # floor that a Simulate already marked the whole library against. Netting it
+    # in full would let those bytes lower the bar and then jump over it: with a
+    # 23,489 GB library and 8,800 GB marked, the unclamped floor lands at 12,486
+    # and admits a 12,500 GB cap whose first pass deletes 37% of the library —
+    # the exact thing this rule exists to stop. The delay case it is FOR can
+    # never exceed the clamp: those marks were sized by a cap that was legal
+    # when saved, so they are at most one safety percentage of the library.
+    queued_gb = 0.0
+    if cap_configured:
+        try:
+            queued_gb = _marked_bytes_awaiting_delay() / 1e9
+        except Exception:
+            queued_gb = 0.0   # unreadable queue nets out nothing: keep the strict floor
+        if max_pct_ok and library_gb_val and library_gb_val > 0:
+            queued_gb = min(queued_gb, library_gb_val * max_pct / 100)
+    if max_pct_ok and library_gb_val and library_gb_val > 0:
+        # Computed whether or not a cap is set: with the cap off there is nothing
+        # to judge, but the page still shows the floor so you can see where the
+        # limit sits BEFORE typing a value into it.
+        cap_floor_gb = round(max(0.0, library_gb_val - queued_gb) * (100 - max_pct) / 100, 1)
+    if cap_configured and cap_floor_gb is None:
+        # Same hole on the cap side, and a worse one: the cap's whole job is to
+        # trim the library down, so with no library measurement there was no
+        # floor, and a 1 GB cap against a 23 TB library sailed through with
+        # Cleanup enabled. Unmeasured is not "safe to delete against".
+        cap_safety_ok = False
+        cap_safety_message = ("Library size isn't measured yet, so the Library Size Cap "
+                              "can't be checked against the safety percentage — run a "
+                              "Simulate first.")
+        safety_errors.append(cap_safety_message)
+    elif cap_configured:
         cap_safety_ok = cap_gb >= cap_floor_gb
         if not cap_safety_ok:
-            cap_safety_message = "Library Size Cap would delete more than the safety percentage of the library."
+            # Name the library the floor was actually derived from. With a queue
+            # netted out that is not the library's size, and quoting the raw
+            # figure would make the stated sum fail to add up.
+            cap_safety_message = (
+                f"Library Size Cap would delete more than the safety percentage of the "
+                f"library — no lower than {cap_floor_gb:,.0f} GB ({max_pct:g}% of the "
+                f"{library_gb_val - queued_gb:,.0f} GB library"
+                + (f", after the {queued_gb:,.0f} GB already marked" if queued_gb else "")
+                + ").")
             safety_errors.append(cap_safety_message)
 
     # A Cleanup needs at least one active space target. Headroom 0 + no Redline + no
@@ -3330,56 +3494,107 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
     headroom_errors = _dedupe(hard_errors + safety_errors)
 
     # User-facing deletion (arming Automatic Cleanup, the manual Cleanup button) always
-    # requires that a Simulate has seen the library under the CURRENT config:
+    # requires that a Simulate has seen the library under the CURRENT config.
+    # The floor, in every mode, is the library snapshot a completed scan writes,
+    # stamped with the paths it scanned; on top of that:
     #   • limits breached (or redline-only, which deletes the moment its floor is
     #     hit): a deletion plan stamped with exactly these thresholds; moving
     #     Headroom/Redline/Cap ghosts Automatic Cleanup until a Simulate refreshes it;
-    #   • limits satisfied: proof a Simulate has run at least once; the plan
-    #     stamp when there is one, else the library snapshot every completed
-    #     scan writes (within limits the eligible queue can legitimately be
-    #     empty, so the snapshot is the evidence).
+    #   • limits satisfied: the snapshot alone, since the eligible queue can
+    #     legitimately be empty there and a plan stamp would prove nothing more.
     # Deliberately NOT part of ok_for_cleanup; the scheduler recomputes its own
     # plan every run and must not auto-pause an armed Automatic Cleanup over this.
     simulate_required = False
     simulate_first_time = False
+    simulate_undecidable = False
+    scan_overdue = False
     # A full library scan must have run within the last two days (see
     # _full_scan_overdue); an older plan is ghosted no matter what its stamp
     # says. The snapshot is kept for display; only Cleanup + arming lock until a
     # fresh scan. Skipped when there's no snapshot yet (the plan/evidence logic
     # below owns the first-time "run a Simulate" case).
-    scan_overdue = _full_scan_overdue()
     if not headroom_errors:
-        if scan_overdue:
-            simulate_required = True
-        else:
-            try:
+        try:
+            scan_overdue = _full_scan_overdue()
+            if scan_overdue:
+                simulate_required = True
+            else:
                 _plan_current = _pending_plan_current(cfg, use_saved_file=not candidate_cfg)
-                if _redline_only_mode_cfg(cfg):
-                    simulate_required = not _plan_current
-                elif _deletion_limits_exceeded(cfg, disk, library_gb_val):
+                _scanned = _simulate_evidence(cfg)
+                if not _scanned:
+                    # No completed scan of the CURRENT monitored paths, so there
+                    # is nothing for a plan to be a plan OF. A stamped plan does
+                    # not stand in for one: the plan stamp and the library
+                    # snapshot live in separate parts of the store and do come
+                    # apart — a scan that reaches the end with no monitored path
+                    # mounted deliberately keeps the last good snapshot rather
+                    # than writing an empty one, and still stamps its plan. With
+                    # no snapshot at all _full_scan_overdue() reads False, so
+                    # every other check here is satisfied and the branches below
+                    # would arm Automatic Cleanup off a plan no scan stands
+                    # behind.
+                    simulate_required = True
+                    simulate_first_time = True
+                elif (_redline_only_mode_cfg(cfg)
+                        or _deletion_limits_exceeded(cfg, disk, library_gb_val)):
                     simulate_required = not _plan_current
                 else:
-                    simulate_required = not (_plan_current or _simulate_evidence(cfg))
-                    simulate_first_time = simulate_required
-            except Exception:
-                simulate_required = False
+                    # Within limits the eligible queue can legitimately be
+                    # empty, so the scan itself is the evidence.
+                    simulate_required = False
+        except Exception as e:
+            # FAIL CLOSED. This is the gate that stops Automatic Cleanup being
+            # armed before a Simulate has shown what it would remove, and it
+            # used to answer "no Simulate needed" whenever it could not tell —
+            # so a store that would not open, or any other failure inside these
+            # helpers, offered the one switch that deletes on a schedule with
+            # nothing behind it. Every other safety decision here fails the
+            # other way; this one now does too.
+            #
+            # Loudly, as well as closed: swallowed silently, the only symptom
+            # was a radio button that should have been grey, on a page that
+            # gives no reason to look in a log.
+            simulate_required = True
+            simulate_undecidable = True
+            print(f"WARNING: could not determine whether a Simulate is required "
+                  f"({type(e).__name__}: {e}) — holding Automatic Cleanup until one runs.",
+                  flush=True)
 
     if not simulate_required:
         simulate_required_message = ""
+    elif _plan_rebuilding():
+        # A save already started the rebuild that makes this plan current again.
+        # Every branch below asks for a Simulate, and none of them is true right
+        # now: the work is under way and finishes on its own — which is exactly
+        # what it looked like from outside when the page said "run it again" and
+        # then un-ghosted Cleanup seconds later, having asked for nothing.
+        simulate_required_message = ("Rebuilding the deletion plan after your settings "
+                                     "change — this finishes on its own.")
+    elif simulate_undecidable:
+        simulate_required_message = ("MediaReducer could not confirm a current deletion "
+                                     "plan — run Simulate before enabling Automatic Cleanup.")
     elif scan_overdue:
         simulate_required_message = _SCAN_OVERDUE_MESSAGE
-    elif _redline_only_mode_cfg(cfg):
-        simulate_required_message = ("Run Simulate to build the Redline deletion-order "
-                                     "preview before enabling Automatic Cleanup.")
-    elif simulate_first_time:
-        simulate_required_message = ("Run Simulate once so MediaReducer has scanned "
-                                     "your library before enabling automatic mode.")
-    elif _pending_raw():
-        # A plan exists but its stamp no longer matches; the settings moved.
-        simulate_required_message = ("Settings changed since the last Simulate — "
-                                     "run it again to rebuild the deletion plan.")
     else:
-        simulate_required_message = SIMULATE_REQUIRED_MESSAGE
+        # Same reasoning as the block above: these read the store and the config
+        # to word the reason, and a failure here must not fall out of the
+        # function and take the whole threshold state with it. The generic
+        # sentence is always true when the specific one cannot be worked out.
+        try:
+            if _redline_only_mode_cfg(cfg):
+                simulate_required_message = ("Run Simulate to build the Redline deletion-order "
+                                             "preview before enabling Automatic Cleanup.")
+            elif simulate_first_time:
+                simulate_required_message = ("Run Simulate once so MediaReducer has scanned "
+                                             "your library before enabling automatic mode.")
+            elif _pending_raw():
+                # A plan exists but its stamp no longer matches; the settings moved.
+                simulate_required_message = ("Settings changed since the last Simulate — "
+                                             "run it again to rebuild the deletion plan.")
+            else:
+                simulate_required_message = SIMULATE_REQUIRED_MESSAGE
+        except Exception:
+            simulate_required_message = SIMULATE_REQUIRED_MESSAGE
 
     return {
         "ok_for_simulate": not simulate_errors,
@@ -3389,6 +3604,24 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
         # (headroom over the cap, or a cap below the floor); the dashboard's breach
         # note words itself around this.
         "safety_blocked": not (safety_ok and cap_safety_ok),
+        # The two safety-percentage limits, in GB, so the page can SHOW them
+        # instead of only refusing. Both are derived here and nowhere else, so
+        # the number on screen is the number that decides:
+        #   safety_limit_gb — the most Headroom (or, with Headroom off, Redline)
+        #     may reserve: total filesystem × MAX_HEADROOM_PCT%.
+        #   cap_floor_gb    — the lowest a Library Size Cap may sit: library ×
+        #     (100 − MAX_HEADROOM_PCT)%, so one run trims at most that percent.
+        # None when the input is missing (no disk reading, no library measured
+        # yet) — the note stays off rather than inventing a limit.
+        "safety_limit_gb": limit_gb,
+        "cap_floor_gb": cap_floor_gb,
+        # ...and what they were worked out FROM, so the note can show the sum
+        # rather than assert a number. A limit you can check is one you can
+        # argue with; a bare "over the safety percentage" is one you can only
+        # probe by trial and error.
+        "safety_pct": max_pct if max_pct_ok else None,
+        "total_gb": total_gb or None,
+        "library_gb": library_gb_val,
         "simulate_required": simulate_required,
         "simulate_required_message": simulate_required_message,
         "simulate_tooltip": " ".join(simulate_errors),
@@ -4793,9 +5026,11 @@ def _tv_eligible_count(cfg: dict) -> int:
     only until the next poll put the stored number back.
 
     The snapshot read is memoized, and the plan is arithmetic over rows
-    already in memory, so this stays cheap enough for the status poll."""
-    if not _tv_cleanup_armed(cfg):
-        return 0
+    already in memory, so this stays cheap enough for the status poll.
+
+    No gate of its own: _tv_eligible_entries decides who is eligible, and this
+    counts what it returns. Holding a second copy of that rule here is what
+    made the button and the window disagree."""
     return len(_tv_eligible_entries(cfg, set(_tv_cleanup_state().get("marked") or {})))
 
 
@@ -4815,7 +5050,8 @@ def _tv_pass_plan_for_run(cfg: dict, effective_mode: str | None):
     return _is_cleanup_mode(effective_mode)
 
 
-def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -> dict:
+def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
+                         run_started_at: float | None = None) -> dict:
     """The run's season side — fired with every engine run: refresh facts fail-closed,
     reconcile the marks with the fresh take prefix, and (execute=True only)
     delete the marked seasons whose delay has elapsed, worst-kept first.
@@ -4824,9 +5060,14 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -
     change your mind about what a daily run will take — and a button press is
     the user saying the target matters now.
 
+    run_started_at stamps the report with the run it belongs to, so the engine
+    can tell this run's season numbers from the last one's rather than trusting
+    that a recent report must be the current one.
+
     Returns the report it also persists as the state's last_pass."""
     today = time.strftime("%Y-%m-%d")
     report = {"at": time.time(), "date": today,
+              "run_started_at": (float(run_started_at) if run_started_at else None),
               "mode": "cleanup" if execute else "monitor",
               "pool_target_gb": 0, "tv_share_gb": 0, "movie_share_gb": 0,
               "marked_new": 0, "unmarked": 0, "held_by_delay": 0,
@@ -4851,6 +5092,26 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -
         print(f"TV cleanup: aborted fail-closed — {e}", flush=True)
         return _finish()
 
+    # The plan is built whether or not TV cleanup is on, and whether or not the
+    # thresholds are safe to delete against. Off (or blocked) means seasons are
+    # INELIGIBLE, not invisible — the same shape as the movie side, which keeps
+    # scanning and scoring under both and reports the reason nothing is
+    # eligible. Building it BEFORE either refusal is what gives the run a
+    # number to report: bailing first left the run log saying "Eligible: 2213"
+    # for a run whose own Marked & Eligible window listed 2213 movies AND 41
+    # seasons, because the counts the log reads come from this report and this
+    # report had returned empty.
+    plan = _tv_season_plan(rows, cfg)
+    report["excluded"] = dict(plan.get("excluded") or {})
+    report["seasons_seen"] = sum(len(r.get("tv_seasons") or [])
+                                 for r in rows if isinstance(r, dict))
+    report["eligible_seasons"] = len(plan["order"])
+    # Bytes behind that count, so the engine can say what deleting the whole
+    # eligible pool would actually leave — its cap-unreachable warning was
+    # measuring the movie half and drawing a conclusion about the library.
+    report["eligible_season_bytes"] = sum(int(e.get("size_bytes") or 0)
+                                          for e in plan["order"])
+
     # The same safety refusal the movie side makes: thresholds so far below
     # the pool that reaching them would delete more than the safety
     # percentage allows. Mark nothing rather than pace a config mistake.
@@ -4866,26 +5127,21 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -
               "marking nothing this run", flush=True)
         return _finish()
 
-    # The plan is built whether or not TV cleanup is on. Off means seasons are
-    # INELIGIBLE, not invisible — the same shape as the movie side, which keeps
-    # scanning and scoring and reports movie_cleanup_off as the reason nothing
-    # is eligible. Building it first is what gives the run a number to report.
-    plan = _tv_season_plan(rows, cfg)
-    report["excluded"] = dict(plan.get("excluded") or {})
-    report["seasons_seen"] = sum(len(r.get("tv_seasons") or [])
-                                 for r in rows if isinstance(r, dict))
     if not bool(cfg.get("TV_CLEANUP_ENABLED", False)):
         # Held back by the switch. Marks go too: an ineligible season must not
         # keep a delay clock running, exactly as a raised cap unmarks.
         report["cleanup_off"] = len(plan["order"])
         report["unmarked"] = len(st["marked"])
+        # Planned but NOT eligible — the switch is the whole point. Reported as
+        # cleanup_off instead, so the log cannot say both at once.
+        report["eligible_seasons"] = 0
+        report["eligible_season_bytes"] = 0
         st["marked"] = {}
         _stamp_tv_share(0)
         print(f"TV cleanup is off — {report['cleanup_off']} season(s) planned "
               f"but not eligible", flush=True)
         return _finish()
     takes, pool = _merged_pool_takes(plan["order"], cfg)
-    report["eligible_seasons"] = len(plan["order"])
     report["pool_target_gb"] = round(pool["target_bytes"] / 1e9, 1)
     report["tv_share_gb"] = round(pool["tv_share_bytes"] / 1e9, 1)
     report["movie_share_gb"] = round(pool["movie_share_bytes"] / 1e9, 1)
@@ -4953,7 +5209,16 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False) -
     # Same note the engine prints for movies, for the season side's own share:
     # a season is the biggest deletion unit there is, so this is where a small
     # deficit most often costs far more than it asked for.
-    _over = shared.overshoot_note(pool["tv_share_bytes"], pool["target_bytes"])
+    #
+    # Worded by what this pass actually did. The share covers freed + marked +
+    # vanished seasons; a monitor pass frees nothing at all, and "the season
+    # side freed 60 GB" over delay-clocked marks was the same false claim the
+    # movie side's note made. Vanished seasons claim nothing.
+    _freed = int(report.get("freed_bytes") or 0)
+    _over = shared.composed_overshoot_note(
+        _freed,
+        pool["tv_share_bytes"] - _freed - int(report.get("vanished_bytes") or 0),
+        pool["target_bytes"])
     if _over:
         report["overshoot_note"] = _over
         print(f"TV cleanup: NOTE — the season side {_over}", flush=True)
@@ -6670,7 +6935,10 @@ def api_debug_library_snapshot():
     protected = sum(1 for m in movies if m.get("protected"))
     favorite = sum(1 for m in movies if m.get("favorite"))
     unplayed = sum(1 for m in movies if not m.get("plays"))
-    lines.append(f"library snapshot: built {_fmt_epoch(data.get('built_at'))} | {len(movies)} movies | "
+    # Rows span both media types — say so instead of calling series movies.
+    _mv_rows = sum(1 for m in movies if (m.get("media_type") or "movie") == "movie")
+    lines.append(f"library snapshot: built {_fmt_epoch(data.get('built_at'))} | "
+                 f"{_mv_rows} movies + {len(movies) - _mv_rows} TV series | "
                  f"rated={rated} | protected={protected} | favorite={favorite} | unplayed={unplayed}")
     lines.append("")
     # The snapshot is the ENTIRE library; cap the per-movie dump so the debug
@@ -7074,12 +7342,26 @@ def _build_debug_report() -> str:
         add("=" * 60)
 
     section("CONFIG")
+    # Effective connection URLs, for the five server fields: a blank field
+    # whose credential is set rides a default at connect time, and this report
+    # printed the raw "(blank)" — so the artifact built FOR diagnosis showed
+    # working servers as unconfigured (the same report's health section said
+    # plex_connected=True three lines under PLEX_URL = (blank)). Resolved the
+    # same way the connections resolve, labeled as the default it is.
+    try:
+        _eff_urls = _effective_connection_values(cfg)
+    except Exception:
+        _eff_urls = {}
     for key in sorted(cfg.keys()):
         value = cfg.get(key)
         if key in _REPORT_SECRET_KEYS:
             add(f"  {key} = {'<set>' if str(value or '').strip() else '(blank)'}")
         elif key in _REPORT_URL_KEYS and key != "IMDB_RATINGS_URL":
-            add(f"  {key} = {s.url(value)}")
+            _eff = str(_eff_urls.get(CONNECTION_FORM_FIELD_MAP.get(key, "")) or "").strip()
+            if not str(value or "").strip() and _eff:
+                add(f"  {key} = {s.url(_eff)} (default — the saved field is blank)")
+            else:
+                add(f"  {key} = {s.url(value)}")
         elif key == "MONITOR_DIRS":
             add(f"  {key} = [{', '.join(s.path(d) for d in (value or []))}]")
         elif key in ("PROTECTED_COLLECTIONS", "JELLYFIN_PROTECTED_COLLECTIONS"):
@@ -7300,8 +7582,12 @@ def _build_debug_report() -> str:
     if pool_err:
         add(f"  library snapshot: ({pool_err})")
     else:
+        # The snapshot's rows span both media types; "3017 movies" was 2,760
+        # movies plus 257 TV series wearing the wrong label.
         pm = pool.get("movies") or []
-        add(f"  library snapshot: {len(pm)} movies | built {_fmt_epoch(pool.get('built_at'))} | "
+        _mv = sum(1 for m in pm if (m.get("media_type") or "movie") == "movie")
+        add(f"  library snapshot: {_mv} movies + {len(pm) - _mv} TV series | "
+            f"built {_fmt_epoch(pool.get('built_at'))} | "
             f"rated={sum(1 for m in pm if m.get('rating') is not None)} | "
             f"protected={sum(1 for m in pm if m.get('protected'))} | favorite={sum(1 for m in pm if m.get('favorite'))}")
     try:
@@ -8919,6 +9205,24 @@ def _entry_size_bytes(e: dict) -> int:
         return 0
 
 
+def _marked_bytes_awaiting_delay() -> int:
+    """Bytes already CLOCKED for deletion and only waiting out the deletion delay.
+
+    marked_at set is the whole test: the engine stamps it when it schedules an
+    entry, so these are decided deletions with a date, not the merely-eligible
+    rest of the queue (marked_at None) that no run has committed to. The Library
+    Size Cap's safety floor subtracts them — they are on their way out, so
+    counting them as library the cap must not trim is counting them twice.
+
+    Redline-only mode has no cap to check and clocks nothing, so it contributes
+    0 here by construction rather than by a special case."""
+    total = 0
+    for e in (_pending_raw() or {}).values():
+        if isinstance(e, dict) and e.get("marked_at") is not None:
+            total += _entry_size_bytes(e)
+    return total
+
+
 def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True) -> list[dict]:
     """The marked & eligible queue, in the file's own (deletion) order for every
     mode. MARKED entries are the ones actually scheduled: in normal modes the
@@ -9086,8 +9390,17 @@ def _tv_eligible_entries(cfg: dict, marked_keys) -> list[dict]:
     """Seasons in the current plan order that are NOT marked — the eligible
     TV tail of the pool's deletion order, in the movie entry shape. No dates:
     eligibility is visible order, not a schedule, exactly like the eligible
-    movies behind the marked prefix."""
-    if not bool(cfg.get("TV_CLEANUP_ENABLED", False)):
+    movies behind the marked prefix.
+
+    _tv_cleanup_armed, not the switch alone: seasons also need a DAILY pool
+    trigger — a Headroom target or a Library Size Cap — to be deletable at
+    all, because Redline is a movie-only emergency. In redline-only mode
+    nothing here could ever be deleted, so listing it under "Marked & Eligible
+    Deletions" promises a deletion that cannot happen. The count helper held
+    this gate and this list did not, which is exactly how the button read
+    2,213 while opening it showed 2,254 — the seasons only the window
+    believed in."""
+    if not _tv_cleanup_armed(cfg):
         return []
     try:
         data, _err = _read_library_snapshot()
@@ -9258,6 +9571,7 @@ def dashboard():
                                                and not cfg.get(RUN_MODE_USER_PAUSED_KEY)) else ""),
                            thresholds_configured=_has_monitored_dirs(cfg),
                            code_reset_pending=code_reset_pending(),
+                           plan_rebuilding=_plan_rebuilding(),
                            headroom_gb=cfg.get("HEADROOM_GB"),
                            redline_gb=cfg.get("REDLINE_GB"),
                            redline_only=_redline_only_mode_cfg(cfg),
@@ -9324,9 +9638,11 @@ def config_page():
         time_zone_options=_time_zone_options(),
         library_root=FILESYSTEM_CHECK_PATH,
         marked_clocked_count=_marked_clocked_count(cfg, pending_delete_forecast(cfg)),
-        # Monitor Only's third requirement: an up-to-date library database.
-        monitor_scan_ok=_library_db_fresh(cfg),
-        monitor_locked_reason=_scan_lock_reason(cfg),
+        # The Monitor Only radio's one availability verdict — the poll serves
+        # the same value, so what this render decides survives every poll.
+        monitor_lock_reason=_monitor_mode_lock_reason(cfg),
+        notify_preview_reason=_notify_preview_reason(cfg),
+        notify_test_reason=_notify_test_reason(cfg),
     )
 
 @app.route("/explorer")
@@ -9461,6 +9777,11 @@ def api_status():
         # Started from a button rather than the scheduler. Informational only.
         "run_manual":                 _run_active and _run_manual,
         "summary_active":          _summary_active,
+        # A config-save queue rebuild is running or waiting to. The dashboard
+        # swaps "Run Simulate to build the deletion plan" for a rebuilding note
+        # while it is: asking for a Simulate that is already being done for you
+        # is advice that retracts itself a few seconds later.
+        "plan_rebuilding":         _plan_rebuilding(),
         "last_run":                last_run_time(),
         "last_run_ts":             last_run_epoch(),
         "deleted_count":           deleted["count"],
@@ -9527,6 +9848,16 @@ def api_status():
         # this.
         "headroom_window_used_today": _headroom_window_used_today(),
         "cleanup_state":              cleanup_state,
+        # The Monitor Only radio's availability, worded. The Configuration page
+        # applies this verbatim on every poll — same source as its render — so
+        # a scan aging out (or landing) reaches the radio without a reload.
+        "monitor_lock_reason":     _monitor_mode_lock_reason(cfg),
+        # Why the notification preview has nothing to show ('' when it does).
+        # Polled rather than rendered once: a run finishing is what makes the
+        # preview available, and that happens while the page sits open.
+        "notify_preview_reason":   _notify_preview_reason(cfg),
+        # ...and why the test button has nowhere to send.
+        "notify_test_reason":      _notify_test_reason(cfg),
         # Drives the red Configuration tab live (no reload): onboarding cue or an API
         # error in the saved config's cached health.
         "config_attention":        _connection_onboarding_needed(cfg) or _api_connection_error(cfg),
@@ -9622,16 +9953,14 @@ def api_verify_connections():
 
 @app.route("/api/notify/test", methods=["POST"])
 def api_notify_test():
-    """Deliver a test alert to the currently-entered notification destinations.
+    """Deliver a test alert to the SAVED notification destinations.
 
-    Uses the notification fields from the POST body overlaid on the saved config,
-    so a user can verify wiring BEFORE saving. Bounded and best-effort (notify.py
-    never raises and times the send out), so this can't hang the request."""
-    payload = request.get_json(silent=True) or {}
+    Saved, not as-typed: the button's own availability is judged on the saved
+    config (see _notify_test_reason), and a test that exercised something else
+    would verify wiring the app is not using. Save, then test. Bounded and
+    best-effort (notify.py never raises and times the send out), so this can't
+    hang the request."""
     cfg = load_config()
-    for k in notify.CONFIG_KEYS:
-        if k in payload:
-            cfg[k] = payload[k]
     if not notify.has_destinations(cfg):
         return jsonify({"ok": False,
                         "error": "No notification services are configured. Add a service "
@@ -9647,6 +9976,185 @@ def api_notify_test():
     if ok:
         return jsonify({"ok": True, "message": detail})
     return jsonify({"ok": False, "error": detail}), 502
+
+
+def _notify_test_reason(cfg: dict) -> str:
+    """Why Send test notification has nowhere to send — '' when it has.
+
+    Judged on the SAVED config, like every other control state on the
+    Configuration page, and by notify.py's own assembler rather than a rule
+    copied into the browser: "configured" is not field-presence — a pasted
+    Discord or Slack webhook counts only if it parses, and Telegram and Gotify
+    need both of their fields. Type a destination and save; the next poll
+    un-ghosts the button."""
+    return "" if notify.has_destinations(cfg) else (
+        "Add a notification service — a webhook URL, token or topic — and save, "
+        "then test it.")
+
+
+def _notify_preview_reason(cfg: dict) -> str:
+    """Why the notification preview has nothing to show — '' when it has.
+
+    The preview renders three sections and each is conditional, so with no run
+    report on disk, no pending marked-changes diff and free space clear of the
+    warning margin, the popup would open on nothing. The button ghosts on this
+    instead, wearing the sentence as its tooltip.
+
+    Server-side only: none of the three depend on the notification fields, so
+    the answer rides the status poll rather than a per-keystroke round trip —
+    and a run finishing un-ghosts the button on the next poll without the page
+    being touched."""
+    if _read_run_report() is not None:
+        return ""
+    try:
+        if _pending_marked_changes(cfg)["new_items"]:
+            return ""
+    except Exception:
+        pass
+    try:
+        zone = _low_space_zone(cfg, disk_stats())
+        if zone and zone["in_zone"]:
+            return ""
+    except Exception:
+        pass
+    return ("Nothing to preview yet — run Simulate (or a Cleanup) so there is a "
+            "run summary to show. A pending marked-changes or low-space alert "
+            "would also be previewable.")
+
+
+@app.route("/api/debug/notify-preview", methods=["POST"])
+def api_debug_notify_preview():
+    """The notification texts the current settings would produce — rendered,
+    never sent, and touching no trigger state.
+
+    Rendered from the SAVED config, like the test button beside it — the
+    messages this install would actually send, not what an unsaved edit would
+    say. Three sections, dividers between them:
+      • the run summary the LAST completed run would send — rebuilt from
+        last_run_report.json through the same enrichment and builder as the
+        real dispatch, so no run has to be triggered to read one;
+      • the pending marked-changes alert, ONLY when the 15-minute check has an
+        un-announced diff waiting (muted modes leave it waiting — that is the
+        state this preview exists to inspect);
+      • the approaching-Redline warning, ONLY when free space is inside the
+        margin right now.
+
+    Strictly read-only: the marked baseline, the low-space warned flag and the
+    delivery rate state are exactly as this handler found them. Previewing an
+    alert must never consume its trigger — the pending diff still fires as a
+    real notification when the scheduler is next unmuted. Alerts the current
+    settings would suppress (toggle off, muted mode, no destinations) still
+    render, labeled with why they would not deliver: seeing the message is the
+    point of a preview."""
+    cfg = load_config()
+
+    # Delivery holds every section shares, worded once.
+    holds_all = []
+    if not notify.flag(cfg, "NOTIFY_ENABLED"):
+        holds_all.append("notifications are disabled")
+    if not notify.has_destinations(cfg):
+        holds_all.append("no notification service is configured")
+    if _notifications_muted_by_mode(cfg):
+        holds_all.append("the scheduler is Paused, which mutes all notifications"
+                         if cfg.get("RUN_MODE") == "off" else
+                         'Monitor Only is silent without "Also in Monitor Only"')
+
+    def section(header, msg, holds):
+        out = [header]
+        if holds:
+            out.append("Would NOT deliver right now: " + "; ".join(holds) + ".")
+        if msg:
+            title, body = msg
+            out += ["", "Subject: " + title, "", body]
+        else:
+            out += ["", "(nothing to report under the current settings)"]
+        return "\n".join(out)
+
+    parts = []
+
+    report = _read_run_report()
+    if report is None:
+        parts.append(
+            "RUN SUMMARY — no completed run report on disk.\n\n"
+            "The report is written when a run finishes (Cleanup, or a Simulate/"
+            "Debug Cleanup) and cleared when the next run starts — finish a "
+            "run, then preview again.")
+    else:
+        # The real dispatch enriched this report WITH the run's season-side
+        # report; a preview that rebuilds it without one shows a movie-only
+        # message that does not match what was actually sent — in the feature
+        # whose whole point is showing the message. The season side persists
+        # its last_pass stamped with the run that produced it, and the report
+        # now carries the same stamp, so the pair is matched by IDENTITY;
+        # a recent-but-foreign pass (or an older report without the stamp)
+        # correctly rebuilds movie-only rather than borrowing seasons from
+        # some other run.
+        _tv_lp = (_tv_cleanup_state() or {}).get("last_pass")
+        _tv_for_preview = None
+        try:
+            if (isinstance(_tv_lp, dict)
+                    and _tv_lp.get("run_started_at") is not None
+                    and report.get("run_started_at") is not None
+                    and abs(float(_tv_lp["run_started_at"])
+                            - float(report["run_started_at"])) < 0.001):
+                _tv_for_preview = _tv_lp
+        except (TypeError, ValueError):
+            _tv_for_preview = None
+        _enrich_run_report(report, _tv_for_preview)
+        holds = list(holds_all)
+        if not notify.flag(cfg, "NOTIFY_ON_RUN_SUMMARY"):
+            holds.append("run summary alerts are toggled off")
+        when = ""
+        try:
+            when = ", finished " + datetime.fromtimestamp(
+                float(report["ts"])).strftime("%Y-%m-%d %H:%M")
+        except (KeyError, TypeError, ValueError, OSError, OverflowError):
+            pass
+        msg = notify.build_run_message({**cfg, "NOTIFY_ON_RUN_SUMMARY": True}, report)
+        parts.append(section(
+            f"RUN SUMMARY — rebuilt from the last completed run "
+            f"({report.get('mode') or 'run'}{when}) under the current settings.",
+            msg, holds))
+
+    try:
+        pend = _pending_marked_changes(cfg)
+    except Exception:
+        pend = None
+    if pend and pend["new_items"]:
+        holds = list(holds_all)
+        if not notify.flag(cfg, "NOTIFY_ON_MARKED_CHANGES"):
+            holds.append("marked-changes alerts are toggled off")
+        msg = notify.build_marked_change_message(
+            {**cfg, "NOTIFY_ON_MARKED_CHANGES": True},
+            new_items=pend["new_items"], marked_total=pend["marked_total"],
+            redated=pend["redated"])
+        parts.append(section(
+            "PENDING MARKED-CHANGES ALERT — the next unmuted 15-minute check "
+            "sends this. Previewing it here does not consume it.", msg, holds))
+
+    try:
+        zone = _low_space_zone(cfg, disk_stats())
+    except Exception:
+        zone = None
+    if zone and zone["in_zone"]:
+        holds = list(holds_all)
+        if not notify.flag(cfg, "NOTIFY_ON_LOW_SPACE"):
+            holds.append("low-space warnings are toggled off")
+        state = _read_notify_meta("notify_low_space")
+        if (isinstance(state, dict) and state.get("warned")
+                and (state.get("redline"), state.get("margin"))
+                == (zone["redline"], zone["margin"])):
+            holds.append("already delivered for this floor/margin "
+                         "(re-arms after space recovers past the margin)")
+        msg = notify.build_low_space_message(
+            {**cfg, "NOTIFY_ON_LOW_SPACE": True},
+            free_gb=zone["free_gb"], redline_gb=zone["redline"],
+            margin_gb=zone["margin"], items=_low_space_items(cfg))
+        parts.append(section(
+            "LOW-SPACE WARNING — free space is inside the warning margin "
+            "right now.", msg, holds))
+
+    return jsonify({"ok": True, "text": ("\n\n" + "─" * 62 + "\n\n").join(parts)})
 
 
 @app.route("/api/connections/autodetect", methods=["POST", "GET"])
@@ -10709,6 +11217,14 @@ def api_save_config():
         return jsonify({
             "ok": True,
             "config": cfg,
+            # The just-saved config's verdicts, so the page's radios are exact
+            # the moment the save returns instead of one poll stale — computed
+            # AFTER the write and the reconcile, which may have rebuilt or
+            # unscheduled the plan this verdict reads.
+            "monitor_lock_reason": _monitor_mode_lock_reason(cfg),
+            "notify_preview_reason": _notify_preview_reason(cfg),
+            "notify_test_reason": _notify_test_reason(cfg),
+            "space_thresholds": _space_threshold_state(cfg),
             "connection_health": save_health,
             "api_config_changed": api_config_changed,
             "server_software_auto_disabled": server_software_auto_disabled,

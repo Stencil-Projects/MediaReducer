@@ -841,6 +841,62 @@
       70%  { opacity:.55; box-shadow:0 0 0 7px color-mix(in srgb, var(--accent) 0%, transparent); }
       100% { opacity:1;   box-shadow:0 0 0 0   color-mix(in srgb, var(--accent) 0%, transparent); }
     }
+    /* Stages the running MODE never performs (Debug Cleanup and Summary both
+       work from the standing queue, reading no library and scoring nothing).
+       Greyed in place rather than hidden, so every mode's stepper keeps the
+       same five positions and the same left-to-right shape — the run is
+       recognisably the same object, with two of its stops marked not-taken.
+       Dimmer than a pending step and never ticked: pending means "not yet",
+       this means "not at all". */
+    /* Muted piece by piece, NOT via opacity on the step: the step element also
+       owns its incoming connector (::after), and a whole-element fade would
+       render the entry line at half strength while the exit line — owned by
+       the full-opacity neighbor on the right — paints at full, splitting one
+       continuous path into two weights. */
+    .rp-step.is-skipped .rp-dot { background:transparent; border-style:dashed;
+              border-color:var(--border-strong); color:var(--text-muted); opacity:.7; }
+    .rp-step.is-skipped .rp-dot-label { color:var(--text-muted); opacity:.6;
+              text-decoration:line-through; text-decoration-color:var(--text-muted); }
+    /* Connectors AROUND a skipped span keep the path continuous: one line runs
+       from the last performed stage, muted through the greyed stops, and back
+       into the next performed one. Without these the span was a dark gap and
+       the next stage's green connector appeared from nowhere, joined on its
+       left to a circle that never ran. Same language as every other connector
+       — each line blends between the colors of the two circles it joins — so
+       green fades to grey entering the span, grey runs between skipped stops,
+       and grey fades back to the next dot's color leaving it. The ::after
+       overlay lives on the RIGHT step of each pair, which is what lets plain
+       adjacent-sibling selectors pick the connector by the pair it joins.
+       Declared after the state rules above so the boundary blends win.
+
+       ONLY BEHIND the run's progress (is-bridged, set by JS once the run has
+       moved past the stage): the stepper never paints a line ahead of where
+       the run actually is — a pending stage's connector stays the bare track
+       in every mode, and the first stage connects to nothing. Unconditional,
+       these painted the whole span while the run still sat at Checking,
+       drawing a line out of the active dot into stages nothing had reached.
+       The exit rules below need no flag: they key on the right neighbor
+       being active/done/failed, states that only exist once the run got
+       there. (No is-active + is-skipped entry rule for the same reason —
+       an active LEFT neighbor means the run is still before the span, and
+       once it jumps, that neighbor is done.) */
+    .rp-step.is-skipped.is-bridged:not(:first-child)::after {
+              background:var(--border-strong); opacity:1; }
+    .rp-step.is-done + .rp-step.is-skipped.is-bridged::after,
+    .rp-step.is-success-line + .rp-step.is-skipped.is-bridged::after {
+              background:linear-gradient(90deg, var(--rp-done), var(--border-strong)); }
+    .rp-step.is-skipped + .rp-step.is-done:not(:first-child)::after {
+              background:linear-gradient(90deg, var(--border-strong), var(--rp-done)); opacity:1; }
+    .rp-step.is-skipped + .rp-step.is-active:not(:first-child)::after {
+              background:linear-gradient(90deg, var(--border-strong), var(--accent)); opacity:1; }
+    .rp-step.is-skipped + .rp-step.is-failed:not(:first-child)::after {
+              background:linear-gradient(90deg, var(--border-strong), var(--rp-fail)); opacity:1; }
+    /* Done-with-warnings right after a skipped span (a no-op finish greys
+       stages 1-3, so Done's connector leaves a skipped stop): blend to the
+       warning color, not the green the is-done rule above would pick. After
+       that rule in source so the tie at equal specificity resolves here. */
+    .rp-step.is-skipped + .rp-step.is-warn-end:not(:first-child)::after {
+              background:linear-gradient(90deg, var(--border-strong), var(--text-warning)); opacity:1; }
     /* Completed steps: a solid disc with a CRISP CSS checkmark. The engine's ✓ glyph
        is hidden (color:transparent) so the mark renders identically on every font
        instead of a thin, off-center text tick — the check is "cut out" of the disc
@@ -1228,6 +1284,9 @@ let _safetyBlocked = {{ cleanup_state.space_thresholds.get('safety_blocked', fal
 // since the last Simulate): the app knows the live deficit but NOT what a run
 // would delete, so the breach note must ask for a Simulate, not promise a freed GB.
 let _simulateRequired = {{ cleanup_state.space_thresholds.get('simulate_required', false)|tojson }};
+// A config-save queue rebuild is already under way, so the note above must not
+// ask for a Simulate nobody has to run. Refreshed by every status poll.
+let _planRebuilding = {{ plan_rebuilding | default(false) | tojson }};
 // Deletion-delay state: with a delay set, a daily run may only MARK — the
 // red countdown and the breach note key off whether marks are ripe and when
 // the next marked deletion lands.

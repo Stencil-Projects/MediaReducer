@@ -79,6 +79,15 @@ CATEGORIES = {
                  "the deletion order. Clear the IMDb cache in Advanced to "
                  "re-download it."),
     },
+    "tv_inventory_unavailable": {
+        "severity": ERROR,
+        "label": "TV inventory unavailable",
+        "unit": None,
+        "note": ("The season side is fail-closed, so a media server that did not "
+                 "answer means no season was planned or deleted this run and the "
+                 "movie side carried the whole target. Check the Jellyfin/Plex "
+                 "connection, then run again."),
+    },
 
     # ── Warnings: the run carried on, but you should know ───────────────────
     "library_paths_missing": {
@@ -135,8 +144,8 @@ CATEGORIES = {
         "severity": WARNING,
         "label": "Library cap out of reach",
         "unit": None,
-        "note": ("Even deleting every eligible movie would leave the library "
-                 "above its cap. Raise the cap, or protect fewer movies."),
+        "note": ("Even deleting every eligible movie and season would leave the "
+                 "library above its cap. Raise the cap, or protect fewer titles."),
     },
 }
 # No "cleanup blocked by settings" category: a threshold over the safety

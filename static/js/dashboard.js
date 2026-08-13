@@ -295,6 +295,29 @@ function _setTerm(content) {
 
 // ── Run progress panel ──────────────────────────────────────────────────────
 const _RP_STEP_INDEX = { checking:0, library:1, scanning:2, simulating:3, deleting:3, done:4 };
+
+// Steps a run never performs, so the stepper can show them as skipped instead
+// of completed. Two sources, one meaning:
+//
+//  • MODE-keyed — Debug Cleanup ("no library scan, no deletions") and Summary
+//    ("info mode — no scan performed") work from the standing queue by
+//    definition. Neither reads the library or scores, so neither earns steps
+//    1 and 2, every time.
+//  • ENGINE-declared — a live "headroom" run sometimes skips stages too, and
+//    only the engine knows which: the manual Cleanup with a covering plan and
+//    the Redline emergency delete from the marked queue with no rescan
+//    (decided mid-run by queue coverage), and a run that concludes at
+//    Checking — "Nothing to do", "Already ran today", "Waiting for today's
+//    run time" — performs nothing past it. The engine states the skipped
+//    step indexes as skipped_stages in progress; emit_progress merges, so
+//    the field rides every later frame of that run and dies with it.
+//
+// Neither source is "which phases did we observe": every run ends at phase
+// "done" (index 4), so the high-water mark reaches the end no matter what
+// actually ran, and a poll-observed set fails the other way — the poll runs at
+// 750ms-3s, so a stage finishing between two polls would be drawn as skipped
+// when it really ran.
+const _RP_SKIPPED_BY_MODE = { debug_cleanup: [1, 2], debug_info: [1, 2] };
 let _rpRunKey = null;
 let _rpMaxIdx = 0;
 let _rpStageKey = null;
@@ -455,9 +478,29 @@ function renderProgress(p) {
   _rpMaxIdx = Math.max(_rpMaxIdx, activeIdx);
   const terminal = !active;
 
+  const skipped = _RP_SKIPPED_BY_MODE[mode]
+    || (Array.isArray(p.skipped_stages) ? p.skipped_stages : []);
+
   document.querySelectorAll('#rp-steps .rp-step').forEach((el, i) => {
-    el.classList.remove('is-active', 'is-done', 'is-failed', 'is-success-line', 'is-success-end', 'is-warn-line', 'is-warn-end');
+    el.classList.remove('is-active', 'is-done', 'is-failed', 'is-success-line', 'is-success-end', 'is-warn-line', 'is-warn-end', 'is-skipped', 'is-bridged');
     const dot = el.querySelector('.rp-dot');
+    // A stage this mode does not run is greyed in place, never ticked. It kept
+    // its ✓ before because every mode ends at phase "done" and the fill ran to
+    // the high-water mark — so a Debug Cleanup drew "Reading library ✓" and
+    // "Scoring ✓" beside its own "Scanned 0", claiming work its log shows it
+    // never did. Handled ahead of every other branch: skipped is a property of
+    // the mode, true while running, when finished, and when interrupted.
+    if (skipped.includes(i)) {
+      el.classList.add('is-skipped');
+      // The span's muted connectors paint ONLY once the run has moved past
+      // this stage (or finished): the stepper never draws a line ahead of
+      // where the run actually is — while it still sits at Checking, the
+      // dashed circles alone say what will be skipped, and the first stage
+      // connects to nothing.
+      if (terminal || activeIdx > i) el.classList.add('is-bridged');
+      dot.textContent = '–';
+      return;
+    }
     if (interrupted) {
       // When a run stops or fails: completed phases keep their green dots and
       // green connectors, and the connector INTO the interrupted phase blends
@@ -469,7 +512,10 @@ function renderProgress(p) {
       if (success) {
         // Successful runs get a green completion path. With skipped/error
         // items only the LAST dot goes warning yellow, so only its incoming
-        // connector blends green→yellow — the rest stay green.
+        // connector blends green→yellow — the rest stay green. Connectors
+        // touching a skipped step are recolored in CSS by sibling rules
+        // (each line still matches the circles it joins), so no special
+        // casing here.
         if (i > 0) el.classList.add(withErrors && i === 4 ? 'is-warn-line' : 'is-success-line');
         if (i === 4) el.classList.add(withErrors ? 'is-warn-end' : 'is-success-end');
       }
@@ -590,7 +636,12 @@ function renderProgress(p) {
   }
   document.getElementById('rp-current').textContent = current;
 
-  document.getElementById('rp-stat-scanned').textContent = (Number(p.scanned) || 0).toLocaleString();
+  // A mode that skips the scan has no scanned count to report, and "0" is not
+  // that — it reads as a scan that found nothing, which is how a Debug Cleanup
+  // came to show "Scanned 0" next to "Eligible 2,213". An em dash says the
+  // question does not apply here, matching the greyed Scoring step above.
+  document.getElementById('rp-stat-scanned').textContent =
+    skipped.includes(2) ? '—' : (Number(p.scanned) || 0).toLocaleString();
   document.getElementById('rp-stat-eligible').textContent = (Number(p.eligible) || 0).toLocaleString();
   // The engine reports what WOULD delete right now (never the queue size), so
   // these labels hold in every mode — a redline-only preview above the floor
@@ -1320,9 +1371,18 @@ function _updateBreachNote() {
       // changed since the last Simulate). The deficit is known from live disk, but
       // NOT what a run would delete — ask for a Simulate instead of claiming a
       // freed amount the app can't know yet.
+      //
+      // ...unless a save already started the rebuild that makes the plan current
+      // again, in which case asking for a Simulate is advice that retracts itself
+      // when the rebuild lands a few seconds later. Say what is happening instead.
+      const rebuilding = !!_planRebuilding;
       text = d.redline > 0
-        ? `Redline hit — ~${prGbAmount(d.redline)} GB below the floor. Run Simulate to build the deletion plan.`
-        : `Over space limits — ~${prGbAmount(d.max)} GB over. Run Simulate to build the deletion plan.`;
+        ? (rebuilding
+            ? `Redline hit — ~${prGbAmount(d.redline)} GB below the floor. Rebuilding the deletion plan after your settings change.`
+            : `Redline hit — ~${prGbAmount(d.redline)} GB below the floor. Run Simulate to build the deletion plan.`)
+        : (rebuilding
+            ? `Over space limits — ~${prGbAmount(d.max)} GB over. Rebuilding the deletion plan after your settings change.`
+            : `Over space limits — ~${prGbAmount(d.max)} GB over. Run Simulate to build the deletion plan.`);
     } else if (d.redline > 0) {
       // Redline frees only back to its floor (never up to the headroom target),
       // ignoring the daily window and the deletion delay.
@@ -1618,6 +1678,7 @@ async function syncStatus({refreshLog = true} = {}) {
     if (d.daily_run_time !== undefined) _dailyRunTime = d.daily_run_time;
     if (d.marked_ripe_count !== undefined) _markedRipeCount = d.marked_ripe_count;
     if (d.marked_count !== undefined) _eligibleCount = d.marked_count;
+    if (d.plan_rebuilding !== undefined) _planRebuilding = !!d.plan_rebuilding;
     if (d.marked_event_count !== undefined) {
       _markedEvent = { on: d.marked_event_on, count: d.marked_event_count, bytes: d.marked_event_bytes };
     }

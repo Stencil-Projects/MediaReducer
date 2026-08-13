@@ -214,6 +214,18 @@ check("low-space lists first in line", "First in line:" in ls[1] and "• F1 (3.
 check("low-space toggle off → None",
       notify.build_low_space_message({**ALL_ON, "NOTIFY_ON_LOW_SPACE": False},
                                      free_gb=1, redline_gb=1, margin_gb=1) is None)
+# Movie names is a separate switch from whether the alert fires, and this is
+# the alert whose privacy gate nothing checked. The run summary, the
+# marked-change alert and the abort message all have this check; the low-space
+# warning did not, so it was the one place a title could still leave the box
+# with the toggle off.
+_ls_private = notify.build_low_space_message(
+    {**ALL_ON, "NOTIFY_SHOW_MOVIES": False}, free_gb=212.4, redline_gb=200,
+    margin_gb=25, items=[{"title": "F1", "size": 3 * 1_000_000_000}])
+check("low-space names no film with Movie names off",
+      "F1" not in _ls_private[1] and "First in line" not in _ls_private[1])
+check("...while the numbers that make it worth sending are still there",
+      "212.4" in _ls_private[1] and "200" in _ls_private[1])
 
 # ── Mode-aware wording ───────────────────────────────────────────────────────
 # Every alert states whether deletions can happen in the CURRENT mode, and the

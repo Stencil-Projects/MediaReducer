@@ -245,6 +245,14 @@ doing right now, and each threshold states the figure it needs to reach and how
 far away it is — the numbers move as you type, so you can try a value against
 the real disk before saving.
 
+Everything the Configuration page locks, greys or explains describes your
+**saved** settings, never the form in front of you: a section unlocks, a
+Scheduler Mode becomes selectable and a button ungreys when a save makes it
+true, not when you type it. The calculators are the exception, and the reason
+for the rule — they follow what you type precisely because they decide
+nothing. So a threshold you have edited but not saved shows you where it would
+put you, while the mode it would allow stays greyed until you save it.
+
 - **Headroom target** — cleanup runs when free space drops below this, and frees
   back up to it.
 - **Redline emergency floor** — optional. Below it, cleanup runs immediately and
@@ -509,10 +517,20 @@ as deletions; under Monitor Only the same dates read as eligibility.
 | Gotify    | Server URL + application token                            |
 | Custom    | Any [Apprise URL](https://github.com/caronc/apprise/wiki) — email via `mailto://`, Matrix, Home Assistant and 100+ more, one per line |
 
-**Send test notification** fires a test to whatever you have entered, before
-saving. Each destination is rate-limited to one message per 10 seconds as a
-backstop; you should never notice. A user-initiated **Stop** is silent, and so
-is a **Debug Cleanup**.
+**Send test notification** fires a test to your saved destinations, so save
+first — the button is greyed until a saved service exists. Each destination is
+rate-limited to one message per 10 seconds as a backstop; you should never
+notice. A user-initiated **Stop** is silent, and so is a **Debug Cleanup**.
+
+**Debug** appears beside the test button while Debug mode is on, like the other
+debug tools. It shows what the messages would say without sending anything: the
+last completed run's summary rebuilt under your saved settings, plus — when one
+is actually waiting — the pending marked-changes alert and the low-space
+warning. That is the point of it: Debug mode runs only alongside Paused or
+Monitor Only, where real notifications are muted, so this is how you read a
+message you would otherwise never receive. It greys out when there is nothing
+to show yet. Previewing never consumes a pending alert — leave Debug mode and
+re-arm the scheduler, and the real notification still goes out.
 
 Alerts are best-effort: delivered *after* a run's work is done and recorded, on a
 separate thread with a timeout, so a slow notification service can never delay or

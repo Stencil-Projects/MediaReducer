@@ -585,20 +585,34 @@ function keyLess(a,b){
   return false;
 }
 // Engine's _pop_from_tie_group: if any single member covers the remaining
-// target, the lowest-scoring one that covers it goes; else largest first.
+// target, the SMALLEST one that covers it goes; else the largest first.
+//
+// Smallest-that-covers, not lowest-scoring-that-covers — this mirror had the
+// two the other way round, which is the behaviour the engine deliberately
+// stopped doing: everything in this group is near-tied, so the scores are
+// equivalent by definition, and letting a fraction of a point decide sent a
+// 42 GB file to cover a 2 GB need while a 4 GB file scoring one point higher
+// survived. The preview named the 42 GB one; the run deleted the 4 GB one.
+//
+// No title tiebreak either, for the engine's reason: on an exact size+score
+// tie the comparison is strict, so the EARLIEST member wins — and the group
+// arrives in plan order, which is where the remaining tiebreaks (never-watched,
+// lowest IMDb rating, oldest added) already live. Sorting by title here
+// ordered them alphabetically, naming a movie that was not the one at the top
+// of the queue.
 function pickFromTieGroup(group,remainingGb){
   let bestI=-1,best=null;
   for(let i=0;i<group.length;i++){
     const c=group[i];
     if((c.sizeGb||0)>=remainingGb){
-      const key=[c.retention,c.sizeGb||0,c.title];
+      const key=[c.sizeGb||0,c.retention];
       if(!best||keyLess(key,best)){best=key;bestI=i;}
     }
   }
   if(bestI<0){
     for(let i=0;i<group.length;i++){
       const c=group[i];
-      const key=[-(c.sizeGb||0),c.retention,c.title];
+      const key=[-(c.sizeGb||0),c.retention];
       if(!best||keyLess(key,best)){best=key;bestI=i;}
     }
   }

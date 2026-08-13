@@ -149,10 +149,19 @@ try:
     # …but never in redline-only, which needs the current standing plan itself.
     st = A._space_threshold_state(dict(BASE, **RL_CFG), _disk, library_gb=100.0)
     check("mode: snapshot alone is not a standing plan", st["simulate_required"] is True)
+    # A plan with no completed scan under it is not a plan the gate accepts:
+    # the stamp and the snapshot are written separately and can come apart, and
+    # deleting by a plan nothing has scanned is the case this gate exists for.
     A._simulate_evidence = lambda *a, **k: False
     A._pending_plan_current = lambda cfg, **k: True
     st = A._space_threshold_state(dict(BASE, **RL_CFG), _disk, library_gb=100.0)
-    check("mode: current plan satisfies the gate", st["simulate_required"] is False)
+    check("mode: a plan with no scan behind it does not satisfy the gate",
+          st["simulate_required"] is True)
+    A._simulate_evidence = lambda *a, **k: True
+    st = A._space_threshold_state(dict(BASE, **RL_CFG), _disk, library_gb=100.0)
+    check("mode: a current plan over a completed scan satisfies the gate",
+          st["simulate_required"] is False)
+    A._simulate_evidence = lambda *a, **k: False
 
     # Button states: satisfied never ghosts Simulate in any mode (it builds
     # the standing queue); Cleanup still ghosts while satisfied.

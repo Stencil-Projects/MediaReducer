@@ -74,8 +74,12 @@ function _filesystemBlockingText() {
 // health. Nothing is loosened: the save re-probes, and /api/run re-probes again
 // before anything can delete.
 function _selectedMediaApisReady() {
-  const usePlex = !!document.getElementById('USE_PLEX')?.checked;
-  const useJf = !!document.getElementById('USE_JELLYFIN')?.checked;
+  // The SAVED selection, not the checkboxes: this gates whole sections (Space
+  // Thresholds, Media Library Paths), and a section that unlocked on an
+  // unticked-but-unsaved box was offering settings for a server the app had
+  // never talked to. Tick, fill in the credentials, save — then it unlocks.
+  const usePlex = !!_savedConfig?.USE_PLEX;
+  const useJf = !!_savedConfig?.USE_JELLYFIN;
   if (!usePlex && !useJf) return false;
   const plexProbed = !!_savedConfig?.USE_PLEX;
   const jfProbed = !!_savedConfig?.USE_JELLYFIN;
@@ -106,9 +110,11 @@ function _setNotice(id, message) {
 }
 function _mediaServerBlockText() {
   // First-contact wording: with NO server selected yet, "connect or uncheck
-  // the selected media server" names two actions that don't exist.
-  const usePlex = !!document.getElementById('USE_PLEX')?.checked;
-  const useJf = !!document.getElementById('USE_JELLYFIN')?.checked;
+  // the selected media server" names two actions that don't exist. Keyed to
+  // the SAVED selection like the lock it explains — a reason that reworded
+  // itself as you ticked boxes would describe a setup that isn't saved.
+  const usePlex = !!_savedConfig?.USE_PLEX;
+  const useJf = !!_savedConfig?.USE_JELLYFIN;
   return (!usePlex && !useJf)
     ? 'Select Plex or Jellyfin under Server software first.'
     : 'Connect or uncheck the selected media server first.';
@@ -1446,85 +1452,88 @@ function _focusAfterSectionOpens(input) {
   if (input) setTimeout(() => input.focus(), 100);
 }
 
-function _headroomSafetyLimitGb() {
-  const total = Number(_diskStats?.total_gb);
-  const pct = Number(prFieldRaw('MAX_HEADROOM_PCT'));
-  if (!Number.isFinite(total) || total <= 0 || !_maxHeadroomPctValid()) return null;
-  return total * pct / 100;
-}
-
-function _headroomSafetyExceeded() {
-  // The safety cap bounds the free-space floor the system maintains: the
-  // Headroom target when one exists (>= 1), else the Redline floor.
-  const floor = _headroomActive()
-    ? _headroomFormValue()
-    : (document.getElementById('redline-enabled')?.checked ? prNumOrNull(prFieldRaw('REDLINE_GB')) : null);
-  const limit = _headroomSafetyLimitGb();
-  return floor !== null && limit !== null && floor > limit;
-}
-
-function _headroomSafetyText() {
-  const which = _headroomActive() ? 'Headroom' : 'Redline';
-  const limit = _headroomSafetyLimitGb();
-  if (limit === null) return `${which} exceeds the safety cap. Lower ${which} or raise the safety cap to enable Automatic Cleanup.`;
-  return `${which} exceeds the safety cap (${Math.floor(limit).toLocaleString()} GB max). Lower ${which} or raise the safety cap to enable Automatic Cleanup.`;
-}
-
-// The safety percentage also floors the Library Size Cap: a Cleanup may delete
-// at most that percentage of the library, so the cap can't sit below
-// (library - max_pct% of library). Simulate is exempt (mirrors Headroom).
-function _libraryCapSafetyFloorGb() {
-  const lib = Number(_lastKnownLibraryGb);
-  const pct = Number(prFieldRaw('MAX_HEADROOM_PCT'));
-  if (!Number.isFinite(lib) || lib <= 0 || !_maxHeadroomPctValid()) return null;
-  return lib * (100 - pct) / 100;
-}
-
-function _libraryCapSafetyExceeded() {
-  if (!document.getElementById('cap-enabled')?.checked) return false;
-  const cap = prNumOrNull(prFieldRaw('MAX_LIBRARY_GB'));
-  const floor = _libraryCapSafetyFloorGb();
-  return cap !== null && floor !== null && cap < floor;
-}
-
-function _libraryCapSafetyText() {
-  const floor = _libraryCapSafetyFloorGb();
-  if (floor === null) return 'Library Size Cap is below the safety floor. Raise the cap or the safety percentage to enable Automatic Cleanup.';
-  return `Library Size Cap is below the safety floor (${Math.ceil(floor).toLocaleString()} GB min). Raise the cap or the safety percentage to enable Automatic Cleanup.`;
-}
-
+// ── What blocks Automatic Cleanup, per the SAVED config ─────────────────────
+// One verdict, the server's, about the config on disk. There is no live-form
+// arm of this: typing a threshold changes what the WOULD-BE config is, not
+// what the scheduler is currently allowed to do, and a page that re-gated
+// itself on unsaved values spent its life describing a configuration that did
+// not exist. Save first, and this updates from the save response.
+//
+// It also ends a whole bug class by construction. The rules used to live here
+// as well, hand-copied from _space_threshold_state, and every rule added to
+// one and not the other became a control that lied — the per-type cleanup
+// switches went into ok_for_cleanup alone, and the first status poll re-enabled
+// a radio the save would refuse. With no copy left there is nothing to drift.
 function _spaceThresholdBlockingText() {
-  if (!_selectedMediaApisReady()) return 'Connect or uncheck the selected media server first.';
-  if (!_hasSavedMonitorDirs()) return 'Save a monitored directory to enable Automatic Cleanup.';
-  if (!_headroomHasValue()) return 'Enter a Headroom target of 1 GB or more (or disable Headroom) to enable Automatic Cleanup.';
-  if (!_maxHeadroomPctValid()) return 'Enter a valid Headroom safety percentage.';
-  const redlineOn = document.getElementById('redline-enabled')?.checked;
-  if (redlineOn && !prPositiveNumber(prFieldRaw('REDLINE_GB'))) return 'Enter a Redline above 0 GB, or disable Redline.';
-  if (redlineOn && _redlineExceedsHeadroom()) return 'Redline cannot be higher than Headroom.';
-  const capOn = document.getElementById('cap-enabled')?.checked;
-  if (capOn && !_libraryCapConfigured()) return 'Enter a Library Size Cap, or disable it.';
-  // Automatic Cleanup needs at least one active space target; Headroom 0 with Redline and
-  // the Library Size Cap both off leaves nothing to enforce.
-  if (_noEffectiveSpaceLimit()) return 'Set a Headroom target, Redline, or Library Size Cap to enable Automatic Cleanup.';
-  if (_headroomSafetyExceeded()) return _headroomSafetyText();
-  if (_libraryCapSafetyExceeded()) return _libraryCapSafetyText();
+  const v = _serverThresholds;
+  if (!v) return '';
+  if (v.ok_for_cleanup === false) {
+    return v.cleanup_tooltip || 'Fix Space Thresholds to enable Automatic Cleanup.';
+  }
+  // Arming needs a Simulate to have seen the library under this config; an
+  // ALREADY-armed Automatic Cleanup is never dropped by its own poll.
+  if (v.simulate_required && !_isCleanupRunMode(_savedConfig?.RUN_MODE)) {
+    return v.simulate_required_message || 'Run Simulate first, then enable Automatic Cleanup.';
+  }
   return '';
 }
 
-function _noEffectiveSpaceLimit() {
-  const headroom = _headroomFormValue();
-  const redlineOn = !!document.getElementById('redline-enabled')?.checked;
-  const capOn = !!document.getElementById('cap-enabled')?.checked;
-  return headroom === 0 && !redlineOn && !capOn;
+// ── Where the safety percentage puts the line, in GB ────────────────────────
+// The percentage guards two different things in two different directions, and
+// the app only ever said "over the safety percentage" — a verdict with no
+// arithmetic attached, so the only way to find the line was to keep moving the
+// value until it stopped objecting. It also invited the wrong sum: the
+// filesystem ceiling is the HEADROOM/REDLINE rule, and reading a Library Size
+// Cap against it says 21,000 GB of a 53,984 GB disk is 39% and must be refused,
+// when the cap is judged against the LIBRARY and would trim 10.6% of it.
+//
+// Server numbers only — safety_limit_gb and cap_floor_gb come out of
+// _space_threshold_state, the same values the gate itself uses, so the note
+// cannot drift from the rule the way a second copy of the formula would.
+function _applySafetyLimitNotes() {
+  const v = _serverThresholds || {};
+  const gb = (n) => Math.round(n).toLocaleString();
+  const pct = Number(v.safety_pct);
+  const note = (id, text) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text || '';
+    el.hidden = !text;
+  };
+  // Headroom and Redline reserve free space, so both are capped by a share of
+  // the whole filesystem. Redline is additionally held below an armed Headroom
+  // (the number input's own max), which is why one sentence covers both.
+  const limit = Number(v.safety_limit_gb);
+  const total = Number(v.total_gb);
+  const ceiling = (Number.isFinite(limit) && Number.isFinite(pct) && Number.isFinite(total))
+    ? `At most ${gb(limit)} GB — ${pct}% of the ${gb(total)} GB filesystem.`
+    : '';
+  note('headroom-safety-note', ceiling);
+  note('redline-safety-note', ceiling);
+
+  // The cap works the other way round: it sets a size to trim DOWN to, so the
+  // danger is setting it too low, and the limit is a share of the library.
+  const floor = Number(v.cap_floor_gb);
+  const lib = Number(v.library_gb);
+  note('cap-safety-note',
+    (Number.isFinite(floor) && Number.isFinite(pct) && Number.isFinite(lib))
+      ? `No lower than ${gb(floor)} GB — one cleanup may trim at most ${pct}% of the `
+        + `${gb(lib)} GB library.`
+      : '');
 }
+
 function _spaceThresholdUnavailableText(action = 'configuring Space Thresholds') {
   return _selectedMediaApisReady()
     ? `Save a monitored directory before ${action}.`
     : `Connect or uncheck the selected media server before ${action}.`;
 }
 function _currentConnectionBlockingText() {
-  const usePlex = !!document.getElementById('USE_PLEX')?.checked;
-  const useJf = !!document.getElementById('USE_JELLYFIN')?.checked;
+  // SAVED selection, like every other gate on this page — ticking Plex or
+  // Jellyfin describes an intention until it is saved and probed. (The
+  // checkbox still reveals its own credential fields immediately; that is how
+  // you fill them in to save them, and it unlocks nothing else.)
+  const usePlex = !!_savedConfig?.USE_PLEX;
+  const useJf = !!_savedConfig?.USE_JELLYFIN;
   if (!usePlex && !useJf) return 'Select Plex or Jellyfin first.';
   if (!_selectedMediaApisReady()) {
     // Prefer the server's specific reason (e.g. which connection failed and
@@ -1909,14 +1918,6 @@ function _setRunModeDisabled(modeName, disabled, alert = false) {
   card.querySelectorAll('.run-mode-option input').forEach(el => { el.disabled = !!disabled; });
 }
 
-// True only when Automatic Cleanup is blocked specifically by a safety-percentage violation
-// (headroom or library cap) — not a hard block like a missing connection.
-function _liveBlockIsSafety() {
-  if (_currentConnectionBlockingText()) return false;
-  const t = _spaceThresholdBlockingText();
-  return t !== '' && (t === _headroomSafetyText() || t === _libraryCapSafetyText());
-}
-
 function _updateRunModeAvailability() {
   // During a run the whole Scheduler Mode category is ghosted like every other
   // one. It says nothing itself — the page-level note above the accordion is
@@ -1925,34 +1926,13 @@ function _updateRunModeAvailability() {
   document.getElementById('s-mode')?.classList.toggle('section-run-ghost', runLocked);
   const offRadio = document.getElementById('mode-off');
   if (offRadio) offRadio.disabled = runLocked;
-  // Monitor Only needs a working setup: a media server enabled AND a
-  // monitored path saved AND an up-to-date library database; until then it is
-  // ghosted and the scheduler rests at fully-Paused. Keyed to the SAVED
-  // selection (like the startup check), not live connectivity — probe caches
-  // can lag a save, and a transient API outage must never ghost a configured
-  // Monitor Only; a failing selected server is auto-deselected on save, which
-  // re-ghosts through this rule. A saved mode already running counts as
-  // scan-ok so the ACTIVE mode's radio never ghosts under itself.
-  const monitorSetupOk = _hasSavedMonitorDirs()
-    && !!(_savedConfig?.USE_PLEX || _savedConfig?.USE_JELLYFIN);
-  // Monitor Only also needs SOMETHING to monitor: an armed space trigger —
-  // a Headroom target, a Redline floor, or a Library Size Cap. Keyed to the
-  // SAVED values like the server selection above, so mid-edit field states
-  // never flicker the radio.
-  const monitorTriggerOk = (Number(_savedConfig?.HEADROOM_GB) || 0) > 0
-    || _savedConfig?.REDLINE_GB != null || _savedConfig?.MAX_LIBRARY_GB != null;
-  const monitorScanOk = _monitorScanOk
-    || _savedConfig?.RUN_MODE === 'paused' || _savedConfig?.RUN_MODE === 'headroom';
-  // The server words this (_scan_lock_reason) — it can tell "never scanned"
-  // from "the last scan FAILED" and from "the scan aged out", and telling
-  // someone to run the Simulate they just ran is how this reads as broken.
-  // Only the setup-incomplete case is decidable client-side, and it is the one
-  // the user can fix on this page without a reload.
-  const monitorBlock = !monitorSetupOk
-    ? 'Connect a media server and add a monitored path first.'
-    : (!monitorTriggerOk
-        ? 'Arm a space threshold first — a Headroom target, Redline floor, or Library Size Cap gives Monitor Only something to preview.'
-        : (!monitorScanOk ? (_monitorLockedReason || 'Run Simulate first — this enables automatically once the scan finishes.') : ''));
+  // Monitor Only: the server's verdict, verbatim. _monitor_mode_lock_reason
+  // owns the rules (setup, armed trigger, up-to-date library database, the
+  // running-mode waiver) and the wording — it can tell "never scanned" from
+  // "the last scan FAILED" from "the scan aged out". Rendered into the page
+  // and refreshed by every poll; this file recomputes none of it, so the
+  // render and the poll cannot disagree about this radio again.
+  const monitorBlock = _monitorLockReason || '';
   _setRunModeDisabled('paused', runLocked || !!monitorBlock);
   const descPaused = document.getElementById('desc-paused');
   if (descPaused) descPaused.textContent = monitorBlock || descPaused.dataset.enabledText;
@@ -1967,21 +1947,22 @@ function _updateRunModeAvailability() {
   // Redline preview).
   const simBlock = (_simulateRequired && !_isCleanupRunMode(_savedConfig?.RUN_MODE))
     ? (_simulateRequiredMsg || 'Run Simulate first, then enable Automatic Cleanup.') : '';
-  // Debug mode and Automatic Cleanup are mutually exclusive: while Debug mode is ticked, Automatic Cleanup is
-  // ghosted with this reason (Debug mode never runs cleanup deletions). It takes
-  // precedence over the threshold/connection reasons — Debug mode is the immediate
-  // blocker the user just toggled, and it can't be a safety-percentage alert — and
-  // it ghosts on page load, not only after a click.
-  const debugOn = !!document.getElementById('DEBUG_MODE')?.checked;
+  // Debug mode and Automatic Cleanup are mutually exclusive (Debug mode never
+  // runs cleanup deletions), and the save refuses the pair outright. Keyed to
+  // the SAVED value like every other reason here: ticking the box describes a
+  // Debug mode that isn't in effect yet, and the save is what makes it so.
+  const debugOn = !!_savedConfig?.DEBUG_MODE;
   const debugBlock = debugOn
     ? 'Debug mode is on — turn it off to enable Automatic Cleanup. Debug mode never runs cleanup deletions.' : '';
-  const liveBlock = debugBlock || _currentConnectionBlockingText() || _spaceThresholdBlockingText() || simBlock;
+  const block = debugBlock || _currentConnectionBlockingText() || _spaceThresholdBlockingText() || simBlock;
 
-  _setRunModeDisabled('headroom', runLocked || !!liveBlock, !debugOn && _liveBlockIsSafety());
+  const safetyAlert = !debugOn && !!block && !!_serverThresholds?.safety_blocked
+    && block === _spaceThresholdBlockingText();
+  _setRunModeDisabled('headroom', runLocked || !!block, safetyAlert);
 
   const descHeadroom = document.getElementById('desc-headroom');
   if (descHeadroom) {
-    descHeadroom.textContent = liveBlock || descHeadroom.dataset.enabledText;
+    descHeadroom.textContent = block || descHeadroom.dataset.enabledText;
   }
 
   // Fall back to the saved non-deleting mode only when Automatic Cleanup is
@@ -3130,6 +3111,14 @@ function _applyStatusPayload(d) {
   _configSummaryActive = !!d.summary_active;
   _simulateRequired = !!(d.cleanup_state?.space_thresholds?.simulate_required);
   _simulateRequiredMsg = d.cleanup_state?.space_thresholds?.simulate_required_message || '';
+  // The two server verdicts the run-mode radios apply verbatim. Guarded so a
+  // payload from an older server (mid-upgrade) keeps the render's seed rather
+  // than blanking the gate.
+  if (d.cleanup_state?.space_thresholds) _serverThresholds = d.cleanup_state.space_thresholds;
+  _applySafetyLimitNotes();   // the library grows and the disk changes; the line moves with them
+  if (d.monitor_lock_reason !== undefined) _monitorLockReason = d.monitor_lock_reason || '';
+  if (d.notify_preview_reason !== undefined) _notifyPreviewReason = d.notify_preview_reason || '';
+  if (d.notify_test_reason !== undefined) _notifyTestReason = d.notify_test_reason || '';
   _captureMarkedClockedCount(d);
   // The threshold panel reads free/total off this, so keep it current rather
   // than frozen at whatever the page was rendered with.
@@ -3146,6 +3135,7 @@ function _applyStatusPayload(d) {
   _updateRunModeAvailability();
   _applyImdbDownloadButtonState();
   _applyClearCacheButtonState();
+  _applyNotifyButtonState();
   // A summary/run just finished: it may have archived a log.
   if (wasLocked && !_configActivityLocked()) refreshArchivedLogsStatus();
 }
@@ -3533,6 +3523,14 @@ async function saveConfig() {
     if (d.ok) {
       const savedConfig = d.config || getFormConfig();
       _savedConfig = savedConfig;  // Revert now reflects the newly saved state, including backend safety changes.
+      // The save's own verdicts on the config it just wrote — applied here so
+      // every control is exact the moment the save returns rather than up to
+      // one status poll stale. This is what "save to unlock" turns on.
+      if (d.monitor_lock_reason !== undefined) _monitorLockReason = d.monitor_lock_reason || '';
+      if (d.notify_preview_reason !== undefined) _notifyPreviewReason = d.notify_preview_reason || '';
+      if (d.notify_test_reason !== undefined) _notifyTestReason = d.notify_test_reason || '';
+      if (d.space_thresholds) _serverThresholds = d.space_thresholds;
+      _applySafetyLimitNotes();
       // The mode choice is now the server's; a later autopause may follow the
       // live one again without this page holding a superseded pick.
       _runModeTouched = false;
@@ -3844,14 +3842,37 @@ async function resetMarkDelays() {
 }
 
 // Dim the notification sub-fields when the master switch is off — a visual cue
-// only. Fields stay editable and the test button stays live so a user can set
-// up and verify destinations before flipping the switch on.
+// only. Fields stay editable, and the two action buttons are exempt from the
+// dimming (.notify-actions): both still do their job with notifications off —
+// testing destinations is how you verify wiring before switching on, and the
+// preview is how you read a message the switch is the reason you never got.
 function syncNotifyEnabled() {
   const on = !!document.getElementById('NOTIFY_ENABLED')?.checked;
   document.getElementById('notify-fields')?.classList.toggle('notify-off', !on);
 }
 
-// Deliver a test alert to whatever is currently entered (saved or not).
+// ── The two notification buttons' availability ──────────────────────────────
+// Both verdicts are the server's, about the SAVED config, seeded at render and
+// refreshed by every status poll and save response. Neither watches the form:
+// typing a webhook describes a destination that does not exist yet, and both
+// buttons act on what is stored — so save, and the next poll ungreys them.
+// (notify.py's own assembler answers the destination question, rather than a
+// copy of it here: a pasted Discord webhook counts only if it parses.)
+function _applyNotifyButtonState() {
+  const locked = _configActivityLocked();
+  const apply = (id, reason) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const block = locked ? 'A run is active. Try again when it finishes.' : (reason || '');
+    el.disabled = !!block;
+    el.title = block || el.dataset.enabledTitle || '';
+  };
+  apply('btn-notify-test', _notifyTestReason);
+  apply('btn-notify-preview', _notifyPreviewReason);
+}
+
+// Deliver a test alert to the SAVED notification settings — the same ones the
+// button's own availability was judged on.
 async function testNotify() {
   if (_configActivityLocked()) {
     showToast('A run is active. Try again when it finishes.', 'warning');
@@ -3860,8 +3881,6 @@ async function testNotify() {
   const btn = document.getElementById('btn-notify-test');
   const out = document.getElementById('notify-test-result');
   if (!btn || !out) return;
-  const cfg = getFormConfig();
-  const payload = Object.fromEntries(_NOTIFY_KEYS.map(key => [key, cfg[key]]));
   btn.disabled = true;
   out.className = 'form-text';
   out.textContent = 'Sending…';
@@ -3869,7 +3888,7 @@ async function testNotify() {
     const r = await fetch('/api/notify/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     });
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.ok) {
@@ -3887,8 +3906,21 @@ async function testNotify() {
     out.className = 'form-text err';
     out.textContent = '✗ Could not reach the server.';
   } finally {
-    btn.disabled = _configActivityLocked();
+    _applyNotifyButtonState();
   }
+}
+
+// Pop the messages the current settings WOULD send — the last run's summary
+// plus any pending marked-changes / low-space alert — rendered server-side,
+// never delivered. The same field overlay as testNotify, so the unsaved form
+// (privacy toggle included) is what gets previewed. Read-only on the server:
+// a pending alert previewed here still fires for real when the scheduler is
+// next unmuted.
+async function previewNotify(btn) {
+  await prRunDebug('/api/debug/notify-preview', 'Notification preview', btn, {});
+  // prRunDebug re-enables the button it borrowed; put the availability verdict
+  // back, or a preview run while a Cleanup is active leaves it live.
+  _applyNotifyButtonState();
 }
 
 function resetSectionToDefault(section) {
@@ -3919,10 +3951,28 @@ function resetSectionToDefault(section) {
   showToast(`${names[section] || 'Section'} reset to defaults. Save to keep the change.`, 'warning');
 }
 
+// Re-assert the saved config over the rendered fields. On a clean load this is
+// a no-op — the markup was rendered from the same values — and that is the
+// point: it costs nothing and it corrects the case where something has already
+// changed the fields by now. Browsers replay form state on a refresh, and on a
+// phone the OS discards a background tab and restores it the same way; either
+// leaves a field showing what was typed some time ago while the file says
+// something else. The form declares autocomplete="off" to stop that, and this
+// is the belt to that pair of braces, because the failure is silent: the page
+// looks settled and is describing a configuration that was never saved.
+populateForm(_savedConfig);
+clearDirty();
+
 // Initialize section reset buttons from the current form values.
 _syncSectionResetState();
+// The safety-percentage limits, from the render's seeded thresholds — the first
+// paint is where someone reads them before typing, well before the first poll.
+_applySafetyLimitNotes();
 // Apply the notifications master-switch ghost state on first paint.
 syncNotifyEnabled();
+// Both notification buttons ghost from the render's seeded verdicts; the
+// status poll and the save response keep them current.
+_applyNotifyButtonState();
 
 
 const _cfgFormForIssueObserver = document.getElementById('cfg-form');

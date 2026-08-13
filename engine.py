@@ -1412,6 +1412,12 @@ def write_run_report(**fields):
         fields.setdefault("issues", run_issue_summary())
         fields["completed_with_errors"] = _has_errors()
         fields["ts"] = time.time()
+        # The RUN this report belongs to. The season side stamps its persisted
+        # last_pass with the same value, so anything replaying this report
+        # later — the notification Debug preview — can pair the two halves by
+        # identity instead of guessing by recency, the same matching the
+        # engine's own summary uses.
+        fields.setdefault("run_started_at", _run_started_at())
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         dest = OUTPUT_DIR / "last_run_report.json"
         tmp = dest.with_name(f"{dest.name}.{_os.getpid()}.tmp")
@@ -4550,7 +4556,11 @@ def get_library_size_gb():
                          count=len(missing),
                          log_detail=f"library size — monitored path(s) not found on disk: {missing}")
         for root, (file_count, byte_count) in root_stats.items():
-            log(f"Library size root: {root} | movie_files={file_count} | size={bytes_to_gb(byte_count):.1f} GB")
+            # media_files, not movie_files: the walk counts every video file
+            # under the root, and for a TV root those are episodes — a log
+            # reading "movie_files=10542" under /TV Shows called ten thousand
+            # episodes movies.
+            log(f"Library size root: {root} | media_files={file_count} | size={bytes_to_gb(byte_count):.1f} GB")
         return bytes_to_gb(total_bytes)
 
     except Exception as e:
@@ -5464,6 +5474,15 @@ def build_candidates():
     # ─────────────────────────────────────────────────────────────────────────
 
     log_stage("ELIGIBLE CANDIDATES", phase="scanning")
+    # The scan loop's progress frames emit at the TOP of an iteration, before
+    # that movie is classified — so the frame at movie N/N carries the counts
+    # as of N-1, and nothing later restated them: whenever the LAST scanned
+    # movie was eligible, the dashboard tile sat one short of the summary
+    # ("Scanned 400, Eligible 399" against "Eligible: 400") for good. One
+    # frame with the settled totals closes the loop's off-by-one.
+    emit_progress(phase="scanning", scanned=total_movies, total=total_movies,
+                  eligible=stats["eligible"], protected=stats["protected"],
+                  message="Building the deletion order…")
     log(
         "Candidate stats: "
         f"eligible={stats['eligible']} | "
@@ -5827,15 +5846,29 @@ def _season_side_report() -> dict:
     plans and deletes seasons in-process just before launching this engine, so
     by the time the summary is written its numbers are this run's — and the
     summary is the one place the whole run is reported, so it has to carry
-    them or the log describes half of it. A missing or stale report reads as
-    empty: a run that could not do the season half must not print counts from
-    a previous one."""
+    them or the log describes half of it. A missing report reads as empty: a
+    run that could not do the season half must not print counts from a
+    previous one.
+
+    Matched on the RUN, not on a clock. An age window cannot tell "this run's
+    report" from "a report that happens to be recent": when the season side
+    sits a run out (a Redline emergency, or TV falling out of scope) it leaves
+    last_pass untouched, so the previous run's report is still minutes old and
+    a window hands it over as this one's — including its deleted_seasons, which
+    would put season deletions this run never performed under this run's
+    "Deleted:" line. A standalone engine run (cron, CLI) has no app-side pass
+    at all and mints its own started_at, so it matches nothing and correctly
+    reads empty."""
     try:
         with db.connect(DB_FILE) as conn:
             st = db.get_meta(conn, "tv_cleanup")
         lp = (st or {}).get("last_pass")
-        if isinstance(lp, dict) and time.time() - float(lp.get("at") or 0) <= 3600:
-            return lp
+        if isinstance(lp, dict) and lp.get("run_started_at") is not None:
+            # Tolerance, not equality: the stamp round-trips through env repr()
+            # and JSON on its way here, and being off by a microsecond must not
+            # silently drop the season half of the report.
+            if abs(float(lp["run_started_at"]) - _run_started_at()) < 0.001:
+                return lp
     except Exception:
         pass
     return {}
@@ -6434,8 +6467,17 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     log(f"{trigger} fast path: deleting from the marked queue (worst-first, with File "
         "size optimization) — no library rescan"
         + ("." if do_radarr else "; Radarr cleanup is skipped for these emergency deletions."))
+    # skipped_stages tells the dashboard which stepper steps this run does not
+    # perform (1=Reading library, 2=Scoring), so it greys them instead of
+    # ticking them. It has to come from HERE: the run's mode is plain
+    # "headroom" for the manual Cleanup and the Redline emergency alike, and
+    # only this point — after the coverage check has committed to the queue —
+    # knows whether the run took the fast path or fell back to the full scan.
+    # emit_progress merges, so the field rides every later frame of this run
+    # and dies with the process; a full-scan run never sets it.
     emit_progress(phase="deleting", trigger=trigger, target_bytes=to_free_bytes,
                   deleted=0, bytes_freed=0, current_title="",
+                  skipped_stages=[1, 2],
                   message=f"{trigger} — freeing space from the marked queue…")
 
     global _IN_DELETE_CRITICAL, _RUN_DELETED_FILES
@@ -6734,7 +6776,12 @@ def _debug_cleanup_from_queue(*, to_free_bytes, trigger, breached,
         # log_run_summary, so this is also where the log gets the categorized
         # issue block the report is about to carry.
         log_issue_block()
+        # Debug Cleanup's "would mark" list and count share one population (the
+        # whole covering prefix), so the list's overflow tail counts the same
+        # total — unlike the live/sim reports, whose marked_count includes
+        # carried marks their new-marks list deliberately omits.
         write_run_report(mode="debug_cleanup", debug=True, deleted_count=deleted_count, marked_count=marked_count,
+                         marked_new_count=marked_count,
                          bytes_freed=bytes_freed, message=message,
                          eligible_count=eligible, redline_only=_redline_only_mode(),
                          library_gb=library_gb,
@@ -7060,7 +7107,17 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
     if seasons.get("held_by_delay"):
         row("Seasons waiting:", f"{seasons['held_by_delay']} (delay not elapsed)")
     if seasons.get("aborted"):
-        row("Seasons skipped:", f"{seasons['aborted']} — the movie side covered the target")
+        # `aborted` is set on ONE path: the season side's fail-closed inventory
+        # fetch raised, so no season was planned, marked, or deleted. Reporting
+        # that as "the movie side covered the target" read as a deliberate
+        # optimization — a server outage rendered as good news, under a run
+        # that still says COMPLETED.
+        row("Seasons skipped:", f"TV inventory unavailable — no seasons were planned "
+                                f"or deleted this run ({seasons['aborted']})")
+        record_issue("tv_inventory_unavailable",
+                     "the TV inventory did not answer, so no season was planned or "
+                     f"deleted this run and the movie side carried the whole target "
+                     f"({seasons['aborted']})")
     # "Would delete" above counts only what the current targets require right
     # now; the standing eligible queue is a separate fact.
     if queued_count is not None:
@@ -7086,11 +7143,21 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
                          f"deleting every eligible movie only reaches {final_gb:.1f} GB, "
                          f"still above the headroom limit of {max_gb:.1f} GB")
         if library_cap_hit and effective_library_gb is not None:
-            _lib_after = effective_library_gb - bytes_to_gb(freed_bytes)
+            # The cap measures every monitored directory, TV included, so the
+            # verdict on whether it is REACHABLE has to spend the eligible
+            # seasons too. Measuring the movie half and concluding about the
+            # whole library overstated what is left by the size of the season
+            # order — 343 GB on the library this was found on — and on a
+            # tighter cap that is the difference between "out of reach" and
+            # simply reaching it.
+            _season_gb = bytes_to_gb(int(seasons.get("eligible_season_bytes") or 0))
+            _lib_after = effective_library_gb - bytes_to_gb(freed_bytes) - _season_gb
             if _lib_after > MAX_LIBRARY_GB:
                 record_issue("cap_unreachable",
-                             "deleting every eligible movie only reduces the library to "
-                             f"{_lib_after:.1f} GB, still above the cap of {MAX_LIBRARY_GB} GB")
+                             "deleting every eligible movie"
+                             + (" and season" if _season_gb else "")
+                             + f" only reduces the library to {_lib_after:.1f} GB, "
+                             f"still above the cap of {MAX_LIBRARY_GB} GB")
 
     # Last, so it lands under the numbers it qualifies and catches the two
     # warnings raised just above.
@@ -7100,7 +7167,7 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
 
 def _report_debug_info(*, used_gb, max_gb, free_gb, library_gb,
                        over_limit, redline_hit, _cap_active, _threshold_errors,
-                       _total_gb) -> None:
+                       _total_gb, library_measure_fresh=True) -> None:
     """Check for Errors: say what a run WOULD find, and change nothing.
 
     The one mode that never deletes and never plans a deletion. It answers
@@ -7231,7 +7298,24 @@ def _report_debug_info(*, used_gb, max_gb, free_gb, library_gb,
     # daily run enforces the cap even though this Summary mode does not, so the
     # marks size to it regardless of _cap_active. Redline is an emergency, not a
     # delay-clocked mark, so it never sizes the marks.
-    _revalidate_pending_marks(_daily_deficit_bytes(used_gb, max_gb, library_gb))
+    #
+    # ONLY from numbers that are current. The quiet Summary may reuse a stored
+    # library measure hours old (LIBRARY_SIZE_REUSE_SECONDS), and when the cap
+    # is armed that figure sizes the deficit — so every 15-minute tick was
+    # marking and unmarking (delay clocks and marked-changes notifications
+    # included) against a library that no longer looked like that: delete
+    # 500 GB by hand and the stale deficit kept a covering set marked for up
+    # to six hours. Disk usage comes from a fresh statvfs every tick, so with
+    # the cap off (headroom-only) the deficit is fully current and the
+    # 15-minute cadence keeps its point. With the cap armed, marks re-verify
+    # on the next fresh measure — the periodic re-walk, any cleanup, or
+    # Simulate, all of which always measure fresh.
+    if library_measure_fresh or MAX_LIBRARY_GB is None:
+        _revalidate_pending_marks(_daily_deficit_bytes(used_gb, max_gb, library_gb))
+    else:
+        log("Marks left as-is this tick: the Library Size Cap sizes the marked set "
+            "and this Summary reused a stored library measure — marks re-verify on "
+            "the next fresh measure (cleanups and Simulate always measure fresh).")
     emit_progress(status="done", phase="done", message=_info_msg)
 
 
@@ -7408,6 +7492,10 @@ def _run_simulation(*, candidates, build_stats, total_scanned, usage_info,
     write_run_report(
         mode="simulate", eligible_count=simulated_count,
         marked_count=0 if _redline_only_mode() else _would_count,
+        # _would_count is the whole covering prefix, carried marks included;
+        # the "Newly marked" list holds only this run's additions, so its
+        # overflow tail counts those (see the cleanup report writer).
+        marked_new_count=0 if _redline_only_mode() else len(_sim_new_items),
         deleted_count=0, bytes_freed=0,
         redline_only=_redline_only_mode(),
         library_gb=effective_library_gb, message=_sim_msg,
@@ -7530,7 +7618,11 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
                 f"MANUAL CLEANUP: usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
                 "within all space limits. Nothing to do."
             )
-            emit_progress(status="done", phase="done",
+            # A run that decided at Checking not to proceed performed nothing
+            # past it — the stepper greys stages 1-3 instead of ticking a
+            # library read, a scoring pass, and a deletion pass that never
+            # happened. Same declaration channel as the queue fast path.
+            emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
                           message="Nothing to do — space limits are satisfied.")
             write_run_report(
                 mode="cleanup", eligible_count=None, marked_count=0,
@@ -7629,14 +7721,14 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
                         f"{free_gb:.1f} GB free) but the daily window is already used "
                         f"today ({today}). Skipping until tomorrow."
                     )
-                    emit_progress(status="done", phase="done",
+                    emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
                                   message="Already ran today — waiting until tomorrow.")
                 else:
                     log(
                         f"Usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
                         "within all space limits. Nothing to do."
                     )
-                    emit_progress(status="done", phase="done",
+                    emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
                                   message="Nothing to do — space limits are satisfied.")
                 return True
             if not daily_breach:
@@ -7648,7 +7740,7 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
                     f"Usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
                     "within all space limits. Nothing to do today."
                 )
-                emit_progress(status="done", phase="done",
+                emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
                               message="Nothing to do — space limits are satisfied.")
                 return True
             if time.strftime("%H:%M") < DAILY_RUN_TIME:
@@ -7660,7 +7752,7 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
                     f"{free_gb:.1f} GB free) — waiting for today's scheduled "
                     f"run time ({DAILY_RUN_TIME})."
                 )
-                emit_progress(status="done", phase="done",
+                emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
                               message=f"Waiting for today's scheduled run time ({DAILY_RUN_TIME}).")
                 return True
             write_last_cleanup_date()
@@ -7705,6 +7797,9 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
     # corrects it. Both bases are intentional (apparent = the per-file size users
     # see in Plex/logs; allocated = real disk usage); don't "unify" them.
     planned_bytes = 0   # deleted + newly-planned marked bytes: the target gate
+    vanished_bytes = 0  # counted toward the target, but neither freed nor marked
+                        # by us — files gone externally between scan and here. Kept
+                        # separate so the overshoot note reports only real actions.
     # Deletion delay: daily runs MARK candidates first and delete a mark only
     # once it has aged past the delay. Redline emergency runs and manual Live
     # Runs delete immediately; waiting defeats an emergency floor, and the
@@ -7821,6 +7916,7 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
                 # this run freed nothing by it. Its snapshot row (written at scan
                 # time, when the file still existed) is now a phantom, so prune it.
                 planned_bytes += size_before
+                vanished_bytes += size_before
                 _gone_keys.add(key)
                 _vanished_keys.add(key)
                 if mark_store.pop(key, None) is not None:
@@ -7908,7 +8004,14 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
     # Say it out loud when this run took materially more than it needed. Both
     # numbers were already in the log; nobody should have to subtract them to
     # find out a 2 GB deficit cost them a 42 GB file.
-    _over = shared.overshoot_note(planned_bytes, to_free_bytes)
+    #
+    # Worded by what actually happened, from planned_bytes decomposed: with a
+    # deletion delay the whole covering set is MARKS and nothing was deleted,
+    # yet this note used to say "this run freed 42.0 GB" over reversible marks.
+    # Vanished bytes covered the target but were neither freed nor marked by
+    # this run, so they size no claim at all.
+    _over = shared.composed_overshoot_note(
+        bytes_freed, planned_bytes - bytes_freed - vanished_bytes, to_free_bytes)
     if _over:
         log_blank()
         log(f"NOTE: this run {_over}")
@@ -7948,6 +8051,13 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
     # notifier caps the displayed lines again, far lower.
     write_run_report(
         mode="cleanup", deleted_count=deleted_count, marked_count=marked_count,
+        # marked_count counts the whole marked set, carried marks included —
+        # the notification's header number. Its "Newly marked" name list only
+        # holds THIS run's new marks, so the list's "…and N more" tail needs
+        # the new-mark total, not the set total: computed from it, a quiet day
+        # that carried 50 marks and added none read "Newly marked: …and 50
+        # more" with no names — asserting additions that never happened.
+        marked_new_count=len(marked_items),
         bytes_freed=bytes_freed,
         eligible_count=len(candidates) - deleted_count,
         redline_only=_redline_only_mode(),
@@ -8041,6 +8151,11 @@ def _read_library_size(*, usage_info, used_gb, free_gb, _is_info):
         except Exception as e:
             log(f"Movie section IDs unavailable (Tautulli query failed): {e}")
     library_gb = _recent_library_size_gb() if _is_info else None
+    # Whether this run MEASURED the library or reused a stored figure (up to
+    # LIBRARY_SIZE_REUSE_SECONDS old). Part of the return: a caller about to
+    # act on the number — the Summary's mark revalidation — must know whether
+    # it reflects the disk right now or the disk as of hours ago.
+    measure_fresh = library_gb is None
     if library_gb is None:
         log("Computing library size from disk...")
         library_gb = get_library_size_gb()
@@ -8071,7 +8186,7 @@ def _read_library_size(*, usage_info, used_gb, free_gb, _is_info):
     if library_gb is not None:
         _stats["library_gb"] = round(library_gb, 1)
     emit_stats(**_stats)
-    return library_gb, total_gb
+    return library_gb, total_gb, measure_fresh
 
 
 def main():
@@ -8122,9 +8237,14 @@ def main():
     # mirroring the scheduler's own paused check in app.py.
     if RUN_MODE not in EXECUTABLE_RUN_MODES:
         log(f"RUN_MODE={RUN_MODE!r}: paused / not an executable mode — no scan or cleanup performed.")
+        # skipped_stages: this frame reaches the dashboard (only a direct/cron
+        # invocation lands here — the app never launches a non-executable
+        # mode), and without it the panel drew a five-tick completed run for
+        # an invocation that refused to do anything.
         emit_progress(schema=1, status="done", phase="done", mode=RUN_MODE,
                       scanned=0, total=0, eligible=0, deleted=0, bytes_freed=0,
                       target_bytes=0, trigger="", current_title="",
+                      skipped_stages=[1, 2, 3],
                       message="Paused — no scan or cleanup performed.",
                       started_at=_run_started_at())
         return
@@ -8230,7 +8350,7 @@ def main():
         except Exception:
             _max_headroom_gb = 0
 
-    library_gb, total_gb = _read_library_size(
+    library_gb, total_gb, library_measure_fresh = _read_library_size(
         usage_info=usage_info, used_gb=used_gb, free_gb=free_gb, _is_info=_is_info)
 
     over_limit = used_gb >= max_gb
@@ -8249,7 +8369,8 @@ def main():
         _report_debug_info(
             used_gb=used_gb, max_gb=max_gb, free_gb=free_gb, library_gb=library_gb,
             over_limit=over_limit, redline_hit=redline_hit, _cap_active=_cap_active,
-            _threshold_errors=_threshold_errors, _total_gb=_total_gb)
+            _threshold_errors=_threshold_errors, _total_gb=_total_gb,
+            library_measure_fresh=library_measure_fresh)
         return
 
     # ── Decide whether to run ────────────────────────────────────────────────

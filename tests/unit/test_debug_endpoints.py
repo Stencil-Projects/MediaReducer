@@ -248,6 +248,38 @@ for path, payload in ENDPOINTS:
           not [k for k, v in SECRETS.items() if v in body],
           [k for k, v in SECRETS.items() if v in body])
 
+# ── The report shows EFFECTIVE URLs and honest media counts ────────────────
+# A blank URL field whose credential is set rides a default at connect time;
+# the report printed the raw "(blank)" — so the one artifact built for
+# diagnosis showed a working server as unconfigured, three lines above its own
+# "jellyfin_connected=True". And the snapshot line called every row a movie
+# when 257 of them were TV series.
+A._read_library_snapshot = lambda: ({"built_at": 1000, "movies": (
+    [{"title": f"m{i}", "media_type": "movie", "rating": 7.0} for i in range(3)]
+    + [{"title": f"s{i}", "media_type": "tv"} for i in range(2)])}, None)
+db.read_cache_dict = lambda *a, **k: {}
+A.CONFIG_PATH.write_text(json.dumps({
+    **{k: v for k, v in CFG.items() if k != "JELLYFIN_URL"},
+    "JELLYFIN_URL": "", "JELLYFIN_API_KEY": SECRETS["JELLYFIN_API_KEY"],
+    "_SERVICE_URL_DEFAULTS": {"JELLYFIN_URL": "http://jf-default.test:8096"},
+    **SECRETS}))
+with A._config_memo_lock:
+    A._config_memo["key"] = object()
+r = post("/api/debug/report", {})
+# The decoded report text, not the JSON envelope — the envelope —-escapes
+# the em dash these lines contain.
+body = (r.get_json() or {}).get("text") or ""
+check("a defaulted URL prints its effective value, not (blank)",
+      "JELLYFIN_URL = http://<host>:8096 (default — the saved field is blank)" in body,
+      [l for l in body.splitlines() if "JELLYFIN_URL" in l])
+check("...still with the hostname scrubbed", "jf-default.test" not in body)
+check("...while a genuinely set URL renders as before",
+      "PLEX_URL = http://<host>:32400" in body,
+      [l for l in body.splitlines() if "PLEX_URL =" in l])
+check("the snapshot line splits movies from TV series",
+      "library snapshot: 3 movies + 2 TV series" in body,
+      [l for l in body.splitlines() if "library snapshot" in l])
+
 # ── Nothing configured: the message says what to do ────────────────────────
 A.CONFIG_PATH.write_text(json.dumps({"OUTPUT_DIR": str(OUT)}))
 with A._config_memo_lock:

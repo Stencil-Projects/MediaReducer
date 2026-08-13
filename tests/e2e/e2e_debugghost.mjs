@@ -1,10 +1,13 @@
-// On the Config page, ticking Debug mode must ghost the Scheduler Mode →
-// Automatic Cleanup option IMMEDIATELY, with a visible reason — using the same
-// .run-mode-disabled card styling + desc-headroom reason text the server-side
-// gates use, not a raw `disabled` toggle that leaves the card unstyled, gives no
-// reason, and only takes hold after a click. Toggling the checkbox
-// exercises the exact sync() → _updateRunModeAvailability() path that also runs
-// on page load, so this covers the on-load ghost too.
+// A SAVED Debug mode ghosts the Scheduler Mode → Automatic Cleanup option,
+// with a visible reason — the same .run-mode-disabled card styling and
+// desc-headroom text the other gates use, not a raw `disabled` toggle that
+// leaves the card unstyled and gives no reason.
+//
+// Saved, not ticked: no control on this page moves on an unsaved edit, so the
+// checkbox states an intention and the save is what makes it real (and the
+// save refuses Debug mode together with Automatic Cleanup outright). The two
+// halves are checked separately below — the checkbox alone must do nothing,
+// and the saved value must ghost.
 const BASE = process.env.MR_BASE_URL || 'http://127.0.0.1:7474';
 const PW = process.env.PLAYWRIGHT_MODULE || 'playwright';
 const { chromium } = await import(PW);
@@ -30,21 +33,30 @@ const snap = () => p.evaluate(() => {
 
 const before = await snap();
 
-// Tick Debug mode (same code path as loading a page whose saved config already
-// has Debug mode on).
+// Ticking the box without saving must change nothing at all.
 await p.evaluate(() => {
   const dbg = document.getElementById('DEBUG_MODE');
   dbg.checked = true;
   dbg.dispatchEvent(new Event('change', { bubbles: true }));
 });
 await p.waitForTimeout(150);
+const ticked = await snap();
+
+// A SAVED Debug mode — the same state a page load finds in config.json.
+await p.evaluate(() => {
+  _savedConfig = Object.assign({}, _savedConfig, { DEBUG_MODE: true });
+  _updateRunModeAvailability();
+});
+await p.waitForTimeout(150);
 const on = await snap();
 
-// Untick — Automatic Cleanup must return to its normal (server-gated) availability.
+// Back off — Automatic Cleanup returns to its normal (server-gated) availability.
 await p.evaluate(() => {
   const dbg = document.getElementById('DEBUG_MODE');
   dbg.checked = false;
   dbg.dispatchEvent(new Event('change', { bubbles: true }));
+  _savedConfig = Object.assign({}, _savedConfig, { DEBUG_MODE: false });
+  _updateRunModeAvailability();
 });
 await p.waitForTimeout(150);
 const off = await snap();
@@ -52,7 +64,9 @@ const off = await snap();
 let ok = true;
 const check = (name, cond) => { console.log((cond ? 'PASS ' : 'FAIL ') + name); ok = ok && cond; };
 
-check('with Debug mode on, Automatic Cleanup is ghosted (card styled + input disabled), not just after a click',
+check('ticking Debug mode without saving changes nothing',
+  JSON.stringify(ticked) === JSON.stringify(before));
+check('with Debug mode SAVED, Automatic Cleanup is ghosted (card styled + input disabled)',
   on.ghosted && on.cleanupDisabled);
 check('the ghost shows a reason naming Debug mode',
   /debug mode/i.test(on.reason) && on.reason !== on.enabledText);

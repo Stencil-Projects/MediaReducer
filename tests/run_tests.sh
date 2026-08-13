@@ -98,6 +98,16 @@ fi
 run parity_gen python3 tests/parity/gen_py_scores.py "$TMP/parity"
 run parity_check node tests/parity/parity_check.cjs "$TMP/parity"
 
+# ── Deficit parity: shared.pool_deficit_gb vs the Dashboard's JS mirror ──
+# The GB figure the delete confirmation prints on its own button.
+run deficit_gen python3 tests/parity/gen_py_deficits.py "$TMP/parity"
+run deficit_parity node tests/parity/deficit_parity.cjs "$TMP/parity/py_deficits.json"
+
+# ── Deletion-order parity: the boundary tie-group pick, engine vs the preview ──
+# engine.py names this mirror above NEAR_TIE_PTS; this is what checks it.
+run tiegroup_gen python3 tests/parity/gen_py_tiegroup.py "$TMP/parity"
+run tiegroup_parity node tests/parity/tiegroup_parity.cjs "$TMP/parity/py_tiegroup.json"
+
 # ── Integration + browser tiers (opt-in) ──
 # Two tiers share the same booted app + mocks:
 #   --integration : the full run pipeline (scan→score→queue) over real HTTP,
@@ -200,6 +210,9 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_status_pills node tests/e2e/e2e_status_pills.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_server_toggle node tests/e2e/e2e_server_toggle.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_mode_stale   node tests/e2e/e2e_mode_stale.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_saved_state_gating node tests/e2e/e2e_saved_state_gating.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_form_shows_saved_config node tests/e2e/e2e_form_shows_saved_config.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_notify_preview node tests/e2e/e2e_notify_preview.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_breach_note  node tests/e2e/e2e_breach_note.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_last_run_colon node tests/e2e/e2e_last_run_colon.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_page_notes   node tests/e2e/e2e_page_notes.mjs
@@ -239,6 +252,7 @@ PY
       # Progress bar: frames are fed to renderProgress directly, so it needs no
       # run in flight — only the real page realm.
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_progress_monotonic node tests/e2e/e2e_progress_monotonic.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_skipped_steps node tests/e2e/e2e_skipped_steps.mjs
       # Theme crossfade: samples computed colors across a real flip, so it needs
       # the real stylesheet — any page will do.
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_theme_crossfade node tests/e2e/e2e_theme_crossfade.mjs

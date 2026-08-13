@@ -54,7 +54,7 @@ def measure(*, size_gb=200.0, cap=150.0, total=2 * TB, used=1200.0, free=800.0,
     E.emit_progress = lambda **kw: progress.append(kw)
     E.log = lambda msg="", *a, **k: logs.append(str(msg))
     try:
-        library_gb, total_gb = E._read_library_size(
+        library_gb, total_gb, _fresh = E._read_library_size(
             usage_info={"total": total}, used_gb=used, free_gb=free, _is_info=info)
     finally:
         (E.MAX_LIBRARY_GB, E.get_library_size_gb, E.get_movie_section_ids,
@@ -179,7 +179,7 @@ def count_walks(*, info, age=None, walk_result=123.0):
     E.log = lambda msg="", *a, **k: logs.append(str(msg))
     E.get_movie_section_ids = lambda: None
     try:
-        lib, _total = E._read_library_size(
+        lib, _total, _fresh = E._read_library_size(
             usage_info={"total": 2 * TB}, used_gb=100.0, free_gb=500.0, _is_info=info)
     finally:
         E.get_library_size_gb = saved[0]

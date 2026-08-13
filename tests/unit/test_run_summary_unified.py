@@ -11,7 +11,7 @@ Pinned here:
   • the season half's numbers reach the summary — scanned, eligible, marked,
     waiting, deleted — beside the movie ones, and the eligible totals agree
     with the merged window;
-  • a stale season report is ignored rather than printed as this run's;
+  • a report from another run is ignored rather than printed as this run's;
   • out-of-scope rows are reported separately from path issues. A film under a
     directory you chose not to monitor is working as configured, and folding
     those 106 into "Path/disk issues: 125" made a healthy library read as
@@ -50,7 +50,17 @@ STATS = {"eligible": 2571, "protected": 98, "identity_mismatch": 43,
          "duplicates_merged": 0, "movie_cleanup_off": 0, "jellyfin_favorite": 0}
 
 
+# Pin this "run" so the stored season reports below can claim it. The engine
+# matches the season report to the RUN that produced it, not to a recent
+# clock — an unstamped or foreign report is correctly ignored, which is
+# test_season_side_reporting's subject. These cases are about what the summary
+# RENDERS once it has this run's numbers, so they stamp themselves as current.
+os.environ["MEDIAREDUCER_RUN_STARTED_AT"] = "1000.5"
+
+
 def _store_season_report(rep):
+    if rep:
+        rep = {**rep, "run_started_at": E._run_started_at()}
     with db.transaction(E.DB_FILE) as conn:
         db.set_meta(conn, "tv_cleanup", {"last_pass": rep} if rep else {})
 
@@ -109,18 +119,25 @@ movies_off = _summary(dict(STATS, eligible=0, movie_cleanup_off=2571))
 check("the movie switch reads the same way",
       "Cleanup off: 2571 (movie cleanup is turned off" in movies_off, movies_off)
 
-# ── A stale report is not this run's ────────────────────────────────────────
-# The app writes the season report in-process moments before the engine runs.
-# Anything older is a PREVIOUS run's, and printing it would credit this run
-# with work it did not do.
-_store_season_report({
-    "at": time.time() - 7200, "seasons_seen": 221, "eligible_seasons": 189,
-    "cleanup_off": 0, "marked_new": 4, "held_by_delay": 2,
-    "deleted_seasons": [], "aborted": None})
+# ── Another run's report is not this run's ──────────────────────────────────
+# The app writes the season report in-process moments before the engine runs,
+# and stamps it with the run. When a run's season side sits one out it leaves
+# the previous report in place, SECONDS old — so age cannot tell "mine" from
+# "recent", and a window let the previous run's counts (deleted_seasons and
+# all) print under this run's numbers. Identity can tell them apart, so this
+# report is fresh by the clock and still correctly refused.
+with db.transaction(E.DB_FILE) as conn:
+    db.set_meta(conn, "tv_cleanup", {"last_pass": {
+        "at": time.time(), "run_started_at": 999.25,
+        "seasons_seen": 221, "eligible_seasons": 189, "cleanup_off": 0,
+        "marked_new": 4, "held_by_delay": 2,
+        "deleted_seasons": [{"title": "X"}], "aborted": None}})
 stale = _summary()
-check("a stale season report is ignored",
+check("a fresh report from a DIFFERENT run is ignored",
       "Seasons scanned" not in stale and "Eligible: 2571" in stale
       and "= 2760" not in stale, stale)
+check("...so its season deletions stay off this run's Deleted line",
+      "season(s)" not in stale.split("Would delete:")[-1].split("\n")[0], stale)
 _store_season_report(None)
 none = _summary()
 check("no season report at all reads as a movie-only run",

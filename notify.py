@@ -693,9 +693,16 @@ def _movie_name_blocks(report, debug, budget=_MOVIE_LIST_CHARS, *, armed=True):
         budget -= used
 
     # This run's new marks: soonest-first, the date said once in the header.
+    # The overflow tail counts marked_new_count, NOT marked_count: the count
+    # field spans the whole marked set, carried marks included, while this
+    # list deliberately holds only the run's additions — a tail computed from
+    # the set total told a quiet day "Newly marked: …and 50 more" with zero
+    # names, asserting 50 additions that never happened. An old report without
+    # the field falls back to the list itself (its tail then only fires past
+    # the 200-item cap it can no longer size, which lasts one run at most).
     marked_items = _by_soonest(report.get("marked_items"))
     m_lines, used = _bounded_lines(marked_items, lambda it: f"• {it.get('title', '?')}",
-                                   max(200, budget), total=report.get("marked_count"))
+                                   max(200, budget), total=report.get("marked_new_count"))
     if m_lines:
         header = (("Would mark for deletion" if debug else "Newly marked")
                   + _marked_when(marked_items, armed or debug) + ":")

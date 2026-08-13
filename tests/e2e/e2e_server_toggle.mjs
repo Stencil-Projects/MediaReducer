@@ -1,20 +1,19 @@
-// Which server selections leave Movie Library Paths and Space Thresholds
+// Which server selections leave Media Library Paths and Space Thresholds
 // editable.
 //
-// The gate mixes two things that are easy to conflate: the LIVE Server software
-// checkboxes, and the health of the SAVED config. Health is only probed for the
-// servers the saved config had selected, so a deselected server's flag is false
-// because nothing asked it, not because it failed. Reading that as "unreachable"
-// meant ticking a server back on locked both sections behind "Connect or uncheck
-// the selected media server first" — advice that could not help, because Check
-// for Errors only adopts a probe while the form still matches what was saved.
-// Only a save cleared it, and nothing on screen said so.
+// Both are keyed to the SAVED selection and the health of that selection —
+// never to the checkboxes. Ticking a server states an intention; until it is
+// saved and probed, unlocking a section on it would offer settings for a
+// server the app has never spoken to, and unlocking on UNticking would hand
+// over sections on the strength of a change that is not in effect.
 //
-// The rules this pins, in both directions:
-//   * a server the SAVED config did not select is unknown, not broken
+// The rules this pins:
+//   * a server the SAVED config did not select is unknown, not broken — its
+//     health flag is false because nothing probed it
 //   * a server the saved config DID select is still held to its health
 //   * something has to be proven good, so a fresh install cannot unlock by
 //     ticking a box it has never connected to
+//   * the checkboxes do not enter into it at all (the last check)
 //
 // Driven in the real page realm rather than through saves, so every combination
 // is reachable without booting an app per case. The page's own functions decide;
@@ -35,7 +34,7 @@ const check = (name, cond, extra = '') => {
 };
 
 // saved: what the last save recorded. health: what probing that save's selection
-// found. ticked: what the checkboxes say right now.
+// found. ticked: what the checkboxes say right now — which must not matter.
 const gate = (saved, health, ticked) => p.evaluate(([sv, h, tk]) => {
   _savedConfig = Object.assign({}, _savedConfig, { USE_PLEX: sv.plex, USE_JELLYFIN: sv.jf });
   _savedConfigHealth = Object.assign({}, _savedConfigHealth, {
@@ -56,30 +55,32 @@ const NONE_UP = { taut: false, jf: false };
 
 const CASES = [
   // saved selection        health    checkboxes now                  editable?
-  ['fresh install, nothing ticked',
+  ['fresh install, nothing saved',
    { plex: false, jf: false }, NONE_UP, { plex: false, jf: false }, false],
-  ['fresh install, Plex ticked but never connected',
+  ['fresh install, Plex ticked but not saved',
    { plex: false, jf: false }, NONE_UP, { plex: true, jf: false }, false],
-  ['fresh install, both ticked but neither connected',
+  ['fresh install, both ticked but not saved',
    { plex: false, jf: false }, NONE_UP, { plex: true, jf: true }, false],
 
   ['saved Plex-only and healthy',
    { plex: true, jf: false }, JF_DOWN, { plex: true, jf: false }, true],
-  // The reported bug: re-ticking a server the saved config had off.
+  // Ticking Jellyfin on changes nothing until it is saved and probed — and
+  // the healthy SAVED Plex is what keeps the sections open meanwhile.
   ['saved Plex-only and healthy, Jellyfin ticked back on',
    { plex: true, jf: false }, JF_DOWN, { plex: true, jf: true }, true],
-  // ...but swapping ONTO the unproven server alone leaves nothing proven.
-  ['saved Plex-only and healthy, swapped to Jellyfin alone',
-   { plex: true, jf: false }, JF_DOWN, { plex: false, jf: true }, false],
+  ['saved Plex-only and healthy, unticked to Jellyfin alone (unsaved)',
+   { plex: true, jf: false }, JF_DOWN, { plex: false, jf: true }, true],
 
-  // A server the save DID select is still judged on its health.
+  // A server the save DID select is still judged on its health...
   ['saved both, Jellyfin down',
    { plex: true, jf: true }, JF_DOWN, { plex: true, jf: true }, false],
-  ['saved both, Jellyfin down, unticked to escape it',
-   { plex: true, jf: true }, JF_DOWN, { plex: true, jf: false }, true],
+  // ...and unticking it does not lift that until the untick is SAVED. The
+  // Connections section stays editable throughout, so the save is reachable.
+  ['saved both, Jellyfin down, unticked but not yet saved',
+   { plex: true, jf: true }, JF_DOWN, { plex: true, jf: false }, false],
   ['saved both and both healthy',
    { plex: true, jf: true }, BOTH_UP, { plex: true, jf: true }, true],
-  ['saved both and both healthy, Jellyfin unticked',
+  ['saved both and both healthy, Jellyfin unticked (unsaved)',
    { plex: true, jf: true }, BOTH_UP, { plex: true, jf: false }, true],
 
   // Blockers that have nothing to do with which server is selected.
@@ -94,6 +95,23 @@ for (const [name, saved, health, ticked, editable] of CASES) {
   const got = !r.paths && !r.space;
   check(`${editable ? 'editable' : 'locked  '}: ${name}`, got === editable,
         `paths=${JSON.stringify(r.paths)} space=${JSON.stringify(r.space)}`);
+}
+
+// ── The checkboxes do not enter into it ────────────────────────────────────
+// Stated directly, rather than left implied by the table: for a fixed saved
+// state, every checkbox combination must give the same answer.
+for (const [label, saved, health] of [
+  ['saved Plex-only, healthy', { plex: true, jf: false }, JF_DOWN],
+  ['saved both, Jellyfin down', { plex: true, jf: true }, JF_DOWN],
+  ['nothing saved', { plex: false, jf: false }, NONE_UP],
+]) {
+  const seen = [];
+  for (const tk of [{ plex: false, jf: false }, { plex: true, jf: false },
+                    { plex: false, jf: true }, { plex: true, jf: true }]) {
+    seen.push(JSON.stringify(await gate(saved, health, tk)));
+  }
+  check(`ticking boxes changes nothing (${label})`, new Set(seen).size === 1,
+        seen.join(' | '));
 }
 
 check('no page errors', errs.length === 0, JSON.stringify(errs.slice(0, 3)));

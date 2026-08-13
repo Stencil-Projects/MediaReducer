@@ -455,6 +455,13 @@
     font-weight: 500;
   }
   .delay-redline-advisory[hidden] { display: none; }
+  /* The safety-percentage limit for a threshold: a plain statement of where the
+     line sits, not a warning — it reads the same whether or not you are near it. */
+  .safety-limit-note {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .safety-limit-note[hidden] { display: none; }
   #library-browser-current {
     font-size: var(--fs-sm);
     color: var(--text-muted);
@@ -517,7 +524,14 @@
   </div>
 </div>
 
-<form id="cfg-form" class="app-form" onsubmit="return false;">
+{# autocomplete=off is not about autofill here, it is about RESTORATION: on a
+   refresh (and on a mobile tab the OS discarded and brought back) browsers
+   replay the values that were in the fields before, over the ones this render
+   just wrote. For a settings form that is worse than useless — every field
+   here is supposed to show what is SAVED, and a replayed value silently
+   disagrees with the file while looking authoritative. config.js re-asserts
+   the saved config on load as well; this stops the replay, that corrects it. #}
+<form id="cfg-form" class="app-form" autocomplete="off" onsubmit="return false;">
 <!-- Page-level notes, above the sections they concern. Pinned ones first,
      dismissible ones underneath — .page-notes orders them, so the rule holds
      however they are written here. Notes scoped to ONE section stay in that
@@ -557,17 +571,12 @@
         {% set saved_mode_disabled = config.RUN_MODE == 'headroom' and not cleanup_mode_ok %}
         {% set cleanup_disabled_text = connection_disabled_text if not connection_required_ok else (space_thresholds.cleanup_tooltip or (space_thresholds.simulate_required_message if simulate_required else 'Fix Space Thresholds to enable Automatic Cleanup.')) %}
         {% set cleanup_desc = 'Deletes automatically to keep your space limits. Run Simulate first to preview what it would remove.' %}
-        {# Keyed to the SAVED selection + paths rather than a live probe: the health
-           cache can lag a save, and a transient outage must not ghost a configured
-           Monitor Only (a selected server failing its save-time probe is
-           auto-deselected, which re-ghosts here). An already-running mode counts as
-           scan-ok so the active mode's own radio never ghosts under it. #}
-        {% set monitor_setup_ok = (config.USE_PLEX or config.USE_JELLYFIN) and config.MONITOR_DIRS and config.MONITOR_DIRS|length > 0 %}
-        {% set monitor_mode_ok = monitor_setup_ok and (monitor_scan_ok or config.RUN_MODE in ('paused', 'headroom')) %}
+        {# One verdict, computed and worded server-side (_monitor_mode_lock_reason):
+           empty means selectable. The status poll refreshes the same value, so
+           this render and every later poll cannot disagree about the radio. #}
+        {% set monitor_mode_ok = not monitor_lock_reason %}
         {% set monitor_desc = 'Never deletes on its own. A daily scan keeps the deletion plan and library size current.' %}
-        {# Worded server-side (_scan_lock_reason) so a FAILED scan doesn't keep
-           asking for the Simulate the user just ran. #}
-        {% set monitor_locked_text = monitor_locked_reason | default('Run Simulate first — this enables automatically once the scan finishes.') %}
+        {% set monitor_locked_text = monitor_lock_reason %}
 
         <div class="form-check config-card run-mode-card" id="mode-card-off" aria-disabled="false">
           <input class="form-check-input" type="radio" name="RUN_MODE" id="mode-off"
@@ -1026,6 +1035,11 @@
             </div>
             <div id="headroom-error" class="field-error">Enter a Headroom target of at least 1 GB, or untick it.</div>
             <div class="form-text">Free space to keep available — the daily cleanup runs when free space falls below it. Untick to turn this trigger off.</div>
+            {# Filled in by _applySafetyLimitNotes from the server's own numbers.
+               Every safety refusal on this page used to be a verdict with no
+               arithmetic attached, so the only way to find out where the line
+               sat was to move the value until the app objected. #}
+            <div id="headroom-safety-note" class="form-text safety-limit-note" hidden></div>
           </div>
           <div class="col-md-6" id="redline-field">
             <label class="input-label" for="REDLINE_GB">Redline emergency floor</label>
@@ -1041,6 +1055,7 @@
             </div>
             <div id="redline-error" class="field-error">Enter a Redline value before saving, or uncheck this option.</div>
             <div class="form-text">Optional. Deletes immediately when free space falls this low (checked every ~15 min) — no daily schedule, no deletion delay.</div>
+            <div id="redline-safety-note" class="form-text safety-limit-note" hidden></div>
             <div id="no-trigger-note" class="form-text redline-only-note" {{ '' if (has_monitor_dirs and not headroom_active and config.REDLINE_GB is none and not config.MAX_LIBRARY_GB) else 'hidden' }}>No space threshold is armed — Monitor Only and Automatic Cleanup stay off until you set a Headroom target, a Redline floor, or a Library Size Cap.</div>
           </div>
         </div>
@@ -1062,6 +1077,7 @@
           <div id="cap-error" class="field-error">Enter a Library Size Cap value before saving, or uncheck this option.</div>
           <div id="cap-paths-note" class="form-text" {{ 'hidden' if thresholds_have_library else '' }}>{{ 'Save a monitored directory first.' if selected_media_apis_ready else ('Fix the /config read/write problem first.' if not filesystem_ready else ('Connect or uncheck the selected media server first.' if (use_plex or use_jellyfin) else 'Select Plex or Jellyfin under Server software first.')) }}</div>
           <div class="form-text">Optional. Caps the combined size of your monitored movies and TV; the daily cleanup trims back under it.</div>
+          <div id="cap-safety-note" class="form-text safety-limit-note" hidden></div>
         </div>
 
         <hr class="config-divider">
@@ -1089,7 +1105,17 @@
   </div>
   <!-- ── Notifications ── -->
   <style>
-    .notify-fieldset.notify-off { opacity: .5; }
+    /* The master switch being off dims the SETTINGS, because they describe
+       alerts that aren't going out. It must not dim the two action buttons:
+       both still do their job with notifications disabled — testing
+       destinations is how you verify wiring BEFORE switching on, and the
+       preview is how you read a message the switch is the reason you never
+       received. Their own disabled state is the only thing that should gray
+       them.
+       Applied to the children rather than the fieldset itself: opacity on an
+       ancestor composites the whole subtree, so a child cannot opt back out of
+       it — .notify-actions would have stayed at .5 whatever it asked for. */
+    .notify-fieldset.notify-off > *:not(.notify-actions) { opacity: .5; }
     .notify-subhead { font-weight: 700; margin: 1.25rem 0 .25rem; }
     .notify-service-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: .75rem 1rem; }
     /* Each service (a single field, or a URL+token pair) is one group. Services
@@ -1252,8 +1278,13 @@
             </div>
           </div>
 
-          <div class="mt-3">
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-notify-test" onclick="testNotify()">Send test notification</button>
+          <div class="mt-3 notify-actions">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-notify-test" onclick="testNotify()">Send test notification</button>
+              <button type="button" class="btn btn-sm btn-outline-warning pr-debug-btn debug-mode-control{{ ' d-none' if not config.DEBUG_MODE else '' }}" id="btn-notify-preview" onclick="previewNotify(this)"
+                      data-enabled-title="Debug: the messages the current settings would send — the last run's summary, plus any pending marked-changes or low-space alert — shown, never sent."
+                      title="Debug: the messages the current settings would send — the last run's summary, plus any pending marked-changes or low-space alert — shown, never sent.">Debug</button>
+            </div>
             <div id="notify-test-result" class="form-text" aria-live="polite"></div>
           </div>
         </div>
@@ -1501,11 +1532,16 @@ let _simulateRequiredMsg = {{ (space_thresholds.simulate_required_message | defa
 // later declaration would be a temporal-dead-zone ReferenceError that kills
 // the rest of the page's init (including the save flow).
 let _markedClockedCount = {{ marked_clocked_count | default(0) }};
-// Monitor Only's third requirement: an up-to-date library database. Rendered
-// server-side; a scan can't complete while this page sits open (Simulate runs
-// from the Dashboard), so a page load always has the current value.
-const _monitorScanOk = {{ 'true' if monitor_scan_ok | default(false) else 'false' }};
-const _monitorLockedReason = {{ (monitor_locked_reason or '')|tojson }};
+// The two server verdicts the run-mode radios apply verbatim, seeded at render
+// and refreshed by every status poll / candidate validation — the page holds
+// no availability rules of its own beyond instant field-level courtesy.
+let _monitorLockReason = {{ (monitor_lock_reason or '')|tojson }};
+// Why the notification preview has nothing to show ('' = it has). Seeded here
+// and refreshed by every status poll, so a run finishing un-ghosts the button.
+let _notifyPreviewReason = {{ (notify_preview_reason or '')|tojson }};
+// ...and why Send test notification has nowhere to send ('' = it has).
+let _notifyTestReason = {{ (notify_test_reason or '')|tojson }};
+let _serverThresholds = {{ space_thresholds | tojson }};
 let _configSummaryActive = {{ 'true' if summary_active | default(false) else 'false' }};
 const _connectionOnboardingActive = {{ 'true' if connection_onboarding_active | default(false) else 'false' }};
 const _connectionErrorOnLoad = {{ 'true' if api_connection_error | default(false) else 'false' }};

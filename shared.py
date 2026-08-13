@@ -145,9 +145,16 @@ def pool_deficit_gb(used_gb, used_limit_gb, library_gb, cap_gb) -> float:
 
 # ── The delay clock ──────────────────────────────────────────────────────────
 
-def overshoot_note(freed_bytes, target_bytes) -> str:
-    """A sentence naming the excess when a deletion freed materially more than
+def overshoot_note(committed_bytes, target_bytes, verb="freed") -> str:
+    """A sentence naming the excess when a run committed materially more than
     it needed, else "".
+
+    `verb` names what the run actually did with those bytes — "freed" for
+    deletions, "marked" for a delay-clocked covering set, or a combined
+    phrase for a run that did both. The default kept the old wording, which
+    was WRONG for mark-only runs: with a deletion delay set, a 2 GB deficit
+    covered by one 42 GB mark logged "this run freed 42.0 GB" when nothing
+    was deleted at all — the caller states what happened, this sizes it.
 
     Deletion units are atomic — a movie file, a whole season — so a run stops
     at the FIRST item that covers what is left, and that item can be far
@@ -161,16 +168,37 @@ def overshoot_note(freed_bytes, target_bytes) -> str:
     goal says nothing.
     """
     try:
-        freed, target = float(freed_bytes), float(target_bytes)
+        committed, target = float(committed_bytes), float(target_bytes)
     except (TypeError, ValueError):
         return ""
-    excess = freed - target
-    if target <= 0 or excess < 1_000_000_000 or freed < target * 1.5:
+    excess = committed - target
+    if target <= 0 or excess < 1_000_000_000 or committed < target * 1.5:
         return ""
-    return (f"freed {freed / 1e9:.1f} GB to satisfy a {target / 1e9:.1f} GB target "
+    return (f"{verb} {committed / 1e9:.1f} GB to satisfy a {target / 1e9:.1f} GB target "
             f"— {excess / 1e9:.1f} GB more than needed. Deletion units are whole "
             "files and whole seasons, so a run stops at the first item that "
             "covers the rest.")
+
+
+def composed_overshoot_note(freed_bytes, marked_bytes, target_bytes) -> str:
+    """overshoot_note worded by what the run actually did: freed, marked, or
+    both. Both executors call this with their own freed/marked split — the
+    movie side from planned − freed − vanished, the season side from its
+    share minus freed and vanished — so the false "freed 42 GB" over a set of
+    reversible marks is spelled correctly in one place for both. Vanished
+    bytes belong in NEITHER argument: they covered the target but this run
+    neither freed nor marked them."""
+    try:
+        freed = max(0.0, float(freed_bytes or 0))
+        marked = max(0.0, float(marked_bytes or 0))
+    except (TypeError, ValueError):
+        return ""
+    if freed and marked:
+        return overshoot_note(freed + marked, target_bytes,
+                              verb="freed and marked a combined")
+    if marked:
+        return overshoot_note(marked, target_bytes, verb="marked")
+    return overshoot_note(freed, target_bytes)
 
 
 def delete_on_date(marked_at, delay_days):
