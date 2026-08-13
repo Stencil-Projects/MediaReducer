@@ -73,10 +73,9 @@ function canonCfg(c){
     if(Number.isFinite(n))tie=clamp(Math.round(n*10)/10,0.5,25);
   }
   return{
-    // Absent reads as OFF, matching the server. It used to read as ON, from
-    // when these shipped on: a payload that ever lost the keys would have
-    // shown both switches ticked over a config that has them off, and saving
-    // that form would turn cleanup on for a library nobody opted in.
+    // Absent reads as OFF, matching the server. Defaulting these ON would show
+    // both switches ticked over a config that has them off, and saving that
+    // form would turn cleanup on for a library nobody opted in.
     MOVIES_ON:!!c.MOVIES_ON,
     TV_ON:!!c.TV_ON,
     BAL:clamp(Math.round(Number(c.BAL ?? 50)||0),0,100),

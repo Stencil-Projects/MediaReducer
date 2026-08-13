@@ -52,13 +52,12 @@ run time from the clock, so every number they log moves on its own. Both are
 guarded by their own pass/fail expectations instead, which is what those are
 for.
 
-**Fixed, not random.** An earlier version drew its libraries and settings from
-a seeded RNG. That is the wrong thing to gate a merge on: two runs of the same
-commit cover different ground, and a failure may not reproduce. Every scenario
-here is a literal dict, so CI tests the same ground every time and a red build
-names the case. The shape is one baseline that deletes both a movie and a
-season, then one variant per factor — each changing a single thing, so a
-failure points at that thing.
+**Fixed, not random.** Every scenario here is a literal dict rather than
+something drawn from a seeded RNG: a merge cannot be gated on runs that cover
+different ground each time and a failure that may not reproduce. CI tests the
+same ground every time and a red build names the case. The shape is one baseline
+that deletes both a movie and a season, then one variant per factor — each
+changing a single thing, so a failure points at that thing.
 
 Each scenario states what it `expect`s: whether movies and episodes may lose
 files, and whether the app should refuse the run outright. Without that, a

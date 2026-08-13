@@ -375,7 +375,13 @@ let _prDebugReturnFocus = null;
 function prShowDebugBox(title, text, opts) {
   const overlay = _prDebugBox();
   overlay.querySelector('#pr-debug-title').textContent = title || 'Debug output';
-  overlay.querySelector('#pr-debug-text').textContent = text || '(empty)';
+  const textEl = overlay.querySelector('#pr-debug-text');
+  textEl.textContent = text || '(empty)';
+  // Content-creation stamp for the Save button's filename, when the endpoint
+  // supplied one (the cache dump names itself after the store's write time).
+  // Set on EVERY call — a popup without one must not inherit the previous
+  // popup's stamp.
+  textEl.dataset.stamp = (opts && opts.stamp) || '';
   const pending = !!(opts && opts.pending);
   for (const id of ['pr-debug-copy', 'pr-debug-download']) {
     const el = overlay.querySelector('#' + id);
@@ -409,10 +415,14 @@ function prDownloadDebugBox(btn) {
   // Same text the Copy button grabs, saved as a file named after the popup —
   // debug output is what gets pasted into bug reports, and a download
   // survives outputs too large for a clipboard.
-  const text = document.getElementById('pr-debug-text')?.textContent || '';
+  const textEl = document.getElementById('pr-debug-text');
+  const text = textEl?.textContent || '';
   const title = document.getElementById('pr-debug-title')?.textContent || 'debug';
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'debug';
-  const ok = prDownloadText('mediareducer-' + slug + '_' + prFileStamp() + '.txt', text);
+  // The filename carries the CONTENT's time when the endpoint declared one;
+  // the click time is only the fallback for popups generated on demand.
+  const stamp = textEl?.dataset.stamp || prFileStamp();
+  const ok = prDownloadText('mediareducer-' + slug + '_' + stamp + '.txt', text);
   if (btn) {
     const old = btn.textContent;
     btn.textContent = ok ? 'Saved' : 'Save failed';
@@ -474,7 +484,7 @@ async function prRunDebug(url, title, btn, body) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || 'Debug request failed.');
     await prDebugMinVisible(startedAt);
-    prShowDebugBox(title, d.text || '(empty response)');
+    prShowDebugBox(title, d.text || '(empty response)', { stamp: d.stamp || '' });
   } catch (e) {
     await prDebugMinVisible(startedAt);
     prShowDebugBox(title, 'Debug failed: ' + (e.message || e));

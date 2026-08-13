@@ -419,10 +419,10 @@ def _queue_row_to_entry(r) -> dict:
 
 # ── section writers ───────────────────────────────────────────────────────────
 
-# Write column order, once per table. The value tuples below are positional, and
-# the placeholder list used to be as many "?" as someone counted by hand, and
-# column added to the INSERT without a matching "?" is a silent off-by-one that
-# writes every later field into the wrong column.
+# Write column order, once per table. The value tuples below are positional and
+# the placeholders are generated from this list: a column added to the INSERT
+# without a matching "?" is a silent off-by-one that writes every later field
+# into the wrong column.
 _MOVIE_COLUMNS = ("ord", "path", "title", "year", "rating", "votes", "plays",
                   "users", "last_played", "size_gb", "size_bytes", "added_at",
                   "protected", "favorite", "excluded", "source_id",
@@ -683,11 +683,10 @@ def reset_store(db_path) -> None:
     not remove the .db but reported success leaves the old plan in place under
     a UI that has just said it is gone.
 
-    Not because of the -wal, which is what this used to say. An orphaned WAL
-    does NOT replay into the database that replaces it — its header salt no
-    longer matches, so SQLite discards it (checked, not assumed). The sidecars
-    are removed because a reset should leave nothing behind, not because
-    leaving one would resurrect rows."""
+    The sidecars go because a reset should leave nothing behind, not because
+    leaving one could resurrect rows: an orphaned WAL does not replay into the
+    database that replaces it, since its header salt no longer matches and
+    SQLite discards it."""
     with _init_lock:
         _initialized.discard(str(Path(db_path)))
         failed = []

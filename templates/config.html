@@ -957,7 +957,7 @@
       <div class="accordion-body">
         <div class="section-reset-row">
           <p class="section-desc mb-0">The disk and library limits that trigger cleanup — when one is crossed,
-          the lowest-scoring movies are removed until you're back under it.</p>
+          the lowest-scoring movies and seasons are removed until you're back under it.</p>
           <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-space" onclick="resetSectionToDefault('space')" {{ 'disabled' if space_thresholds_locked or not thresholds_have_library else '' }}>Reset to Default</button>
         </div>
 
@@ -1035,10 +1035,9 @@
             </div>
             <div id="headroom-error" class="field-error">Enter a Headroom target of at least 1 GB, or untick it.</div>
             <div class="form-text">Free space to keep available — the daily cleanup runs when free space falls below it. Untick to turn this trigger off.</div>
-            {# Filled in by _applySafetyLimitNotes from the server's own numbers.
-               Every safety refusal on this page used to be a verdict with no
-               arithmetic attached, so the only way to find out where the line
-               sat was to move the value until the app objected. #}
+            {# Filled in by _applySafetyLimitNotes from the server's own numbers,
+               so a safety refusal shows where the line sits instead of leaving
+               the value to be moved until the app objects. #}
             <div id="headroom-safety-note" class="form-text safety-limit-note" hidden></div>
           </div>
           <div class="col-md-6" id="redline-field">
@@ -1143,7 +1142,7 @@
     <div id="s-notify" class="accordion-collapse collapse">
       <div class="accordion-body">
         <div class="section-reset-row mb-3">
-          <p class="section-desc mb-0">Send alerts to Discord, Telegram, and more when runs finish or delete movies.</p>
+          <p class="section-desc mb-0">Send alerts to Discord, Telegram, and more when runs finish or delete something.</p>
           <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-notifications" onclick="resetSectionToDefault('notifications')">Reset to Default</button>
         </div>
 
@@ -1430,9 +1429,14 @@
                 ⚠ Headroom safety cap (%)
               </label>
               <div id="max-headroom-pct-field">
+                {# 100 is the whole disk, which is the setting's off position: the
+                   headroom ceiling becomes the filesystem and the cap floor becomes
+                   zero. Past that the arithmetic stops meaning anything (a ceiling
+                   above the disk can never trip; the cap floor goes negative), which
+                   is why _maxHeadroomPctValid and shared.py both stop at 100. #}
                 <input type="number" class="form-control config-form-width-xs mt-1" id="MAX_HEADROOM_PCT"
                        name="MAX_HEADROOM_PCT" value="{{ config.MAX_HEADROOM_PCT }}"
-                       min="1" max="50" aria-describedby="max-headroom-pct-error">
+                       min="1" max="100" aria-describedby="max-headroom-pct-error">
                 <div class="field-error" id="max-headroom-pct-error">Enter a safety percentage greater than zero.</div>
               </div>
               <div class="form-text">

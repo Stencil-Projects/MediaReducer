@@ -206,9 +206,9 @@ explicit expectation of what should have happened.
 
 Fixed, not random: two runs of the same commit must cover the same ground, or a
 failure cannot be reproduced and a merge cannot be gated on it. See
-`tests/scenarios/README.md`, which also lists the four ways an earlier version
-of this reported a clean sweep while testing nothing. It found the
-manual-Cleanup delay asymmetry that `test_tv_cleanup` now guards.
+`tests/scenarios/README.md` for the shape of a scenario and the ways one can
+report a clean sweep while testing nothing. It found the manual-Cleanup delay
+asymmetry that `test_tv_cleanup` guards.
 
 ## Environment
 

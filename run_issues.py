@@ -150,10 +150,10 @@ CATEGORIES = {
 }
 # No "cleanup blocked by settings" category: a threshold over the safety
 # percentage is a standing configuration state, not something a run hit. The
-# app refuses to arm Automatic Cleanup on it, ghosts the manual Cleanup button
-# with the reason, and words the Cleanup Targets breach note around it. A
-# fourth copy in the run panel said nothing the other three didn't, in the one
-# place reserved for what went wrong during the run. The engine logs it.
+# app already refuses to arm Automatic Cleanup on it, ghosts the manual Cleanup
+# button with the reason, and words the Cleanup Targets breach note around it,
+# so a fourth copy here would add nothing to the one place reserved for what
+# went wrong during the run. The engine logs it.
 
 _ORDER = {name: i for i, name in enumerate(CATEGORIES)}
 _SEVERITY_RANK = {ERROR: 0, WARNING: 1}

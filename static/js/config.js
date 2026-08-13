@@ -1276,8 +1276,8 @@ function getFormConfig() {
     // Headroom's toggle stores 0 when off (redline-only mode) — the same
     // value-memory pattern as Redline/Cap, with 0 instead of null. While the
     // section is locked (no saved dirs, or the media API is down) the SAVED
-    // values ride through untouched: fabricating 0/null here read as a broken
-    // redline-only request server-side and made onboarding saves impossible.
+    // values ride through untouched: fabricating 0/null here reads server-side
+    // as a broken redline-only request, which would block onboarding saves.
     HEADROOM_GB: thresholdsUsable ? (chk('headroom-enabled') ? (requiredNumber('HEADROOM_GB') ?? 0) : 0)
                                   : savedHeadroom,
     // The Headroom checkbox IS the mode switch — unticked saves the flag.
@@ -1314,7 +1314,7 @@ function getFormConfig() {
     _RADARR_DETECTED_SECTION_METHOD_LABEL: _radarrDetectedSectionMethodLabel(),
     IMDB_RATINGS_URL:             v('IMDB_RATINGS_URL').trim(),
     // Blank falls back to the default (7): parseInt('') is NaN, which
-    // serialized as null and made the save 400 with no field highlight.
+    // serializes as null and 400s the save with no field highlight.
     IMDB_RATINGS_MAX_AGE_DAYS:    Math.max(1, parseInt(v('IMDB_RATINGS_MAX_AGE_DAYS')) || 7),
     LOG_RETENTION_DAYS:           Math.max(0, parseInt(v('LOG_RETENTION_DAYS')) || 0),
     KEEP_INTERRUPTED_LOGS:        chk('KEEP_INTERRUPTED_LOGS'),
@@ -1459,11 +1459,9 @@ function _focusAfterSectionOpens(input) {
 // itself on unsaved values spent its life describing a configuration that did
 // not exist. Save first, and this updates from the save response.
 //
-// It also ends a whole bug class by construction. The rules used to live here
-// as well, hand-copied from _space_threshold_state, and every rule added to
-// one and not the other became a control that lied — the per-type cleanup
-// switches went into ok_for_cleanup alone, and the first status poll re-enabled
-// a radio the save would refuse. With no copy left there is nothing to drift.
+// The rules themselves live only in _space_threshold_state. A hand-copied set
+// here would drift the moment a rule was added to one side and not the other,
+// and a control that disagrees with the save is a control that lies.
 function _spaceThresholdBlockingText() {
   const v = _serverThresholds;
   if (!v) return '';
@@ -3473,7 +3471,7 @@ async function saveConfig() {
         ? 'This save also changes a space threshold, so the deletion plan is rebuilt '
           + 'and the marked list changes with it. Marks that remain keep the delay they '
           + `were made under — the new ${newDelay}-day delay applies to new marks.`
-        : `${n} ${n === 1 ? 'movie is' : 'movies are'} already marked for `
+        : `${n} ${n === 1 ? 'item is' : 'items are'} already marked for `
           + 'deletion. They keep the delay they were marked under — the new '
           + `${newDelay}-day delay applies to future marks only.`);
     }

@@ -162,6 +162,15 @@ check('...with nothing painted beyond the active stage',
 s = await steps('debug_cleanup', { status: 'stopped', phase: 'deleting' });
 check('a stopped Debug Cleanup keeps its skipped stages greyed',
       s.dots[1].skipped && s.dots[2].skipped && !s.dots[1].done, s.dots);
+check('...and, stopped PAST the span, keeps its bridged path painted',
+      s.dots[1].linePainted && s.dots[2].linePainted, s.dots);
+
+// Stopped AT Checking, the terminal frame keeps phase "checking" — and the
+// span the run never reached must stay unpainted. A blanket terminal-means-
+// bridged rule redrew the paint-ahead artifact for exactly this case.
+s = await steps('debug_cleanup', { status: 'stopped', phase: 'checking' });
+check('a Debug Cleanup stopped AT Checking paints no line into the span',
+      s.dots.slice(1, 3).every(d => d.skipped && !d.linePainted), s.dots);
 
 check('no page errors', errs.length === 0, errs);
 console.log('RESULT:', ok ? 'PASS' : 'FAIL');

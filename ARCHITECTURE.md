@@ -49,8 +49,8 @@ an exempt box can live wherever the layout wants it.
 
 Each page reports the run once, above its settings, rather than in every
 category. `_sectionNoticeText()` filters the run reason out of the per-section
-notices while leaving their own reasons intact; five copies of one sentence
-buried the reasons that actually differ.
+notices while leaving their own reasons intact — repeated in every section, one
+sentence buries the reasons that actually differ.
 
 `force_stop_script` SIGKILLs the engine, waits for it to actually die, and
 reports what happened. It never force-clears `_run_active` behind a process it
@@ -209,13 +209,12 @@ run, but a `MEDIAREDUCER_MODE_OVERRIDE` of `headroom` is a manual Cleanup too.
 - **A pause the user CHOSE never wakes**, and that is the one thing recorded:
   `_RUN_MODE_USER_PAUSED`, set only by a save that moves Monitor Only or
   Automatic Cleanup to Paused. Storing the deliberate case rather than the
-  resting one is deliberate — its ABSENCE is what a fresh install, a config
-  reset and a hand-edited file all have in common, so absence has to mean
-  wakeable. Recording the resting state instead left every one of them stuck at
-  Paused forever, because a reset rewrites the shipped defaults while the app
-  keeps running and no startup code follows it. The system's own demotes
-  (startup, a stale database, a forced pause) clear the flag, since those must
-  always wake.
+  resting one matters: its ABSENCE is what a fresh install, a config reset and a
+  hand-edited file all have in common, so absence has to mean wakeable. Recording
+  the resting state instead would strand all three at Paused forever, since a
+  reset rewrites the shipped defaults while the app keeps running and no startup
+  code follows it. The system's own demotes (startup, a stale database, a forced
+  pause) clear the flag, since those must always wake.
 
 ## Run modes
 
@@ -449,8 +448,8 @@ way on the app's gating side as in the message builder.
   at all. A muted mode also leaves every notification BASELINE untouched, so
   unmuting reports the interval in one alert rather than swallowing it. The
   opt-in deliberately covers every alert, not just the run summary — gating only
-  the summary meant switching run notifications off in Monitor Only still
-  delivered "a space check marked 34 more movies" on the next tick.
+  the summary would leave "a space check marked 34 more movies" arriving on the
+  next tick after run notifications were switched off in Monitor Only.
 - **Run summaries** ride a completed run's `last_run_report.json`. A manual
   Simulate and a Debug Cleanup are always silent (you are watching them on the
   dashboard).
@@ -481,7 +480,7 @@ Two design points matter when reading it:
   appear), and dropping the second would lose exactly the message worth having.
   A held message carries **no note about the delay** — the alert's own content
   is what the reader needs, and a line about MediaReducer's internal bookkeeping
-  made a merged message read as an apology for arriving. The test button is the
+  would make a merged message read as an apology for arriving. The test button is the
   one exception to holding — it refuses instead, so a user standing there
   checking their wiring is told immediately rather than later.
 - The send stamps are **persisted** (hashed destination keys, so no webhook
@@ -511,8 +510,7 @@ failure, the tick re-probes before any automatic cleanup, and the engine fails
 closed on any API error mid-run. The two media-path samples are
 started speculatively alongside their server's health probe and discarded if it
 fails; they are read-only GETs, and waiting for the probe first would put them in
-a second round trip. Results are consumed by the same sequential checks as before,
-so the wording and ordering of every error and warning is unchanged.
+a second round trip.
 
 **TV: the season side and the one pool** — all app-side (`app.py`), the season
 is the deletion unit, and Sonarr is optional and cleanup-only.

@@ -280,6 +280,35 @@ check("the snapshot line splits movies from TV series",
       "library snapshot: 3 movies + 2 TV series" in body,
       [l for l in body.splitlines() if "library snapshot" in l])
 
+# ── Downloads are named for their CONTENT's time, not the click ────────────
+# A run log downloaded at 08:59 carried a run from 07:48 under an 08:59 name,
+# and a cache dump written at 09:10 downloaded at 09:24 claimed 09:24 — two
+# people citing one artifact by two names. The endpoints now declare the
+# content's stamp; the client only falls back to click time without one.
+import time as _time
+
+(OUT / "lastrun.log").write_text(
+    "2026-08-13 07:48:16 - RUN_MODE=debug_sim\n"
+    "2026-08-13 07:48:16 - CHECK_PATH=/library\n", encoding="utf-8")
+try:
+    r = client.get("/api/logs/last?lines=all")
+except Exception as e:
+    r = Raised(e)
+check("the run log names itself after the run's first timestamp",
+      (r.get_json() or {}).get("stamp") == "2026-08-13_07-48-16",
+      (r.get_json() or {}).get("stamp"))
+
+_store = OUT / "mediareducer.db"
+if not _store.exists():
+    _store.write_bytes(b"")
+_known_epoch = 1755100000
+os.utime(_store, (_known_epoch, _known_epoch))
+r = post("/api/debug/cache", {})
+check("the cache dump names itself after the store's write time",
+      (r.get_json() or {}).get("stamp")
+      == _time.strftime("%Y-%m-%d_%H-%M-%S", _time.localtime(_known_epoch)),
+      (r.get_json() or {}).get("stamp"))
+
 # ── Nothing configured: the message says what to do ────────────────────────
 A.CONFIG_PATH.write_text(json.dumps({"OUTPUT_DIR": str(OUT)}))
 with A._config_memo_lock:

@@ -253,6 +253,7 @@ PY
       # run in flight — only the real page realm.
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_progress_monotonic node tests/e2e/e2e_progress_monotonic.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_skipped_steps node tests/e2e/e2e_skipped_steps.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_download_stamps node tests/e2e/e2e_download_stamps.mjs
       # Theme crossfade: samples computed colors across a real flip, so it needs
       # the real stylesheet — any page will do.
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_theme_crossfade node tests/e2e/e2e_theme_crossfade.mjs

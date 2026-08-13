@@ -22,30 +22,13 @@ you want fine-grained rule-based control instead, you probably want
 > `MEDIAREDUCER_TRUSTED_HOSTS` lets that domain past the DNS-rebinding guard —
 > that is not a login, so put authentication in front of the proxy yourself.
 
-## Contents
-
 [Requirements](#requirements) · [How paths are matched](#how-paths-are-matched)
-· [Install](#install) · [Volumes](#volumes) ·
-[Outside Docker](#running-outside-docker) · [Setup](#first-time-setup) ·
-[Filtering & Scoring](#filtering--scoring) · [Dashboard](#dashboard) ·
-[Run modes](#run-modes) · [TV cleanup](#tv-cleanup) ·
+· [Install](#install) · [Outside Docker](#running-outside-docker) ·
+[Setup](#first-time-setup) · [Filtering & Scoring](#filtering--scoring) ·
+[Dashboard](#dashboard) · [Run modes](#run-modes) · [TV cleanup](#tv-cleanup) ·
 [Notifications](#notifications) · [Safety rules](#safety-rules) ·
 [Command line](#command-line) · [Files](#persistent-files) ·
 [Troubleshooting](#troubleshooting)
-
-## What it does
-
-- Reads your library from Plex/Tautulli, Jellyfin, or both.
-- Only ever touches the `/library` folders you tell it to manage.
-- Skips anything protected, recently added, unplayed, highly rated, or
-  favorited in Jellyfin (the last four optional).
-- Scores the rest on watch history and IMDb rating, blended by one dial, and
-  deletes the lowest first — movies per title, TV per season, one order.
-- Triggers on a free-space target, an emergency floor, or a library size cap.
-- Previews all of it against your real library before anything runs.
-- Optionally tells Radarr to forget a deleted movie, or Sonarr to unmonitor a
-  deleted season, so neither is re-downloaded.
-- Optionally alerts you (Discord, Telegram, ntfy and more) when a run finishes.
 
 ## Requirements
 
@@ -73,18 +56,16 @@ Jellyfin:     /media/x/films/Bob (2020)/Bob.mkv      ✓ same folder + file name
 What must agree is the folder and file name. A server that sees a bare file with
 no movie folder (`/downloads/Bob.mkv`) can only match through a unique
 (file name, size) hit; a bare name alone never matches, since that could be a
-different film. TV series match the same way at folder grain — the series folder
-name under a monitored path. A series folder name found under **two** monitored
-paths is ambiguous and is skipped rather than guessed at.
+different film. TV series match at folder grain — the series folder name under a
+monitored path. A series folder name found under **two** monitored paths is
+ambiguous and is skipped rather than guessed at.
 
 **The file on disk is the size authority.** A file whose bytes differ from the
-server's count (usually a quality upgrade the server hasn't rescanned) still
-matches, and plans, deletions and history all carry the on-disk bytes. Files
-stored flat, with no movie folder, lean on name + size instead, so they are
-deletable only once every enabled server and the disk agree.
+server's count — usually a quality upgrade the server hasn't rescanned — still
+matches, and plans, deletions and history all carry the on-disk bytes.
 
 When **most** sampled files disagree in size, that looks like the wrong library
-— a stale backup mounted at `/library` — and it is treated as an error: the
+(a stale backup mounted at `/library`) and is treated as an error: the
 configuration check fails and a run's pre-check aborts before anything is
 scored. **Check for Errors**, and saving your monitored paths, both re-run the
 whole check against the current disk.
@@ -115,7 +96,7 @@ the container keeps serving on 7474, so its health check is unaffected.
 docker compose up -d --build      # then open http://your-server-ip:7474
 ```
 
-## Volumes
+### Volumes
 
 | Container path | Required | Purpose |
 | --- | --- | --- |
@@ -126,20 +107,26 @@ docker compose up -d --build      # then open http://your-server-ip:7474
 | `/sonarr` | no | Same, for Sonarr. |
 
 The appdata mounts are a setup convenience only — everything after Auto Detect
-goes over HTTP. Skip them and type the keys in yourself, or remove them once the
-keys are saved. There is no Jellyfin mount because Jellyfin issues API keys from
-its dashboard and stores none on disk.
+goes over HTTP, so you can skip them and type the keys in yourself. There is no
+Jellyfin mount because Jellyfin issues API keys from its dashboard and stores
+none on disk. Every URL field defaults to its service's documented port (8181
+Tautulli, 32400 Plex, 8096 Jellyfin, 7878 Radarr, 8989 Sonarr); ports are never
+read from appdata, so enter the URL yourself for a non-standard one.
 
 Whatever is at `/library` is what MediaReducer *can* delete; monitored paths are
 a setting on top of that. To put a folder beyond reach, mount it read-only at
 the matching spot underneath — `/mnt/user/media/Music` → `/library/Music:ro`.
-Docker layers that over the parent mount. Add it alongside the `/library` mount,
-never instead of it: free space is measured on `/library` itself, so replacing
-it with subfolder mounts reads the container's own layer rather than the array.
+Add it alongside the `/library` mount, never instead of it: free space is
+measured on `/library` itself, so subfolder mounts alone would read the
+container's own layer rather than the array.
 
-Every URL field defaults to its service's documented port (8181 Tautulli, 32400
-Plex, 8096 Jellyfin, 7878 Radarr, 8989 Sonarr). Ports are never read from
-appdata, so enter the URL yourself for a non-standard port.
+### Container user & health
+
+The container runs as root, which works on any host. Set `PUID`/`PGID` in the
+compose file to run as a specific user instead — that user needs write access to
+your media files and `/config`. On Unraid that is usually `PUID=99` / `PGID=100`;
+elsewhere use `id -u` / `id -g`. The image has a health check, so `docker ps`
+shows `healthy` rather than just `running`.
 
 ## Running outside Docker
 
@@ -163,18 +150,15 @@ python3 app.py
 
 The library path stays the deletion boundary wherever you put it.
 
-### Container user & health
-
-The container runs as root, which works on any host. Set `PUID`/`PGID` in the
-compose file to run as a specific user instead — that user needs write access to
-your media files and `/config`. On Unraid that is usually `PUID=99` / `PGID=100`;
-elsewhere use `id -u` / `id -g`. The image has a health check, so `docker ps`
-shows `healthy` rather than just `running`.
-
 ## First-time setup
 
 On first launch the UI shows a welcome guide; reopen it any time with **?** in
 the header. Work down the Configuration tab.
+
+Everything the page locks, greys or explains describes your **saved** settings,
+not the form in front of you — a section unlocks and a mode becomes selectable
+when a save makes it true. The threshold calculators are the exception: they
+follow what you type, because they decide nothing.
 
 ### 1. Scheduler Mode
 
@@ -240,18 +224,8 @@ another app's state is opt-in:
 
 ### 4. Space Thresholds
 
-Unlocks after a monitored path is saved. The panel shows what your storage is
-doing right now, and each threshold states the figure it needs to reach and how
-far away it is — the numbers move as you type, so you can try a value against
-the real disk before saving.
-
-Everything the Configuration page locks, greys or explains describes your
-**saved** settings, never the form in front of you: a section unlocks, a
-Scheduler Mode becomes selectable and a button ungreys when a save makes it
-true, not when you type it. The calculators are the exception, and the reason
-for the rule — they follow what you type precisely because they decide
-nothing. So a threshold you have edited but not saved shows you where it would
-put you, while the mode it would allow stays greyed until you save it.
+Unlocks after a monitored path is saved. Each threshold states the figure it
+needs to reach and how far away it is, against your real storage, as you type.
 
 - **Headroom target** — cleanup runs when free space drops below this, and frees
   back up to it.
@@ -268,11 +242,11 @@ put you, while the mode it would allow stays greyed until you save it.
 Anything that could delete more than you expect opens a dialog spelling out the
 consequence first.
 
-**Every threshold can be off at once**, which is how a fresh install ships: with
-none armed there is nothing to enforce, so Monitor Only and Automatic Cleanup
-stay unavailable. With only a Redline floor, Redline becomes the only thing that
-ever deletes and the deletion delay is retired. With only a Library Size Cap,
-the normal daily schedule and delay apply without a free-space target.
+**Every threshold can be off at once**, which is how a fresh install ships:
+nothing to enforce, so Monitor Only and Automatic Cleanup stay unavailable. With
+only a Redline floor, Redline becomes the only thing that ever deletes and the
+deletion delay is retired. With only a Library Size Cap, the daily schedule and
+delay apply without a free-space target.
 
 ### 5. Notifications
 
@@ -280,12 +254,11 @@ Optional outbound alerts — see [Notifications](#notifications).
 
 ### 6. Advanced
 
-IMDb dataset settings, display/time settings, log retention, cache tools, debug
-mode, the headroom safety cap, and **Reset MediaReducer**.
+IMDb dataset settings, display/time settings, log retention, cache tools, the
+headroom safety cap, **Force stop**, **Debug mode** and **Reset MediaReducer**.
 
-Two appearance settings, stored **per browser** in cookies rather than in the
-config, so your phone and your desktop can differ. Both apply on Save, like
-everything else here.
+Two appearance settings live here too, stored **per browser** in cookies rather
+than in the config, so your phone and your desktop can differ:
 
 - **Reduce visual effects** — no animations, transitions or background blur.
 - **Disable background blur** — the frosted glass on its own. Worth turning off
@@ -300,19 +273,16 @@ field that needs attention shows a red **!** on its header.
 
 ### Cleanup scope
 
-Two per-type switches, **both off by default**. Deleting files is opt-in: a
-fresh install scans, scores and shows you everything, and deletes nothing until
-you say which types it may touch.
+Two per-type switches, **Movies** and **TV shows**, both off by default.
+Deleting files is opt-in: a fresh install scans, scores and shows you
+everything, and deletes nothing until you say which types it may touch. A type
+switched off is still scanned and scored — it just never becomes eligible. TV
+is also the master switch for [TV cleanup](#tv-cleanup).
 
-- **Movies** — off means no movie is ever eligible. Scans still run and score
-  everything, but the deletion queue empties.
-- **TV shows** — the master switch for [TV cleanup](#tv-cleanup). Off means no
-  season is ever marked or deleted.
-
-With **both** off there is nothing to delete, so Automatic Cleanup cannot be
-selected. Simulate stays available, so you can preview what cleanup would do
-before allowing a type. Turning both off while Automatic Cleanup is armed drops
-the scheduler to Monitor Only and says why on the Dashboard.
+With both off there is nothing to delete, so Automatic Cleanup cannot be
+selected, though Simulate still previews what cleanup would do. Turning both off
+while Automatic Cleanup is armed drops the scheduler to Monitor Only and says
+why on the Dashboard.
 
 ### Scoring & ordering
 
@@ -350,19 +320,16 @@ Protected collections also apply, and are set on the Configuration tab.
 
 ### TV show scoring
 
-TV-only rules, all previewing live:
-
 - **Season eligibility** — which seasons may delete: **only the oldest**
   (default), **any except the newest** (most recently *added*, which may not be
-  the latest), or **all**. A continuing show's current season is always held
-  back.
+  the highest-numbered), or **all**. The latest season on disk is always held
+  back unless the server says the show has ended.
 - **Season episode cap** (default 50) — a season with more episodes than this is
-  held back whatever it scores. Not every show splits its run into seasons:
-  anime that never re-numbers, long-running dailies, and flattened folders all
-  present the whole show as one season, where deleting "a season" deletes the
-  lot. Ordinary seasons top out around 26, so the default leaves roughly a
-  season of headroom. A season whose episode count is unknown is judged by the
-  other rules instead. **0** turns the cap off.
+  held back whatever it scores. Anime that never re-numbers, long-running
+  dailies and flattened folders all present a whole show as one season, where
+  deleting "a season" deletes the lot; ordinary seasons top out around 26, so
+  the default leaves room. A season whose episode count is unknown is judged by
+  the other rules. **0** turns the cap off.
 - **TV show watch weight** (100–200%) — converts season plays to movie-watch
   equivalents: plays ÷ episodes × this weight. At 100%, playing a full season
   once counts like one movie watch; at 200%, two.
@@ -373,12 +340,12 @@ TV-only rules, all previewing live:
 
 ### Library table
 
-Your entire library as of the last run, scored with the settings on screen. Each
-row shows its breakdown, and a filtered row says which rule filtered it. The
-**#** column is the real deletion order; type an **Over headroom calculator**
-target and it reorders live across the whole library. Empty until your first
-Simulate. Sliders below let you dial up a hypothetical movie and watch its score
-react.
+Your entire library as of the last run, scored with the settings on screen —
+empty until your first Simulate. Each row shows its breakdown, and a filtered
+row says which rule filtered it. The **#** column is the real deletion order;
+type an **Over headroom calculator** target and it reorders live across the
+whole library. Sliders below let you dial up a hypothetical movie and watch its
+score react.
 
 ## Dashboard
 
@@ -399,13 +366,11 @@ Buttons disable while setup is incomplete, a selected API is unhealthy, or a run
 is active. Cleanup also ghosts while every space limit is satisfied. The tooltip
 always says which.
 
-### Reading a run
-
 The stepper and the log share five steps: **Checking**, **Reading library**,
-**Scoring**, **Simulating**/**Deleting**, **Done**. Each prints how long it took.
-
-A red × means the dashboard says what failed and what to do; the log carries the
-same words on `ABORT:`, the technical detail on `ABORT detail:`, and the stage on
+**Scoring**, **Simulating**/**Deleting**, **Done**. Each prints how long it took,
+and a step a run doesn't perform is greyed rather than ticked. A red × means the
+dashboard says what failed and what to do; the log carries the same words on
+`ABORT:`, the technical detail on `ABORT detail:`, and the stage on
 `ABORT stage:`. Quote that stage name when reporting a problem.
 
 ## Run modes
@@ -454,24 +419,17 @@ watch the same library); watch history comes from Jellyfin and Tautulli.
 asked to unmonitor a season before deletion.
 
 With a media server connected, TV cleanup on, and a Headroom target or Library
-Size Cap armed, every run handles seasons right before movies — one cleanup, one
-gesture. Each run:
+Size Cap armed, every run handles seasons right before movies. It refreshes from
+the live servers (if any configured source fails to answer, the season side
+aborts without touching a file), rebuilds the season plan, merges it with the
+movie queue into one worst-first order, and walks that until the pool's deficit
+is covered. Seasons in that stretch are **marked**; the movies in it stay the
+movie cleanup's job — the two sides split one deficit, never double-covering it.
 
-1. **Refreshes from the live servers.** If any configured source fails to
-   answer, the season side aborts without touching a file.
-2. **Rebuilds the season plan** — every in-scope season ranked worst-kept first,
-   with protected and favorited shows, shows outside your monitored paths, and a
-   continuing show's newest season held back entirely.
-3. **Merges it with the movie queue** into one worst-first order, and walks it
-   until the pool's deficit is covered. Seasons in that stretch are **marked**;
-   the movies in it stay the movie cleanup's job — the two sides split one
-   deficit, never double-covering it.
-4. **Deletes due marks** (Automatic Cleanup only) that the fresh plan still
-   takes: the season's episode files, freshly listed by the media server, joined
-   under the resolved series folder and recorded in `deleted.log`. The disk is
-   the size authority. With **Optional Sonarr cleanup** on, the season is
-   unmonitored first — a refusal from Sonarr leaves it intact and still marked —
-   and Sonarr is asked to rescan afterwards.
+Under Automatic Cleanup, due marks the fresh plan still takes are deleted and
+recorded in `deleted.log`. With **Optional Sonarr cleanup** on the season is
+unmonitored first — a refusal from Sonarr leaves it intact and still marked —
+and Sonarr is asked to rescan afterwards.
 
 A season leaves the marked list the moment the plan stops taking it: the cap was
 raised, the show got protected or favorited, someone started watching, or enough
@@ -491,17 +449,18 @@ entirely off until you turn **Enable notifications** on.
   Once per change, never repeatedly.
 - **Low space warning** — free space comes within your margin of the Redline
   floor. Sent once on entering the zone, re-armed only after space recovers.
-- **Alert in Monitor Only** (off) — Monitor Only stays silent unless ticked.
-  Paused always sends nothing, and nothing is lost: the first alert after you
-  tick this reports what changed meanwhile.
+- **Alert in Monitor Only** (off) — Monitor Only stays silent unless ticked;
+  Paused always sends nothing. Nothing is lost either way: the first alert after
+  you tick this reports what changed meanwhile.
 
 Every alert says which mode produced it. Under Automatic Cleanup the dates read
 as deletions; under Monitor Only the same dates read as eligibility.
 
 **What to include** — both start off, so out-of-the-box alerts stay short:
 
-- **Titles** — lists what was deleted, newly marked, or first in line. Long lists
-  are trimmed; without it you still get counts and dates.
+- **Movie names** — lists the movies deleted, newly marked, or first in line.
+  Long lists are trimmed; without it you still get counts and dates. Seasons
+  reach the alerts as counts either way, never as names.
 - **Failed runs and errors** — alerts when a run stops dead, and lists what went
   wrong on runs that finished with errors, in the same words the log uses.
 
@@ -522,16 +481,6 @@ first — the button is greyed until a saved service exists. Each destination is
 rate-limited to one message per 10 seconds as a backstop; you should never
 notice. A user-initiated **Stop** is silent, and so is a **Debug Cleanup**.
 
-**Debug** appears beside the test button while Debug mode is on, like the other
-debug tools. It shows what the messages would say without sending anything: the
-last completed run's summary rebuilt under your saved settings, plus — when one
-is actually waiting — the pending marked-changes alert and the low-space
-warning. That is the point of it: Debug mode runs only alongside Paused or
-Monitor Only, where real notifications are muted, so this is how you read a
-message you would otherwise never receive. It greys out when there is nothing
-to show yet. Previewing never consumes a pending alert — leave Debug mode and
-re-arm the scheduler, and the real notification still goes out.
-
 Alerts are best-effort: delivered *after* a run's work is done and recorded, on a
 separate thread with a timeout, so a slow notification service can never delay or
 abort a cleanup.
@@ -540,23 +489,22 @@ abort a cleanup.
 
 - No monitored paths means no scan and no deletion.
 - Every deletion must resolve inside `/library` *and* inside a monitored path.
+  Symlinked media is never deleted.
 - Deleting is opt-in per media type, and both types ship off.
 - A required media API failing during a run aborts it, and a run won't start
   until every selected server is healthy. Radarr blocks a real Cleanup (so it
   can forget what you delete) but never a Simulate.
 - Protections fail closed: a protected collection that no longer matches
-  anything aborts the run rather than running unprotected.
+  anything aborts the run rather than running unprotected. Protected
+  collections and filtered titles are hard exclusions, not score penalties.
 - Plex/Jellyfin identity mismatches are skipped, never deleted. So is a series
   folder name that matches under more than one monitored path.
-- Protected collections and filtered titles are hard exclusions, not score
-  penalties.
 - The container drops every Linux capability but the four `entrypoint.py` needs
   to become the PUID/PGID user, runs with `no-new-privileges`, and never mounts
   the docker socket. `config.json` is written `0600` — it holds your tokens.
 - Editing connection or monitoring settings while Automatic Cleanup is on drops
   it to Monitor Only. A threshold change keeps it running and rebuilds the plan,
-  unless the change leaves the library over a limit. Settings lock only while a
-  run is active.
+  unless the change leaves the library over a limit.
 - Every run does a fresh safety pre-check before acting. Stop is always safe:
   deletions already made are permanent and recorded, but nothing is left
   half-done.
@@ -599,7 +547,10 @@ detaches; the run continues). `cleanup` confirms unless you pass `--yes`.
 ## Debug mode
 
 **Debug mode** (Advanced) adds buttons that dump raw connection and run state
-into copyable popups. **Download report** builds a diagnostic snapshot safe to
+into copyable popups, a **Debug Cleanup** that runs a real cleanup tick against
+the marked queue without deleting anything, and a notification preview showing
+what your alerts would say. It can only be turned on while Scheduler Mode is
+Paused or Monitor Only. **Download report** builds a diagnostic snapshot safe to
 attach to a bug report — titles, hosts, keys, paths and IPs are scrubbed or
 replaced with anonymous tokens.
 
@@ -620,8 +571,7 @@ In the `/config` mount (`MEDIAREDUCER_DATA` on the host):
 
 **Reset MediaReducer** (Advanced) removes configuration and state but always
 keeps the deletion history, the run logs and the IMDb dataset. It also clears
-the appearance cookies, though only for the browser that pressed it — they live
-nowhere else.
+the appearance cookies, though only for the browser that pressed it.
 
 You can hand-edit `config.json`, but it is checked against the same rules the UI
 uses, so an invalid edit locks things down until fixed.

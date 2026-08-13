@@ -224,16 +224,11 @@
      nothing until the pointer is already on it, and says nothing ever on a
      phone.
 
-     A pointer silhouette, not a text arrow. The glyph this replaces was a font
-     character, so its size, weight and baseline drifted with the type stack —
-     bundled Inter only reaches 700, where its arrow still reads as a hairline
-     on a phone, and the fix for that was a font-size two steps above the
-     number it sits beside. A mask has none of those problems: it is crisp at
-     any pixel density, its geometry is fixed in the path rather than left to
-     the font, and it carries no text at all, so it cannot leak into a button's
-     accessible name (the old rule needed the content/alt-text syntax and a
-     fallback declaration purely to keep a screen reader from announcing "north
-     west arrow").
+     A masked pointer silhouette rather than a font character: an arrow glyph
+     takes its size, weight and baseline from the type stack, and bundled Inter
+     only reaches 700, where its arrow reads as a hairline on a phone. A mask is
+     crisp at any pixel density, its geometry is fixed in the path, and it
+     carries no text, so it cannot leak into a button's accessible name.
 
      It points up-left, into the box, so it reads as belonging to the thing it
      sits on rather than pointing off the edge of it. */
@@ -1105,8 +1100,8 @@
   </div>
   <div class="run-help" id="run-help">
     <strong>Simulate</strong> previews deletions without touching files.
-    <strong>Cleanup</strong> deletes eligible movies to meet your thresholds immediately —
-    the deletion delay and daily schedule apply to automatic runs only.
+    <strong>Cleanup</strong> deletes eligible movies and seasons to meet your thresholds
+    immediately — the deletion delay and daily schedule apply to automatic runs only.
     The Storage card's <strong>↻</strong> refreshes disk and library numbers only.
   </div>
   <div class="run-progress">
@@ -1223,9 +1218,9 @@
 let _active       = {{ 'true' if run_active else 'false' }};
 // What kind of run is in flight, as of page render. Only used to paint the
 // header badge on the FIRST frame of a mid-run load — every later frame comes
-// from the status poll. Without these the badge opened as a blue "Running"
-// whatever was happening and corrected itself a moment later, which reads as a
-// blink when you move between tabs during a run, and hid the red Cleanup cue.
+// from the status poll. Without these the badge opens as a blue "Running"
+// whatever is happening and corrects itself a moment later, which reads as a
+// blink when you move between tabs during a run and hides the red Cleanup cue.
 // |tojson, not an if/else: Jinja renders a MISSING context variable as falsy,
 // so `'true' if run_cleanup else 'false'` would quietly emit false if the route
 // ever stopped passing it — the badge would be wrong again and nothing would

@@ -214,7 +214,10 @@ async function downloadDetailedLog(btn) {
   try {
     const d = await _fetchJson(`/api/logs/last?lines=all&${prTimeQuery()}&_=${Date.now()}`, { cache: 'no-store' }, 20000);
     const text = prNormalizeDisplayedTimestamps(d.content || '');
-    if (!prDownloadText(`mediareducer-run-log-${prFileStamp()}.txt`, text)) msg = 'Log is empty';
+    // Named for the run the log records (its first timestamp, sent by the
+    // server), not for the moment the button was clicked — the click-time
+    // stamp had two people citing two different filenames for one run.
+    if (!prDownloadText(`mediareducer-run-log-${d.stamp || prFileStamp()}.txt`, text)) msg = 'Log is empty';
   } catch (_) {
     msg = 'Download failed';
   } finally {
@@ -484,20 +487,23 @@ function renderProgress(p) {
   document.querySelectorAll('#rp-steps .rp-step').forEach((el, i) => {
     el.classList.remove('is-active', 'is-done', 'is-failed', 'is-success-line', 'is-success-end', 'is-warn-line', 'is-warn-end', 'is-skipped', 'is-bridged');
     const dot = el.querySelector('.rp-dot');
-    // A stage this mode does not run is greyed in place, never ticked. It kept
-    // its ✓ before because every mode ends at phase "done" and the fill ran to
-    // the high-water mark — so a Debug Cleanup drew "Reading library ✓" and
-    // "Scoring ✓" beside its own "Scanned 0", claiming work its log shows it
-    // never did. Handled ahead of every other branch: skipped is a property of
-    // the mode, true while running, when finished, and when interrupted.
+    // A stage this mode does not run is greyed in place, never ticked. Every
+    // mode ends at phase "done" and the fill runs to the high-water mark, so
+    // without this a Debug Cleanup would draw "Reading library ✓" and
+    // "Scoring ✓" beside its own "Scanned 0", claiming work its log denies.
+    // Handled ahead of every other branch: skipped is a property of the mode,
+    // true while running, when finished, and when interrupted.
     if (skipped.includes(i)) {
       el.classList.add('is-skipped');
       // The span's muted connectors paint ONLY once the run has moved past
-      // this stage (or finished): the stepper never draws a line ahead of
-      // where the run actually is — while it still sits at Checking, the
-      // dashed circles alone say what will be skipped, and the first stage
-      // connects to nothing.
-      if (terminal || activeIdx > i) el.classList.add('is-bridged');
+      // this stage: the stepper never draws a line ahead of where the run
+      // actually got — while it sits at Checking, the dashed circles alone
+      // say what will be skipped, and the first stage connects to nothing.
+      // No "|| terminal" here: a COMPLETED run ends at phase "done" (index
+      // 4), which this comparison already covers, so a terminal disjunct
+      // only ever fired for runs stopped mid-flight — bridging the span a
+      // stopped-at-Checking run never reached.
+      if (activeIdx > i) el.classList.add('is-bridged');
       dot.textContent = '–';
       return;
     }
@@ -637,9 +643,9 @@ function renderProgress(p) {
   document.getElementById('rp-current').textContent = current;
 
   // A mode that skips the scan has no scanned count to report, and "0" is not
-  // that — it reads as a scan that found nothing, which is how a Debug Cleanup
-  // came to show "Scanned 0" next to "Eligible 2,213". An em dash says the
-  // question does not apply here, matching the greyed Scoring step above.
+  // that — it reads as a scan that found nothing, so a Debug Cleanup would show
+  // "Scanned 0" next to a full Eligible count. An em dash says the question does
+  // not apply here, matching the greyed Scoring step above.
   document.getElementById('rp-stat-scanned').textContent =
     skipped.includes(2) ? '—' : (Number(p.scanned) || 0).toLocaleString();
   document.getElementById('rp-stat-eligible').textContent = (Number(p.eligible) || 0).toLocaleString();
@@ -953,7 +959,7 @@ function _dhRenderPage() {
       empty.hidden = false;
       empty.textContent = _dhView === 'marked'
         ? 'Nothing is marked or eligible yet — run Simulate to build the deletion plan.'
-        : 'No movies have been pruned yet.';
+        : 'Nothing has been pruned yet.';
     }
     if (pager) pager.hidden = true;
     return;
@@ -1050,7 +1056,7 @@ async function loadDeletedHistory() {
       // Said once, here. The rows carry a rank and nothing else about the
       // ordering — repeating "next in line if more space is needed" down two
       // thousand rows is the same sentence in the column a reader is scanning
-      // for what's different about each movie.
+      // for what's different about each row.
       summary.textContent = _dhView === 'marked'
         ? (imminentCount
             ? (_redlineOnly
@@ -1061,9 +1067,9 @@ async function loadDeletedHistory() {
                 // Deletes cell reads "—". Without this the one window that
                 // exists to say WHEN these go would not mention the Redline at
                 // all, in the mode whose whole premise is that it is the trigger.
-                ? `${marked.length} ${marked.length === 1 ? 'movie is' : 'movies are'} eligible, in the order they would go when free space hits the Redline floor.`
-                : `${marked.length} ${marked.length === 1 ? 'movie is' : 'movies are'} eligible, in the order they would go if space is needed — none marked yet.`))
-        : `${count} ${count === 1 ? 'movie has' : 'movies have'} been pruned · ${reclaimed} reclaimed.`;
+                ? `${marked.length} ${marked.length === 1 ? 'item is' : 'items are'} eligible, in the order they would go when free space hits the Redline floor.`
+                : `${marked.length} ${marked.length === 1 ? 'item is' : 'items are'} eligible, in the order they would go if space is needed — none marked yet.`))
+        : `${count} ${count === 1 ? 'item has' : 'items have'} been pruned · ${reclaimed} reclaimed.`;
     }
     // One list per view (both already come newest-first / in plan order from
     // the server): the left button shows the queue, the stats button the history.
@@ -1139,7 +1145,7 @@ async function clearDeletedHistory() {
     _dhRenderPage();
     _updateDeletedCounter(0, 0, '0.0 GB');
     const summary = document.getElementById('deleted-history-summary');
-    if (summary) summary.textContent = '0 movies have been pruned · 0 GB reclaimed.';
+    if (summary) summary.textContent = '0 items have been pruned · 0 GB reclaimed.';
     showToast(d.message || 'Deleted history erased.', 'success');
   } catch (err) {
     showToast(String(err.message || err), 'danger');
@@ -1392,9 +1398,9 @@ function _updateBreachNote() {
     } else if (!ev.count && _eligibleCount === 0) {
       // The plan is CURRENT (simulate_required is false, handled above) and it
       // still came out empty: every title is filtered out. Asking for another
-      // Simulate — what this branch used to say — sends the one user who
-      // cannot be helped by one to run it again, since the filters would
-      // disqualify everything a second time too. Name the actual lever.
+      // Simulate would send the one user it cannot help to run it again, since
+      // the filters would disqualify everything a second time too. Name the
+      // actual lever instead.
       text = `Over space limits — but nothing is eligible to delete. Check the filters in `
            + `Filtering & Scoring: a media type may be turned off, or a rule may be `
            + `disqualifying everything.`;

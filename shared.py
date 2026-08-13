@@ -22,22 +22,12 @@ import datetime as _dt
 import time as _time
 
 
-# ── The pool deficit ─────────────────────────────────────────────────────────
-
 # ── Numeric config domains ───────────────────────────────────────────────────
-# ONE table of what each numeric setting may be. The app and the engine have
-# genuinely different jobs with it — the app REFUSES a bad value (a save is
-# rejected, a hand-edited file is flagged and locks the run buttons), the
-# engine COERCES to something usable and records an error that aborts the run —
-# so their code stays separate. What must never differ is the rule itself, and
-# it used to: each side spelled the bounds out at its own call site, and they
-# had drifted apart on five keys. A null HEADROOM_GB was a lockout to the app
-# and a silent 0 (redline-only mode) to the engine; REDLINE_GB 0 was refused by
-# one and armed by the other; a fractional GRACE_PERIOD_DAYS or DELETE_DELAY_DAYS
-# was refused by the app and quietly truncated by the engine; and
-# IMDB_RATINGS_MAX_AGE_DAYS disagreed about whether 0 was allowed. The app is
-# the gate and the engine is what actually deletes, so a gate that disagrees
-# with the actor is not a gate.
+# ONE table of what each numeric setting may be. The two sides act on it
+# differently — the app REFUSES a bad value (a save is rejected, a hand-edited
+# file is flagged and locks the run buttons), the engine COERCES to something
+# usable and records an error that aborts the run — but the bounds themselves
+# must not differ, or the gate disagrees with what actually deletes.
 #
 # nullable means the setting has an OFF state written as null/blank — not that
 # a missing key is acceptable (an absent key falls back to its default before
@@ -64,8 +54,6 @@ _NUM = {
     "MAX_STALENESS_MONTHS":     (1,      120,  False, False, "must be a number of months from 1 to 120"),
 }
 # Keys whose minimum is a floor the value must stay ABOVE rather than reach.
-# Spelled here rather than as a fractional bound (the engine used 0.000001 for
-# the percentage) so the rule reads as what it means.
 _EXCLUSIVE_MIN = {"REDLINE_GB", "MAX_HEADROOM_PCT", "MAX_LIBRARY_GB"}
 
 NUMERIC_KEYS = tuple(_NUM)
@@ -122,6 +110,8 @@ def coerce_number(key, raw):
     return (int(value) if float(value).is_integer() else value), ""
 
 
+# ── The pool deficit ─────────────────────────────────────────────────────────
+
 def pool_deficit_gb(used_gb, used_limit_gb, library_gb, cap_gb) -> float:
     """GB a day's deletions must free: the LARGER of the headroom overage
     (used space past its limit) and the Library Size Cap overage (the cap
@@ -143,25 +133,21 @@ def pool_deficit_gb(used_gb, used_limit_gb, library_gb, cap_gb) -> float:
     return max(headroom_deficit, cap_deficit)
 
 
-# ── The delay clock ──────────────────────────────────────────────────────────
+# ── Run reporting ────────────────────────────────────────────────────────────
 
 def overshoot_note(committed_bytes, target_bytes, verb="freed") -> str:
     """A sentence naming the excess when a run committed materially more than
     it needed, else "".
 
-    `verb` names what the run actually did with those bytes — "freed" for
-    deletions, "marked" for a delay-clocked covering set, or a combined
-    phrase for a run that did both. The default kept the old wording, which
-    was WRONG for mark-only runs: with a deletion delay set, a 2 GB deficit
-    covered by one 42 GB mark logged "this run freed 42.0 GB" when nothing
-    was deleted at all — the caller states what happened, this sizes it.
+    `verb` names what the run did with those bytes — "freed" for deletions,
+    "marked" for a delay-clocked covering set, or a combined phrase for both.
+    The caller states what happened; this sizes it.
 
     Deletion units are atomic — a movie file, a whole season — so a run stops
     at the FIRST item that covers what is left, and that item can be far
     bigger than the remainder. The selection step keeps the waste as small as
     the near-tied candidates allow, but when nothing near-tied is small enough
-    the excess is real and irreversible, and both numbers were already in the
-    log for anyone who thought to subtract them. This says it out loud.
+    the excess is real and irreversible.
 
     Deliberately quiet about small change: at least 1 GB over AND at least
     half the target again, so an ordinary run that lands a little past its
@@ -180,14 +166,37 @@ def overshoot_note(committed_bytes, target_bytes, verb="freed") -> str:
             "covers the rest.")
 
 
+def same_run(stamp_a, stamp_b) -> bool:
+    """Whether two run_started_at stamps name the SAME run.
+
+    The one pairing rule for everything stamped with a run identity — the
+    engine's summary matching its season-side report, the app's notify
+    preview matching the persisted last_pass. Tolerance, not equality: the
+    stamp round-trips through env repr() and JSON on its way between the two
+    processes, and a microsecond of representation drift must not silently
+    unpair a run from its own report."""
+    try:
+        return (stamp_a is not None and stamp_b is not None
+                and abs(float(stamp_a) - float(stamp_b)) < 0.001)
+    except (TypeError, ValueError):
+        return False
+
+
+def split_media_counts(rows):
+    """(movies, tv) row counts for a snapshot's mixed-media row list. A row
+    with no media_type is a movie — older snapshot rows carry none, and both
+    report builders must read them the same way."""
+    rows = rows or []
+    movies = sum(1 for m in rows
+                 if isinstance(m, dict) and (m.get("media_type") or "movie") == "movie")
+    return movies, len(rows) - movies
+
+
 def composed_overshoot_note(freed_bytes, marked_bytes, target_bytes) -> str:
     """overshoot_note worded by what the run actually did: freed, marked, or
-    both. Both executors call this with their own freed/marked split — the
-    movie side from planned − freed − vanished, the season side from its
-    share minus freed and vanished — so the false "freed 42 GB" over a set of
-    reversible marks is spelled correctly in one place for both. Vanished
-    bytes belong in NEITHER argument: they covered the target but this run
-    neither freed nor marked them."""
+    both. Each executor passes its own freed/marked split. Vanished bytes
+    belong in NEITHER argument: they covered the target, but this run neither
+    freed nor marked them."""
     try:
         freed = max(0.0, float(freed_bytes or 0))
         marked = max(0.0, float(marked_bytes or 0))
@@ -200,6 +209,8 @@ def composed_overshoot_note(freed_bytes, marked_bytes, target_bytes) -> str:
         return overshoot_note(marked, target_bytes, verb="marked")
     return overshoot_note(freed, target_bytes)
 
+
+# ── The delay clock ──────────────────────────────────────────────────────────
 
 def delete_on_date(marked_at, delay_days):
     """The calendar date a mark becomes deletable: the LOCAL date it was

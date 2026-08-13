@@ -26,7 +26,7 @@
    from base.html (shared with Configuration). */
 .slbl{font-size: var(--fs-xs);font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:.75rem}
 .miniin{font-family:var(--font-mono)}
-/* The settings stack sits where the old card did, with the same air under it. */
+/* The settings stack carries the same air under it as the cards around it. */
 #filter-score-card{margin-bottom:1rem}
 .filter-score-intro{margin:0 0 .75rem}
 .score-explorer-shell .accordion-body .section-desc{margin-bottom:14px}
@@ -694,7 +694,7 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
   <div class="twrap">
     <table>
       <thead><tr>
-        <th id="th-o" onclick="sb('order')" class="sc" title="Deletion order — a run deletes eligible movies in this order; with an Over headroom target the bracket marks where the pick matters"># ↑</th>
+        <th id="th-o" onclick="sb('order')" class="sc" title="Deletion order — a run deletes eligible titles in this order; with an Over headroom target the bracket marks where the pick matters"># ↑</th>
         <th id="th-t" onclick="sb('title')">Title</th>
         <th id="th-m" onclick="sb('type')">Type</th>
         <th id="th-y" onclick="sb('year')">Year</th>

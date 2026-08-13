@@ -98,6 +98,28 @@ check("the switch reports seasons as held back, not eligible",
 check("...and claims no bytes for the cap arithmetic",
       rep_off["eligible_season_bytes"] == 0)
 
+# ── The overshoot note speaks only for THIS pass's marks ──────────────────
+# A carried season mark was made by an earlier pass; sizing the note from the
+# whole share re-announced "marked 343.0 GB" every pass until the marks aged
+# out. First pass (marks made): the note speaks. Second pass (all carried):
+# silence — nothing new happened.
+A._space_threshold_state = lambda *a, **k: {"safety_blocked": False}
+BIG = [SEASONS[0] | {"size_bytes": 42 * GB}]
+A._tv_season_plan = lambda rows, cfg, now=None: {"order": list(BIG), "excluded": {}}
+A._merged_pool_takes = lambda order, cfg: (
+    {A._tv_mark_key(BIG[0]): BIG[0]},
+    {"target_bytes": 2 * GB, "tv_share_bytes": 42 * GB, "movie_share_bytes": 0})
+_state.clear(); _state.update({"marked": {}})
+rep1 = A._run_tv_cleanup_pass(dict(CFG), execute=False, run_started_at=1000.5)
+check("the pass that MADE the mark says so",
+      "marked 42.0 GB" in (rep1.get("overshoot_note") or ""), rep1.get("overshoot_note"))
+rep2 = A._run_tv_cleanup_pass(dict(CFG), execute=False, run_started_at=1001.5)
+check("a pass that only CARRIED it stays quiet",
+      not rep2.get("overshoot_note"), rep2.get("overshoot_note"))
+A._tv_season_plan = lambda rows, cfg, now=None: {"order": list(SEASONS), "excluded": {}}
+A._merged_pool_takes = lambda order, cfg: (
+    {}, {"target_bytes": 0, "tv_share_bytes": 0, "movie_share_bytes": 0})
+
 # ── 4. The report is matched to a RUN, not to a clock ─────────────────────
 check("the report is stamped with the run it belongs to",
       rep["run_started_at"] == 1000.5, rep.get("run_started_at"))

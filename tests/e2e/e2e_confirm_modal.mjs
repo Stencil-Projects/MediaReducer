@@ -196,9 +196,11 @@ await p.click('#pr-confirm-modal .modal-footer .btn-outline-secondary:not(#pr-co
 await gone(p);
 await p.waitForTimeout(400);
 check('canceling the save writes NOTHING', POSTS.length === 0);
+// "items", not "movies": marked_clocked_count covers marked seasons as well as
+// marked movies, and the delay reset re-dates both.
 check('the delay dialog says the existing marks keep their old delay',
   /already marked/.test(delayText.body) && /future marks only/.test(delayText.body)
-  && /\b25 movies\b/.test(delayText.body) && !/\b3 movies\b/.test(delayText.body));
+  && /\b25 items\b/.test(delayText.body) && !/\b3 items\b/.test(delayText.body));
 check('...and offers to re-date them instead',
   !!delayText.extra && /re-date/.test(delayText.extra));
 

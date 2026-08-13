@@ -193,11 +193,10 @@ CONNECTION_ONBOARDING_SEEN_KEY = "_CONNECTIONS_ONBOARDING_SEEN"
 CONNECTION_EVER_CONFIGURED_KEY = "_CONNECTIONS_EVER_CONFIGURED"
 WELCOME_GUIDE_SEEN_KEY = "_WELCOME_GUIDE_SEEN"
 # Records that the user DELIBERATELY chose Paused, so a later completed
-# Simulate leaves them there. Deliberately stored in the positive: absent
-# means "the scheduler is only resting", which is the right reading for a
-# fresh install, a config reset, and a hand-edited file alike. Storing the
-# resting state instead made every config that lacked the flag unwakeable —
-# a reset writes the shipped defaults, so setup + Simulate never left Paused.
+# Simulate leaves them there. Stored in the positive: absent means "the
+# scheduler is only resting", which is the right reading for a fresh install,
+# a config reset, and a hand-edited file alike. Stored the other way round, any
+# config lacking the flag would be unwakeable.
 RUN_MODE_USER_PAUSED_KEY = "_RUN_MODE_USER_PAUSED"
 RADARR_SECTION_CACHE_KEYS = (
     "_RADARR_DETECTED_SECTION_ID",
@@ -535,7 +534,7 @@ def _time_zone_options() -> list[str]:
 # reports name the build. Bump on release. SemVer pre-release: the number is the
 # release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
 # plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.19"
+APP_VERSION = "1.0.0-alpha.20"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -883,10 +882,9 @@ _config_memo_lock = threading.Lock()
 _config_memo = {"key": None, "cfg": None, "issues": []}
 
 
-# Keys the app used to derive and write into config.json, pruned on load so an
-# existing file heals itself. /jellyfin was dropped once ports stopped being read
-# from appdata: it could only ever have supplied Jellyfin's HTTP port, and
-# Jellyfin issues API keys from its own dashboard, storing none on disk.
+# Retired keys that older config files may still carry, pruned on load so an
+# existing file heals itself. There is no Jellyfin appdata mount: Jellyfin
+# issues API keys from its own dashboard and stores none on disk.
 _RETIRED_CONFIG_KEYS = ("JELLYFIN_APPDATA",)
 
 
@@ -937,9 +935,8 @@ def _build_config() -> tuple[dict, list]:
     cfg["TAUTULLI_APPDATA"] = TAUTULLI_APPDATA_DIR
     cfg["RADARR_APPDATA"] = RADARR_APPDATA_DIR
     cfg["SONARR_APPDATA"] = SONARR_APPDATA_DIR
-    # Derived keys that no longer exist. They were written into config.json by
-    # every save while they DID exist, so dropping them here is what stops a
-    # fossil showing up in `mr config show` as though it were a real setting.
+    # Drop retired keys, so one left in an existing file never shows up in
+    # `mr config show` as though it were a real setting.
     for gone in _RETIRED_CONFIG_KEYS:
         cfg.pop(gone, None)
     return cfg, issues
@@ -1988,8 +1985,8 @@ def _write_progress_start_stub(mode_override: str | None, *, manual: bool = Fals
 
     Returns the started_at it stamped, which IS the run's identity: the engine
     is handed the same value so both writers agree. The dashboard treats a
-    changed started_at as a whole new run and restarts its per-stage bar, so
-    two stamps for one run made the first stage fill, snap to empty, and fill
+    changed started_at as a whole new run and restarts its per-stage bar, so two
+    stamps for one run would make the first stage fill, snap to empty, and fill
     again."""
     try:
         now = time.time()
@@ -2356,7 +2353,7 @@ def _enrich_run_report(report: dict, tv_pass_report: dict | None = None) -> dict
         # marked_count can't answer this: a Simulate
         # reports the total it would delete now, not how
         # many of those marks are new, so comparing the two
-        # hid the list on every day the marks carried over.
+        # would hide the list whenever marks carried over.
         if len(new_items) < _MARKED_ITEMS_CAP:
             report.setdefault("existing_marked_items", [
                 {"title": v.get("title"), "delete_on": v.get("delete_on")}
@@ -2448,9 +2445,8 @@ def _dispatch_run_notifications(effective_mode: str | None, returncode: int, sto
                 # The engine's own terminal write, not the exit code: a run that
                 # stops on a bad connection or an invalid threshold RETURNS from
                 # run() rather than exiting nonzero, so gating the alert on the
-                # exit code alone stayed silent on the two failures a user is
-                # most likely to actually hit — while the dashboard showed the
-                # red x for them all along.
+                # exit code alone would stay silent on the two failures a user is
+                # most likely to hit — the two the dashboard draws a red x for.
                 _prog = {}
                 try:
                     _prog = json.loads(progress_path().read_text(encoding="utf-8"))
@@ -3182,8 +3178,8 @@ def _monitor_mode_lock_reason(cfg: dict) -> str:
 
     This is the ONE source for the radio's availability: the page render and
     the /api/status poll both serve it verbatim, so the client has nothing of
-    its own to recompute (recomputing is how the render and the poll drifted
-    apart)."""
+    its own to recompute — a second copy of the rule is how the two drift
+    apart."""
     reason = _scan_lock_reason(cfg)
     if not reason:
         return ""
@@ -3369,11 +3365,10 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
             redline_gb if (redline_ok and redline_gb) else None)
     if _maintained_gb is not None and limit_gb is None:
         # A floor to enforce and no filesystem size to judge it against, so the
-        # check cannot run. It used to be skipped, which meant an unreadable
-        # disk did not relax the limit — it removed it, and the button that
-        # deletes stayed live with nothing standing between it and any value at
-        # all. A safety rule that disappears when its input does is not a
-        # safety rule; hold Cleanup until the reading comes back.
+        # check cannot run. Skipping it would not relax the limit, it would
+        # remove it, leaving the button that deletes live with nothing between
+        # it and any value at all. A safety rule that disappears when its input
+        # does is not a safety rule; hold Cleanup until the reading comes back.
         safety_ok = False
         safety_message = ("Can't read the filesystem size, so the safety percentage "
                           "can't be checked — Cleanup is held until it can.")
@@ -3544,16 +3539,15 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
                     simulate_required = False
         except Exception as e:
             # FAIL CLOSED. This is the gate that stops Automatic Cleanup being
-            # armed before a Simulate has shown what it would remove, and it
-            # used to answer "no Simulate needed" whenever it could not tell —
-            # so a store that would not open, or any other failure inside these
-            # helpers, offered the one switch that deletes on a schedule with
-            # nothing behind it. Every other safety decision here fails the
-            # other way; this one now does too.
+            # armed before a Simulate has shown what it would remove. Answering
+            # "no Simulate needed" when it cannot tell would offer the one switch
+            # that deletes on a schedule with nothing behind it, so a store that
+            # will not open lands on "Simulate required" like every other safety
+            # decision here.
             #
-            # Loudly, as well as closed: swallowed silently, the only symptom
-            # was a radio button that should have been grey, on a page that
-            # gives no reason to look in a log.
+            # Loudly, as well as closed: swallowed silently, the only symptom is
+            # a radio button that should have been grey, on a page that gives no
+            # reason to look in a log.
             simulate_required = True
             simulate_undecidable = True
             print(f"WARNING: could not determine whether a Simulate is required "
@@ -5017,13 +5011,11 @@ def _tv_eligible_count(cfg: dict) -> int:
     dashboard's Marked & Eligible button adds to the movie count.
 
     Counted from the SAME place the window lists them: the library snapshot,
-    through the same plan. Reading a number the run stored instead looked
-    cheaper and was wrong — the two sources part company whenever the run has
-    planned seasons the snapshot does not carry yet, which is exactly what a
-    rebuild after a wiped store does (the season side plans first, the
-    inventory lands when the run finishes). The button then advertised
-    seasons the window could not show, and opening it corrected the count
-    only until the next poll put the stored number back.
+    through the same plan. A number the run stored is cheaper to read but parts
+    company with the window whenever the run has planned seasons the snapshot
+    does not carry yet — which is what a rebuild after a wiped store does (the
+    season side plans first, the inventory lands when the run finishes). The
+    button would then advertise seasons the window cannot show.
 
     The snapshot read is memoized, and the plan is arithmetic over rows
     already in memory, so this stays cheap enough for the status poll.
@@ -5096,19 +5088,18 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
     # thresholds are safe to delete against. Off (or blocked) means seasons are
     # INELIGIBLE, not invisible — the same shape as the movie side, which keeps
     # scanning and scoring under both and reports the reason nothing is
-    # eligible. Building it BEFORE either refusal is what gives the run a
-    # number to report: bailing first left the run log saying "Eligible: 2213"
-    # for a run whose own Marked & Eligible window listed 2213 movies AND 41
-    # seasons, because the counts the log reads come from this report and this
-    # report had returned empty.
+    # eligible. Building it BEFORE either refusal is what gives the run a number
+    # to report: the log's counts come from this report, so bailing out first
+    # would have the log claim only the movie total for a run whose own Marked &
+    # Eligible window lists seasons beside them.
     plan = _tv_season_plan(rows, cfg)
     report["excluded"] = dict(plan.get("excluded") or {})
     report["seasons_seen"] = sum(len(r.get("tv_seasons") or [])
                                  for r in rows if isinstance(r, dict))
     report["eligible_seasons"] = len(plan["order"])
-    # Bytes behind that count, so the engine can say what deleting the whole
-    # eligible pool would actually leave — its cap-unreachable warning was
-    # measuring the movie half and drawing a conclusion about the library.
+    # Bytes behind that count, so the engine's cap-unreachable warning can say
+    # what deleting the whole eligible pool would leave, rather than measuring
+    # the movie half and concluding about the whole library.
     report["eligible_season_bytes"] = sum(int(e.get("size_bytes") or 0)
                                           for e in plan["order"])
 
@@ -5160,6 +5151,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
     except (TypeError, ValueError):
         delay = 1
     now = time.time()
+    _new_marked_bytes = 0   # this pass's own marks — the overshoot note's subject
     for k, e in takes.items():
         if k not in marked:
             marked[k] = {"marked_at": now, "delay_days": delay,
@@ -5167,6 +5159,7 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
                          "year": e.get("year"), "path": e["path"],
                          "size_bytes": e["size_bytes"], "score": e["score"]}
             report["marked_new"] += 1
+            _new_marked_bytes += int(e.get("size_bytes") or 0)
 
     if execute:
         # Plan order (worst-kept first), never dict order.
@@ -5210,15 +5203,16 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
     # a season is the biggest deletion unit there is, so this is where a small
     # deficit most often costs far more than it asked for.
     #
-    # Worded by what this pass actually did. The share covers freed + marked +
-    # vanished seasons; a monitor pass frees nothing at all, and "the season
-    # side freed 60 GB" over delay-clocked marks was the same false claim the
-    # movie side's note made. Vanished seasons claim nothing.
+    # Worded by what this pass actually did, attributed to THIS pass only.
+    # The share covers freed + marked + vanished seasons; a monitor pass frees
+    # nothing, and "the season side freed 60 GB" over delay-clocked marks was
+    # the movie side's false claim replayed. Carried season marks were made by
+    # an earlier pass — sizing the note from them re-announced yesterday's
+    # marking every day until the marks aged out, so only marks made this pass
+    # (and this pass's real deletions) speak. Vanished seasons claim nothing.
     _freed = int(report.get("freed_bytes") or 0)
-    _over = shared.composed_overshoot_note(
-        _freed,
-        pool["tv_share_bytes"] - _freed - int(report.get("vanished_bytes") or 0),
-        pool["target_bytes"])
+    _over = shared.composed_overshoot_note(_freed, _new_marked_bytes,
+                                           pool["target_bytes"])
     if _over:
         report["overshoot_note"] = _over
         print(f"TV cleanup: NOTE — the season side {_over}", flush=True)
@@ -6936,9 +6930,9 @@ def api_debug_library_snapshot():
     favorite = sum(1 for m in movies if m.get("favorite"))
     unplayed = sum(1 for m in movies if not m.get("plays"))
     # Rows span both media types — say so instead of calling series movies.
-    _mv_rows = sum(1 for m in movies if (m.get("media_type") or "movie") == "movie")
+    _mv_rows, _tv_rows = shared.split_media_counts(movies)
     lines.append(f"library snapshot: built {_fmt_epoch(data.get('built_at'))} | "
-                 f"{_mv_rows} movies + {len(movies) - _mv_rows} TV series | "
+                 f"{_mv_rows} movies + {_tv_rows} TV series | "
                  f"rated={rated} | protected={protected} | favorite={favorite} | unplayed={unplayed}")
     lines.append("")
     # The snapshot is the ENTIRE library; cap the per-movie dump so the debug
@@ -6965,8 +6959,14 @@ def api_debug_cache():
     /api/debug/* popups (returns {ok, text} for prRunDebug)."""
     p = db_path()
     lines = ["Cache contents debug", ""]
+    # The store's own modified time names the download: the dump describes the
+    # cache AS OF that write, and a filename stamped with the click time claims
+    # a freshness the content may not have (a store written at 09:10 downloaded
+    # at 09:24 was two runs of questions apart).
+    stamp = ""
     try:
         st = p.stat()
+        stamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(st.st_mtime))
         lines.append(f"store: {p} | {st.st_size:,} bytes | modified {_fmt_epoch(st.st_mtime)}")
     except OSError:
         lines.append(f"store: {p} | not present (cleared on startup — run a Simulate to rebuild)")
@@ -7151,7 +7151,7 @@ def api_debug_cache():
         lines.append("")
         lines.append("other keys: " + ", ".join(other))
 
-    return jsonify({"ok": True, "text": "\n".join(lines)})
+    return jsonify({"ok": True, "text": "\n".join(lines), "stamp": stamp})
 
 
 # ── Sanitized diagnostic report ───────────────────────────────────────────────
@@ -7342,12 +7342,11 @@ def _build_debug_report() -> str:
         add("=" * 60)
 
     section("CONFIG")
-    # Effective connection URLs, for the five server fields: a blank field
-    # whose credential is set rides a default at connect time, and this report
-    # printed the raw "(blank)" — so the artifact built FOR diagnosis showed
-    # working servers as unconfigured (the same report's health section said
-    # plex_connected=True three lines under PLEX_URL = (blank)). Resolved the
-    # same way the connections resolve, labeled as the default it is.
+    # Effective connection URLs, for the five server fields: a blank field whose
+    # credential is set rides a default at connect time, so printing the raw
+    # "(blank)" would show a working server as unconfigured in the artifact built
+    # FOR diagnosis. Resolved the same way the connections resolve, labeled as
+    # the default it is.
     try:
         _eff_urls = _effective_connection_values(cfg)
     except Exception:
@@ -7585,8 +7584,8 @@ def _build_debug_report() -> str:
         # The snapshot's rows span both media types; "3017 movies" was 2,760
         # movies plus 257 TV series wearing the wrong label.
         pm = pool.get("movies") or []
-        _mv = sum(1 for m in pm if (m.get("media_type") or "movie") == "movie")
-        add(f"  library snapshot: {_mv} movies + {len(pm) - _mv} TV series | "
+        _mv, _tv_rows = shared.split_media_counts(pm)
+        add(f"  library snapshot: {_mv} movies + {_tv_rows} TV series | "
             f"built {_fmt_epoch(pool.get('built_at'))} | "
             f"rated={sum(1 for m in pm if m.get('rating') is not None)} | "
             f"protected={sum(1 for m in pm if m.get('protected'))} | favorite={sum(1 for m in pm if m.get('favorite'))}")
@@ -7814,11 +7813,11 @@ def _judge_media_paths(*, pre, use_plex, use_jellyfin, tautulli_connected,
             }
             _judged_any = True
 
-    # One judgement, run per connected server. The two used to be written out
-    # twice, identical apart from five places each names itself — which is a
-    # standing invitation to leave a Jellyfin user being told to press the
-    # Tautulli button. The names live in one table instead, and
-    # test_media_path_messages pins every slot of every message.
+    # One judgement, run per connected server. The messages are identical apart
+    # from the places each names itself, so the names live in one table: two
+    # copies drift, and that is how a Jellyfin user ends up being told to press
+    # the Tautulli button. test_media_path_messages pins every slot of every
+    # message.
     SERVERS = (
         # on,           connected,           label,             sample key,
         #   reports / debug button / stale-entry noun / the rescan that clears it
@@ -8372,13 +8371,13 @@ _HEALTH_REPROBE_AFTER_SECONDS = SCHEDULE_INTERVAL_MINUTES * 60
 def _health_for_config_save(cfg: dict) -> dict:
     """The connection health a save acts on, probed only when it could have moved.
 
-    A save used to probe every service every time, on the reasoning that
-    connections can fail without any field changing. True, but this is the wrong
-    place to catch it, and it is not what protects anything: a run re-probes and
-    REFUSES TO START on a failure (api_run), the scheduler tick re-probes before
-    any automatic cleanup, and the engine fails closed on any API error mid-run.
-    Saving a notification toggle or a scoring curve cannot make a media server
-    unreachable, so the probe was pure latency on the Save button — and the page
+    Probing every service on every save would catch a connection that failed
+    without any field changing, but a save is the wrong place to catch it and
+    not what protects anything: a run re-probes and REFUSES TO START on a
+    failure (api_run), the scheduler tick re-probes before any automatic
+    cleanup, and the engine fails closed on any API error mid-run. Saving a
+    notification toggle or a scoring curve cannot make a media server
+    unreachable, so that probe is pure latency on the Save button — and the page
     that renders the result already reuses this same cache without probing.
 
     Re-probe when the answer could genuinely differ:
@@ -9396,10 +9395,9 @@ def _tv_eligible_entries(cfg: dict, marked_keys) -> list[dict]:
     trigger — a Headroom target or a Library Size Cap — to be deletable at
     all, because Redline is a movie-only emergency. In redline-only mode
     nothing here could ever be deleted, so listing it under "Marked & Eligible
-    Deletions" promises a deletion that cannot happen. The count helper held
-    this gate and this list did not, which is exactly how the button read
-    2,213 while opening it showed 2,254 — the seasons only the window
-    believed in."""
+    Deletions" promises a deletion that cannot happen. The count helper applies
+    the same gate: if only one of the two did, the button's total and the list
+    it opens would disagree."""
     if not _tv_cleanup_armed(cfg):
         return []
     try:
@@ -9925,8 +9923,8 @@ def api_verify_connections():
 
     Reported per service as {mounted, keys}, derived from the SAME detection Auto
     Detect runs, so a card can never claim a key the button wouldn't actually
-    fill. It used to report only whether a marker FILE existed, which said
-    "verified" for a mount whose config held no key at all.
+    fill. Reporting on the presence of a marker FILE instead would say
+    "verified" for a mount whose config holds no key at all.
 
     Deliberately NOT gated on the Plex/Jellyfin checkboxes: reading a file off
     disk doesn't depend on which server is selected, and a setup that hasn't
@@ -10090,16 +10088,10 @@ def api_debug_notify_preview():
         # correctly rebuilds movie-only rather than borrowing seasons from
         # some other run.
         _tv_lp = (_tv_cleanup_state() or {}).get("last_pass")
-        _tv_for_preview = None
-        try:
-            if (isinstance(_tv_lp, dict)
-                    and _tv_lp.get("run_started_at") is not None
-                    and report.get("run_started_at") is not None
-                    and abs(float(_tv_lp["run_started_at"])
-                            - float(report["run_started_at"])) < 0.001):
-                _tv_for_preview = _tv_lp
-        except (TypeError, ValueError):
-            _tv_for_preview = None
+        _tv_for_preview = (_tv_lp if isinstance(_tv_lp, dict)
+                           and shared.same_run(_tv_lp.get("run_started_at"),
+                                               report.get("run_started_at"))
+                           else None)
         _enrich_run_report(report, _tv_for_preview)
         holds = list(holds_all)
         if not notify.flag(cfg, "NOTIFY_ON_RUN_SUMMARY"):
@@ -11610,9 +11602,8 @@ def api_run_progress():
 # "====== <TITLE> ======" banner from the engine's log_stage(); the content markers
 # are fallbacks in case a banner is ever missing from a partial log.
 _LOG_SECTION_RES = {
-    # SCAN was renamed SCORING when the log stages were aligned with the
-    # dashboard's steps; both match so links still work in ARCHIVED logs, which
-    # were written before the rename and are never rewritten.
+    # Both spellings match: the stage is SCORING, but archived logs are never
+    # rewritten and older ones carry the earlier SCAN banner.
     "scan":      re.compile(r"={3,} (SCORING|SCAN) ={3,}|Processing [\d,]+ unique movie entries\."),
     "library":   re.compile(r"={3,} READING LIBRARY ={3,}|Resolving file paths for"),
     # "Marked-queue re-verify" is the Debug Cleanup / fast-path analog of the full
@@ -11775,6 +11766,27 @@ def _extract_log_section(lines: list, kind: str):
 _SECTION_ORDER = {"scan": 0, "eligible": 1, "deletions": 2, "summary": 3}
 
 
+def _log_content_stamp(p: Path) -> str:
+    """Filename stamp for a downloaded log: the log's own FIRST timestamp —
+    when the run it records started — as YYYY-MM-DD_HH-MM-SS, or "" when no
+    timestamped line is found. A download named for the click ("…_085924")
+    over a run from 07:48 makes two people cite two different files for one
+    run; the content's time is the file's identity. Read from the RAW file
+    (canonical 24h timestamps), before any display formatting."""
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for _ in range(50):
+                line = f.readline()
+                if not line:
+                    break
+                m = _LOG_TS_RE.match(line)
+                if m:
+                    return m.group("ts").replace(" ", "_").replace(":", "-")
+    except Exception:
+        pass
+    return ""
+
+
 @app.route("/api/logs/last")
 def api_logs_last():
     p = log_path()
@@ -11794,6 +11806,8 @@ def api_logs_last():
     resp = jsonify({
         "content": _format_log_text_for_display("".join(tail)),
         "sections": _log_sections_found(p),
+        # The run's own start time, for the download's filename.
+        "stamp": _log_content_stamp(p),
     })
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
@@ -12358,9 +12372,9 @@ if __name__ == "__main__":
     # Initialize config on first boot
     if not CONFIG_PATH.exists():
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # Through the atomic writer, not a bare copy: a kill mid-copy left a
-        # truncated config.json that EXISTS, so the seed never re-ran and
-        # every later boot sat in the invalid-JSON lockout.
+        # Through the atomic writer, not a bare copy: a kill mid-copy would
+        # leave a truncated config.json that EXISTS, so the seed would never
+        # re-run and every later boot would sit in the invalid-JSON lockout.
         _atomic_write_json(CONFIG_PATH, json.loads(Path(DEFAULT_CFG_PATH).read_text(
             encoding="utf-8")), indent=2)
         print(f"Created default config at {CONFIG_PATH}")

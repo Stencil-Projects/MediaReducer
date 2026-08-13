@@ -266,7 +266,7 @@ _MAX_HELD_PER_DESTINATION = 20
 # A held message carries no note explaining why it is late. The delay is a
 # MediaReducer implementation detail, and the alert's own content is what the
 # reader needs — a line about an internal rate limit is noise in a phone
-# notification, and it made a merged message read as an apology.
+# notification.
 
 _rate_lock = threading.RLock()
 _last_sent = {}     # destination key -> wall-clock seconds of the last delivery
@@ -526,10 +526,9 @@ def _deliver(urls, title, body, *, hold=True):
     if not ready:
         if hold:
             # ok=True: the alert was ACCEPTED and will be delivered when the
-            # window opens. Reporting a hold as a failure made the app's
-            # dispatcher leave the marked baseline alone "so the next tick can
-            # announce the marks", and then the flushed summary announced them
-            # too, so every held daily summary produced a duplicate alert.
+            # window opens. Reported as a failure, the app's dispatcher would
+            # leave the marked baseline alone for the next tick to announce,
+            # and the flushed summary would announce the same marks again.
             return True, (f"held for the rate limit — {len(waiting)} destination(s) "
                           "are inside their window; it will be sent when they open")
         return False, cooldown_message(wait_for)
@@ -634,7 +633,7 @@ def _mode_note(cfg, *, dates=True, deleted_now=False) -> str:
     report whose run actually removed files, so the note doesn't contradict the
     removals listed right above it."""
     if _armed(cfg):
-        return ("Automatic Cleanup is on — marked movies are deleted at the "
+        return ("Automatic Cleanup is on — marked items are deleted at the "
                 "daily run once their date arrives." if dates else
                 "Automatic Cleanup is on — the scheduler deletes on its own.")
     if str(cfg.get("RUN_MODE") or "") == "off":
@@ -647,7 +646,7 @@ def _mode_note(cfg, *, dates=True, deleted_now=False) -> str:
     else:
         note = "Monitor Only — nothing is deleted automatically."
     if dates:
-        note += (" Each date is when that movie becomes eligible, once "
+        note += (" Each date is when that item becomes eligible, once "
                  "Automatic Cleanup is turned on.")
     return note
 
@@ -694,12 +693,11 @@ def _movie_name_blocks(report, debug, budget=_MOVIE_LIST_CHARS, *, armed=True):
 
     # This run's new marks: soonest-first, the date said once in the header.
     # The overflow tail counts marked_new_count, NOT marked_count: the count
-    # field spans the whole marked set, carried marks included, while this
-    # list deliberately holds only the run's additions — a tail computed from
-    # the set total told a quiet day "Newly marked: …and 50 more" with zero
-    # names, asserting 50 additions that never happened. An old report without
-    # the field falls back to the list itself (its tail then only fires past
-    # the 200-item cap it can no longer size, which lasts one run at most).
+    # field spans the whole marked set, carried marks included, while this list
+    # holds only the run's additions, so the set total would tell a quiet day
+    # "Newly marked: …and 50 more" with zero names. A report without the field
+    # falls back to the list itself (its tail then only fires past the 200-item
+    # cap it can no longer size, which lasts one run at most).
     marked_items = _by_soonest(report.get("marked_items"))
     m_lines, used = _bounded_lines(marked_items, lambda it: f"• {it.get('title', '?')}",
                                    max(200, budget), total=report.get("marked_new_count"))
@@ -790,8 +788,8 @@ def build_run_message(cfg, report):
     message_used = False
 
     # Plan block: what the library's deletion plan looks like after this run.
-    # One fact per line. It used to be a single sentence with the facts joined
-    # by "·", which is unreadable on a phone the moment there are more than two.
+    # One fact per line — joined into a single sentence they are unreadable on a
+    # phone the moment there are more than two.
     if eligible is not None:
         rows = [("Eligible in deletion order", f"{int(eligible):,}")]
         if report.get("redline_only"):
@@ -905,8 +903,8 @@ def build_marked_change_message(cfg, *, new_items, marked_total, redated=False):
     when that alert is toggled off or nothing is new.
 
     `redated` items are EXISTING marks whose delete dates moved (a delay
-    setting change) — zero movies were newly marked, and saying "marked N
-    more" about them asserted additions that never happened."""
+    setting change) — no movie was newly marked, so "marked N more" would
+    assert additions that never happened."""
     if not _bool(cfg, "NOTIFY_ON_MARKED_CHANGES") or not new_items:
         return None
     armed = _armed(cfg)
@@ -969,11 +967,11 @@ def build_error_message(cfg, *, message="", stage="", issues=None, names=()):
     line = str(message or "").strip().splitlines()
     line = line[0].strip() if line else ""
     # A few abort sentences name a film — the sample path in a mount mismatch,
-    # the protected collections that went missing. The dashboard wants them;
-    # a webhook with Movie names off must not have them. The engine reports
+    # the protected collections that went missing. The dashboard wants them; a
+    # webhook with Movie names off must not have them. The engine reports
     # exactly what it interpolated rather than leaving this to a regex, which
-    # ate the /library mount out of the same sentence and split a collection
-    # name on the apostrophe in "Dad's stuff".
+    # would eat the /library mount out of the same sentence and split a
+    # collection name on the apostrophe in "Dad's stuff".
     if not show_movies:
         for n in names or ():
             n = str(n)

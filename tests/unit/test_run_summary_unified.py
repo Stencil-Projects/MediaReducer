@@ -65,11 +65,16 @@ def _store_season_report(rep):
         db.set_meta(conn, "tv_cleanup", {"last_pass": rep} if rep else {})
 
 
+EMITTED = []
+
+
 def _summary(stats=None):
     lines = []
+    EMITTED.clear()
     _log_raw, _log = E.log_raw, E.log
     E.log_raw = lambda m="": lines.append(str(m))
     E.log = lambda m="", **k: lines.append(str(m))
+    E.emit_progress = lambda **k: EMITTED.append(k)
     try:
         E.log_run_summary(
             is_sim=True, trigger="scheduled daily", to_free_gb=0.0,
@@ -95,6 +100,11 @@ check("the eligible line totals both types",
       "Eligible: 2571 movie(s) + 189 season(s) = 2760" in text, text)
 check("...and the standing queue count matches the merged window",
       "Eligible queue: 2760" in text, text)
+# The dashboard tile reads progress.json, whose scan frames counted movies
+# (all the scan sees) — with seasons in the plan the tile said 2,571 against
+# this very line's 2,760. The summary restates the merged total to progress.
+check("...and the panel's Eligible tile is told the same merged total",
+      any(e.get("eligible") == 2760 for e in EMITTED), EMITTED)
 check("what the run did to seasons is reported too",
       "Seasons marked: 4 new" in text and "Seasons waiting: 2" in text
       and "1 season(s)" in text, text)
@@ -115,6 +125,8 @@ check("TV cleanup off is stated, not silent",
       "Cleanup off: 189 season(s) (TV cleanup is turned off" in off, off)
 check("...and the eligible line then counts movies only",
       "Eligible: 2571" in off and "season(s) = " not in off, off)
+check("...with no merged restatement — the scan frames were already right",
+      not any("eligible" in e for e in EMITTED), EMITTED)
 movies_off = _summary(dict(STATS, eligible=0, movie_cleanup_off=2571))
 check("the movie switch reads the same way",
       "Cleanup off: 2571 (movie cleanup is turned off" in movies_off, movies_off)

@@ -109,23 +109,45 @@ E._daily_deficit_bytes = lambda u, m, l: 123
 E.get_usage_info = lambda: {"used_gb": 100.0, "free": 900 * GB, "total": 1000 * GB}
 
 
-def summary(cap, fresh):
+def summary(cap, fresh, max_gb=1000.0):
     calls.clear()
     E.MAX_LIBRARY_GB = cap
     E.REDLINE_GB = None
     E.HEADROOM_GB = 0
     E.DELETE_DELAY_DAYS = 7
-    E._report_debug_info(used_gb=100.0, max_gb=1000.0, free_gb=900.0,
+    E._report_debug_info(used_gb=100.0, max_gb=max_gb, free_gb=900.0,
                          library_gb=500.0, over_limit=False, redline_hit=False,
                          _cap_active=True, _threshold_errors=[], _total_gb=1000.0,
                          library_measure_fresh=fresh)
     return list(calls)
 
 
-check("cap armed + reused measure: marks are left alone", summary(400, False) == [])
+# The skip is scoped to when the stale number DECIDES the deficit: the
+# headroom term rides a fresh statvfs every tick, so a stale library measure
+# only matters when the cap term would dominate the max(). Gating on "cap
+# configured" froze headroom-driven maintenance for six hours the moment a
+# cap was merely set, idle under its limit.
+check("stale measure + cap DOMINATING the deficit: marks are left alone",
+      summary(400, False) == [])                       # cap over by 100, headroom 0
 check("cap armed + fresh measure: marks re-verify", summary(400, True) == [123])
 check("cap off: disk usage is fresh every tick, so marks re-verify regardless",
       summary(None, False) == [123])
+check("stale measure but an IDLE cap: the fresh headroom breach still re-verifies",
+      summary(10000, False, max_gb=50.0) == [123])     # cap deficit 0, headroom 50 over
+check("stale measure, idle cap, nothing breached: re-verify runs (deficit is fresh)",
+      summary(10000, False) == [123])
+
+# ── The pairing rule and the media split live once, in shared ──────────────
+check("same_run pairs within representation drift",
+      shared.same_run(1000.5, float(repr(1000.5))) and shared.same_run("1000.5", 1000.5))
+check("...and refuses a different run, a missing stamp, and junk",
+      not shared.same_run(1000.5, 999.25) and not shared.same_run(None, 1000.5)
+      and not shared.same_run("x", 1000.5))
+check("split_media_counts defaults a typeless row to movie",
+      shared.split_media_counts([{"media_type": "movie"}, {}, {"media_type": "tv"}])
+      == (2, 1))
+check("...and reads empty input as zero of each",
+      shared.split_media_counts(None) == (0, 0))
 
 # ── 4. The preview pairs the season report by run identity ─────────────────
 import app as A  # noqa: E402
