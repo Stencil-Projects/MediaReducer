@@ -101,6 +101,20 @@ check("Registry and Repository name the same image",
 check("the image is tagged, not left floating on latest-by-default",
       ":" in repo_img.rsplit("/", 1)[-1], repo_img)
 
+# publish.yml builds the image name from $GITHUB_REPOSITORY, lowercased, so the
+# owner in this template has to be the owner that publishes — and neither half
+# is visible from the other. Getting it wrong breaks nothing at publish time and
+# nothing at install time either: the workflow pushes happily to the new path
+# while every listing keeps pulling the old one, which simply stops receiving
+# updates. That silence is why this is pinned to the publishing repo's own name
+# rather than to a literal.
+PUBLIC_OWNER, PUBLIC_NAME = PUBLIC[len("https://github.com/"):].split("/")
+expected_image = f"ghcr.io/{PUBLIC_OWNER.lower()}/{PUBLIC_NAME.lower()}"
+check("the image lives under the publishing repo's own owner",
+      repo_img.split(":")[0] == expected_image, (repo_img, expected_image))
+check("...and the Registry link agrees",
+      text("Registry").rstrip("/") == f"https://{expected_image}", text("Registry"))
+
 # ── The port the WebUI button opens ──────────────────────────────────────────
 # Three places have to agree, and only one of them is visible when it is wrong:
 # the button just fails to open anything.

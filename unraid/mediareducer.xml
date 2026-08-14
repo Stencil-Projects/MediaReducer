@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>MediaReducer</Name>
-  <Repository>ghcr.io/stencil923/mediareducer:alpha</Repository>
-  <Registry>https://ghcr.io/stencil923/mediareducer</Registry>
+  <Repository>ghcr.io/stencil-projects/mediareducer:alpha</Repository>
+  <Registry>https://ghcr.io/stencil-projects/mediareducer</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
