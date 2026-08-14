@@ -218,6 +218,7 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_page_notes   node tests/e2e/e2e_page_notes.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_startup_mode_option node tests/e2e/e2e_startup_mode_option.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_explorer_type_filter node tests/e2e/e2e_explorer_type_filter.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_eligible_first node tests/e2e/e2e_eligible_first.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_filter_score_sections node tests/e2e/e2e_filter_score_sections.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_reduced_effects node tests/e2e/e2e_reduced_effects.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_nothing_eligible node tests/e2e/e2e_nothing_eligible.mjs

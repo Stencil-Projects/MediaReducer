@@ -50,7 +50,7 @@ check("...and falls back to a hosted runner for the public repo",
 # Named in full. A partial match ("MediaReducer") would also be true of the
 # public repo, and would send its jobs to a runner that does not exist.
 check("...keyed to the private repo by its full name",
-      "Stencil923/MediaReducer-Dev" in str(runs_on), runs_on)
+      "Stencil-Projects/MediaReducer-Dev" in str(runs_on), runs_on)
 
 # The static check above only proves what the file asks for. Something has to
 # check what the runner actually was, or a mis-edited expression quietly bills
@@ -124,12 +124,11 @@ compose = ROOT / "tools" / "ci-runner" / "docker-compose.yml"
 if compose.exists():
     svc = yaml.safe_load(compose.read_text())["services"]["ci-runner"]
     env = " ".join(svc.get("environment") or [])
-    # The reason this is a private-repo-only arrangement: a self-hosted runner
-    # on a public repo executes whatever a fork's pull request contains.
-    repo_url = next((v.split("=", 1)[1] for v in (svc.get("environment") or [])
-                     if v.startswith("REPO_URL=")), "")
-    check("the runner is pointed at the private repo",
-          repo_url.rstrip("/").endswith("/MediaReducer-Dev"), repo_url)
+    # Org scope serves every Stencil-Projects repo; the fork-PR safety line
+    # holds because GitHub withholds org runners from public repositories
+    # unless a runner group is explicitly opened to them.
+    check("the runner is org-scoped, to the org",
+          "RUNNER_SCOPE=org" in env and "ORG_NAME=Stencil-Projects" in env, env)
     check("...and labelled to match runs-on",
           "self-hosted" in env, env)
     check("the runner cannot reach the docker socket",

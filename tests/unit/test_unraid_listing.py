@@ -65,13 +65,13 @@ DEV = re.compile(r"mediareducer-dev", re.I)
 check("no link points at the private dev repo", not DEV.search(raw),
       next((ln for ln in raw.splitlines() if DEV.search(ln)), None))
 
-PUBLIC = "https://github.com/Stencil923/MediaReducer"
+PUBLIC = "https://github.com/Stencil-Projects/MediaReducer"
 check("Project points at the published repo", text("Project") == PUBLIC, text("Project"))
 check("Support points somewhere in the published repo",
       text("Support").startswith(PUBLIC), text("Support"))
 
 # ── Fetched-by-URL files have to exist where the URL says ────────────────────
-RAW = "https://raw.githubusercontent.com/Stencil923/MediaReducer/main/"
+RAW = "https://raw.githubusercontent.com/Stencil-Projects/MediaReducer/main/"
 
 
 def published_file(url):

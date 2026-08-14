@@ -7,8 +7,8 @@
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/Stencil923/MediaReducer/issues</Support>
-  <Project>https://github.com/Stencil923/MediaReducer</Project>
+  <Support>https://github.com/Stencil-Projects/MediaReducer/issues</Support>
+  <Project>https://github.com/Stencil-Projects/MediaReducer</Project>
   <Overview>
     Deletes the movies and TV seasons you are least likely to miss when storage
     runs low. Reads Plex/Tautulli, Jellyfin or both, scores every movie and
@@ -26,8 +26,8 @@
   </Overview>
   <Category>MediaApp:Video Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:7474]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/Stencil923/MediaReducer/main/unraid/mediareducer.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/Stencil923/MediaReducer/main/static/apple-touch-icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/Stencil-Projects/MediaReducer/main/unraid/mediareducer.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/Stencil-Projects/MediaReducer/main/static/apple-touch-icon.png</Icon>
   <!-- stop-timeout 30: on stop the engine needs about 8s to finish the file it
        is deleting and record it, and Unraid's default 10s can cut that short.
 

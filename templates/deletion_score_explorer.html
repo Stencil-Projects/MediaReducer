@@ -200,6 +200,10 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
 .prunestat.active{color:var(--text-warning)}
 .snapshot-imdb-note{margin:0 0 8px;padding:9px 12px;border:1px solid var(--border);border-left:3px solid var(--text-warning);border-radius:6px;background:var(--bg-warning,color-mix(in srgb,var(--text-warning) 12%,transparent));color:var(--text-secondary);font-size: var(--fs-sm);line-height:1.4}
 .stackctl{font-size: var(--fs-sm);color:var(--text-secondary);display:flex;align-items:center;gap:5px;white-space:nowrap}
+/* Sorted by #, the grouping has nothing to do (see syncStackEligibleState).
+   The input's disabled state greys the box; this greys the word with it, so
+   the control reads as unavailable rather than unresponsive. */
+.stackctl.is-moot{color:var(--text-muted);cursor:not-allowed}
 /* "Eligible first" checkbox and the Debug button share the left of the sub-row.
    The Debug button keeps the app's standard btn-sm size (32px tall, auto width —
    like the Revert/Save buttons) everywhere; the mobile .ttop .btn{width:100%;

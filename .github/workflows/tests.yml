@@ -36,7 +36,7 @@ jobs:
     # repo. Hardcoded, every public run — and every outside contributor's pull
     # request — would queue for 24 hours waiting for a runner that repo does
     # not have, and then expire. The fallback is the load-bearing half.
-    runs-on: ${{ github.repository == 'Stencil923/MediaReducer-Dev' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'Stencil-Projects/MediaReducer-Dev' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
       # First, before anything is checked out or installed. runs-on is an
@@ -52,7 +52,7 @@ jobs:
         run: |
           echo "Ran on \`${{ runner.name }}\` — ${{ runner.environment }}, ${{ runner.os }}/${{ runner.arch }}" \
             >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ github.repository }}" = "Stencil923/MediaReducer-Dev" ] \
+          if [ "${{ github.repository }}" = "Stencil-Projects/MediaReducer-Dev" ] \
              && [ "${{ runner.environment }}" != "self-hosted" ]; then
             echo "This repo is meant to run on the self-hosted runner, and this job took a billed one."
             exit 1

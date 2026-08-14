@@ -667,6 +667,30 @@ function stackEligibleOn(){
   const el=document.getElementById('stack-eligible');
   return !!(el&&el.checked);
 }
+// Sorting by # ascending already lists eligible titles first, and not because
+// of this checkbox: only eligible rows get a deletion rank, and columnCompare
+// puts ranked rows ahead of unranked ones. Filtered rows have no place in a
+// deletion order at all — their # cell is an em dash — so there is nothing for
+// the grouping to change, and the box absorbs clicks that do nothing.
+//
+// Interleaving them by score instead is not the fix: rank order and score
+// order disagree wherever the target-aware tie pick reorders a group, so a
+// comparator that used rank for two eligible rows and score for a mixed pair
+// would be non-transitive, and the sort would scramble.
+function stackEligibleMoot(){return sc==='order'&&sd===1;}
+function syncStackEligibleState(){
+  const el=document.getElementById('stack-eligible');
+  if(!el)return;
+  const moot=stackEligibleMoot();
+  el.disabled=moot;
+  const lab=el.closest('.stackctl');
+  if(lab){
+    lab.classList.toggle('is-moot',moot);
+    lab.title=moot
+      ?'Sorting by # already lists eligible titles first — filtered rows have no deletion order. Sort by another column to group them.'
+      :'Keep eligible/prunable rows grouped above filtered rows while still sorting within each group';
+  }
+}
 function eligibleGroupCompare(a,b){
   if(!stackEligibleOn())return 0;
   const ea=a.status==='ok',eb=b.status==='ok';
@@ -708,6 +732,7 @@ function columnCompare(a,b,col,plan,rank){
 }
 function renderT(){
   const cfg=gcfg();
+  syncStackEligibleState();
   if(!poolState.loaded){
     const msg=htmlEsc(poolState.message||'Loading library…');
     // The table is wider than the phone screen, so a plain centered cell would

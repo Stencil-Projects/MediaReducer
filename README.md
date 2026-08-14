@@ -73,7 +73,7 @@ whole check against the current disk.
 ## Install
 
 ```bash
-git clone https://github.com/Stencil923/MediaReducer.git /mnt/user/appdata/mediareducer
+git clone https://github.com/Stencil-Projects/MediaReducer.git /mnt/user/appdata/mediareducer
 cd /mnt/user/appdata/mediareducer
 cp .env.example .env
 ```

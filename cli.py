@@ -383,9 +383,15 @@ def cmd_collections(args, base):
         print(d)
         return 1
     _, cfg = api("GET", "/api/config", base)
+    if not isinstance(cfg, dict):
+        # Every box would draw empty, which reads as "nothing is protected"
+        # rather than "the protected lists could not be read".
+        print("warning: could not read the protected-collection lists; "
+              "the boxes below are not authoritative.", file=sys.stderr)
+        cfg = {}
     protected = {
-        "plex": set((cfg or {}).get("PROTECTED_COLLECTIONS") or []),
-        "jellyfin": set((cfg or {}).get("JELLYFIN_PROTECTED_COLLECTIONS") or []),
+        "plex": set(cfg.get("PROTECTED_COLLECTIONS") or []),
+        "jellyfin": set(cfg.get("JELLYFIN_PROTECTED_COLLECTIONS") or []),
     }
     shown = False
     for server in ("plex", "jellyfin"):
@@ -408,7 +414,10 @@ def cmd_queue(args, base):
     code, d = api("GET", "/api/logs/deleted", base, body=None)
     if out(d, args.json):
         return 0
-    marked = (d or {}).get("marked") or []
+    if not isinstance(d, dict):
+        print(d)
+        return 1
+    marked = d.get("marked") or []
     if not marked:
         print("The marked & eligible queue is empty. Run a Simulate to build it.")
         return 0
@@ -450,7 +459,10 @@ def cmd_library(args, base):
     code, d = api("GET", "/api/library-snapshot", base)
     if out(d, args.json):
         return 0
-    rows = (d or {}).get("movies") or (d or {}).get("rows") or []
+    if not isinstance(d, dict):
+        print(d)
+        return 1
+    rows = d.get("movies") or d.get("rows") or []
     if not rows:
         print("The library table is empty. Run a Simulate first.")
         return 0
