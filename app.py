@@ -3692,6 +3692,23 @@ def _effective_connection_values(cfg: dict | None = None) -> dict:
 def _autodetected_connection_values(cfg: dict | None = None) -> dict:
     """Best-effort one-shot appdata detection for the Config Auto Detect button."""
     import xml.etree.ElementTree as ET
+
+    # A Servarr config.xml has no DOCTYPE, so refuse one rather than hand it to
+    # ElementTree. External entities have been off since 3.7 (a file:// entity
+    # raises "undefined entity"), but INTERNAL entity expansion is still on and
+    # nothing bounds it: six nested definitions turn a 1 KB appdata file into
+    # gigabytes of str -- a "billion laughs", and an OOM of the web process the
+    # moment someone clicks Auto Detect. Nulls are stripped before the check so
+    # a UTF-16 declaration cannot hide the keyword from a byte search, and only
+    # the prolog is read because that is the only place a DTD may appear.
+    # Rejecting the whole file is fail-closed and costs nothing real: the
+    # caller treats it like an absent file and simply detects nothing.
+    def _servarr_root(path):
+        with open(path, "rb") as fh:
+            if b"DOCTYPE" in fh.read(65536).replace(b"\x00", b""):
+                raise ValueError(f"{path}: XML declares a DTD")
+        return ET.parse(path).getroot()
+
     detected = {
         "tautulli_url": "",
         "tautulli_key": "",
@@ -3736,7 +3753,7 @@ def _autodetected_connection_values(cfg: dict | None = None) -> dict:
     radarr_xml = _find_appdata_file(RADARR_APPDATA_DIR, "config.xml")
     if radarr_xml:
         try:
-            key = ET.parse(radarr_xml).getroot().findtext("ApiKey")
+            key = _servarr_root(radarr_xml).findtext("ApiKey")
             if key:
                 detected["radarr_key"] = key
                 if detected.get("host"):
@@ -3749,7 +3766,7 @@ def _autodetected_connection_values(cfg: dict | None = None) -> dict:
     sonarr_xml = _find_appdata_file(SONARR_APPDATA_DIR, "config.xml")
     if sonarr_xml:
         try:
-            key = ET.parse(sonarr_xml).getroot().findtext("ApiKey")
+            key = _servarr_root(sonarr_xml).findtext("ApiKey")
             if key:
                 detected["sonarr_key"] = key
                 if detected.get("host"):
@@ -7262,7 +7279,11 @@ class _ReportSanitizer:
         raw = str(value or "").strip()
         if not raw:
             return "(blank)"
-        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+        # Correlation only: the same secret reads as the same <t:...> across a
+        # report without the secret being in it. Nothing verifies these, so the
+        # algorithm is not load-bearing -- sha256 purely so a scanner does not
+        # keep flagging a sha1 that was never doing security work.
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
         return f"<{prefix}:{digest}>"
 
     def url(self, value) -> str:

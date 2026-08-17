@@ -47,7 +47,7 @@ log path named in the failure line is actually there to read.
 | `test_library_mount_state` | A missing or empty `/library` says so, instead of blaming Plex path alignment for a mount that is not there. Both states still block |
 | `test_media_path_check` | The configuration check's media-path layer: the app-side fingerprint resolver mirroring the engine's, sampled sizes verified against the disk, a stale size or two passing, a MAJORITY of size mismatches or unmatched samples failing the check as the wrong library (a lone stale size or ghost entry warning instead), folder-shaped samples excluded from the check, and the explained variant's reasons (what the debug buttons print) |
 | `test_basic_hardening` | The baseline, checked rather than assumed: config.json (a Plex token, three API keys, any webhook URLs) is written owner-only rather than at the default world-readable umask; every response refuses framing and sniffing; the mutating-request header gate is matched on its own words, since an empty body 400s either way and a status check alone would pass with the gate gone; both path-taking routes stay inside their root; no shell, no Werkzeug debugger |
-| `test_appdata_mounts` | What the `/tautulli` and `/radarr` mounts contribute. Ports are never read from appdata; a mounted config with no key in it is not "verified" |
+| `test_appdata_mounts` | What the `/tautulli` and `/radarr` mounts contribute. Ports are never read from appdata; a mounted config with no key in it is not "verified"; a `config.xml` carrying a DTD is refused rather than expanded, in UTF-8 or UTF-16 |
 
 **Deletion safety**
 

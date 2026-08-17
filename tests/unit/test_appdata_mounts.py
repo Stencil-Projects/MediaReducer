@@ -209,5 +209,43 @@ _warn = " ".join(health.get("warnings") or [])
 check("...nor warns about Auto Detect once the key is entered by hand",
       "auto detect" not in _warn.lower())
 
+# ── A poisoned appdata config.xml cannot expand into an OOM ─────────────────
+# Detection parses XML off a mount, and ElementTree does not bound INTERNAL
+# entity expansion: a few nested definitions turn a 1 KB file into gigabytes of
+# str inside the web process the moment someone clicks Auto Detect. External
+# entities have been off since 3.7, so a DTD has no legitimate use in a Servarr
+# config at all — refusing one outright is the guard, and it must fail closed
+# (no key, nothing raised) exactly like an unreadable file.
+# Four levels here, not the six an attacker would use: enough that a regression
+# shows up as a non-empty key, small enough that it cannot wedge the test box.
+_LAUGHS = """<?xml version="1.0"?>
+<!DOCTYPE Config [
+ <!ENTITY a "aaaaaaaaaa">
+ <!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+ <!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+ <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+]>
+<Config><ApiKey>&d;</ApiKey></Config>
+"""
+A.RADARR_APPDATA_DIR = _appdata("rad_laughs", {"config.xml": _LAUGHS})
+check("an entity-expanding Radarr config.xml yields no key instead of expanding",
+      A._autodetected_connection_values()["radarr_key"] == "")
+
+# The DOCTYPE is found by a byte search, so a UTF-16 file must not be able to
+# hide the keyword behind the nulls that encoding interleaves through it.
+_u16 = Path(_TMP, "rad_laughs16")
+_u16.mkdir(parents=True, exist_ok=True)
+(_u16 / "config.xml").write_bytes(_LAUGHS.encode("utf-16"))
+A.RADARR_APPDATA_DIR = str(_u16)
+check("...and the same file in UTF-16 cannot hide the DTD behind null bytes",
+      A._autodetected_connection_values()["radarr_key"] == "")
+
+# Fail-closed must mean closed to DTDs, not closed to Servarr: the guard is
+# worthless if it also stops the ordinary config it exists to protect.
+A.RADARR_APPDATA_DIR = _appdata(
+    "rad_ok", {"config.xml": "<Config><ApiKey>RADKEY</ApiKey></Config>"})
+check("...while an ordinary Servarr config.xml is still read normally",
+      A._autodetected_connection_values()["radarr_key"] == "RADKEY")
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-bs-theme="dark"{{ ' data-effects="off"'|safe if reduce_effects else '' }}{{ ' data-glass="off"'|safe if no_glass else '' }}>
+<html lang="en" data-bs-theme="dark"{% if reduce_effects %} data-effects="off"{% endif %}{% if no_glass %} data-glass="off"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
