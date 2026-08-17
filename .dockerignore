@@ -18,4 +18,5 @@ tools/
 .claude/
 README.md
 ARCHITECTURE.md
+CLAUDE.md
 docker-compose.yml

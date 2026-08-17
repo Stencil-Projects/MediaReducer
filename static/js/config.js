@@ -254,6 +254,7 @@ function _applyConfigRuntimeLocks() {
   _applyAdvancedActionAvailability();
   if (locked) _applyRunLockToSections(true);
   _applyForceStopAvailability();
+  _applyResetAvailability();
 }
 
 function _applyRunLockToSections(locked) {
@@ -2774,6 +2775,53 @@ function _disarmReset() {
 }
 function _isResetConfirmTarget(target) {
   return !!target?.closest?.('#btn-reset-all');
+}
+// A reset waits for a storage refresh to finish and then REFUSES rather than
+// half-resetting: the summary's engine subprocess merges into the cache as it
+// exits, so a wipe underneath it rebuilds the store moments later and leaves
+// pre-reset numbers on a "first-time" dashboard. That refusal is right. What
+// reads as broken is the button — enabled, thinking for ten seconds, then
+// failing — so it says "busy" up front instead.
+//
+// A run is already handled: the run lock ghosts every section, this button
+// among them. So this only ADDS the refresh case and never clears a disable it
+// did not set — enabling on a poll would quietly punch a hole in that lock,
+// leaving one live control in a page that is meant to be inert.
+function _applyResetAvailability() {
+  const busy = !!_configSummaryActive;
+  const runLocked = _configActivityLocked();
+  const why = busy ? 'A storage refresh is finishing — reset is available in a moment.' : '';
+  ['btn-reset-all', 'btn-reset-all-banner'].forEach(id => {
+    const el = document.getElementById(id);
+    // Mid-reset it is already disabled and morphed to "Resetting…"; a poll
+    // landing inside that window must not re-enable it.
+    if (!el || el.classList.contains('btn-busy')) return;
+    if (busy) {
+      el.disabled = true;
+      el.classList.add('disabled');
+      el.setAttribute('aria-disabled', 'true');
+      el.title = why;
+    } else if (!runLocked) {
+      el.disabled = false;
+      el.classList.remove('disabled');
+      el.setAttribute('aria-disabled', 'false');
+      el.title = '';
+    }
+  });
+  // Armed and then ghosted would leave "Are you sure?" sitting on a dead
+  // button, and fire on the next click once the refresh cleared — a confirm
+  // the user gave to a different question.
+  if (busy && _resetArmed) _disarmReset();
+  const statusEl = document.getElementById('reset-status');
+  if (statusEl && !document.getElementById('btn-reset-all')?.classList.contains('btn-busy')) {
+    if (busy) {
+      statusEl.textContent = why;
+      statusEl.dataset.busyNote = '1';
+    } else if (statusEl.dataset.busyNote === '1') {
+      statusEl.textContent = '';
+      delete statusEl.dataset.busyNote;
+    }
+  }
 }
 document.addEventListener('click', (ev) => {
   if (!_resetArmed) return;

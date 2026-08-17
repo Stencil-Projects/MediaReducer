@@ -52,17 +52,43 @@ jobs:
           IMAGE="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           TAGS="$IMAGE:$VERSION"
           case "$VERSION" in
-            dispatch-*) : ;;
+            dispatch-*)
+              # A manual run names no version, so it gets no channel pointer —
+              # except in the dev repo, where that pointer is the whole point:
+              # :dev is what its own Unraid template tracks, so a manual run
+              # THERE is how a dev container gets its next image, and a manual
+              # run in the public repo stays the dry run it has always been.
+              # (Named by description, not by path: that template is held back,
+              # and a published file pointing at it is a dead link here.)
+              if [ "$GITHUB_REPOSITORY" = "Stencil-Projects/MediaReducer-Dev" ]; then
+                TAGS="$TAGS $IMAGE:dev"
+              fi
+              ;;
             *-alpha*)   TAGS="$TAGS $IMAGE:alpha" ;;
             *-beta*)    TAGS="$TAGS $IMAGE:beta" ;;
             *-rc*)      TAGS="$TAGS $IMAGE:rc" ;;
             *-*)        : ;;
             *)          TAGS="$TAGS $IMAGE:${VERSION%.*} $IMAGE:${VERSION%%.*} $IMAGE:latest" ;;
           esac
+          # Whether this run pushes at all, decided once. The two steps that
+          # need a registry credential read this instead of each repeating the
+          # condition, which is how they would drift apart.
+          if [ "${{ github.event_name }}" = "push" ] \
+             || [ "$GITHUB_REPOSITORY" = "Stencil-Projects/MediaReducer-Dev" ]; then
+            PUSHING=1
+          else
+            PUSHING=0
+          fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "IMAGE=$IMAGE"     >> "$GITHUB_ENV"
           echo "TAGS=$TAGS"       >> "$GITHUB_ENV"
-          echo "Will publish:"; for t in $TAGS; do echo "  $t"; done
+          echo "PUSHING=$PUSHING" >> "$GITHUB_ENV"
+          if [ "$PUSHING" = 1 ]; then
+            echo "Will publish:"; for t in $TAGS; do echo "  $t"; done
+          else
+            echo "Dry run; nothing will be pushed. Would have built:"
+            for t in $TAGS; do echo "  $t"; done
+          fi
 
       - name: Refuse a tag that disagrees with APP_VERSION
         # The version in the welcome guide and the debug report is what a bug
@@ -152,7 +178,7 @@ jobs:
           docker rm -f mr-smoke >/dev/null
 
       - name: Log in to GHCR
-        if: github.event_name == 'push'
+        if: env.PUSHING == '1'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -162,7 +188,7 @@ jobs:
       - name: Push every tag
         # Retagging the already-tested image, so what is published is byte for
         # byte what passed the smoke test.
-        if: github.event_name == 'push'
+        if: env.PUSHING == '1'
         run: |
           set -euo pipefail
           for t in $TAGS; do
@@ -174,14 +200,19 @@ jobs:
         run: |
           {
             echo "### MediaReducer image"
-            if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "$PUSHING" != 1 ]; then
+              echo "Built and smoke-tested \`$VERSION\`. Nothing was pushed:"
+              echo "workflow_dispatch is the dry run."
+            elif [ "${{ github.event_name }}" = "push" ]; then
               echo "Published from \`$GITHUB_REF_NAME\`:"
               for t in $TAGS; do echo "- \`$t\`"; done
               echo ""
               echo "The package is private until you make it public once, under"
               echo "the repository's Packages settings."
             else
-              echo "Built and smoke-tested \`$VERSION\`. Nothing was pushed:"
-              echo "workflow_dispatch is the dry run."
+              echo "Published a development build:"
+              for t in $TAGS; do echo "- \`$t\`"; done
+              echo ""
+              echo "\`Force update\` the MediaReducer-Dev container on Unraid to pull it."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

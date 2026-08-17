@@ -177,5 +177,84 @@ check("the Category is one CA renders",
       set(text("Category").split()) <= {"MediaApp:Video", "Tools:Utilities"},
       text("Category"))
 
+# ── The development twin, when it is here ────────────────────────────────────
+# Held back from the public repo with the rest of the dev tooling, so this only
+# runs in the repo that has it. Everything above is about a listing a stranger
+# reads; this is about two containers on one machine. The dev one is an
+# unreleased build that deletes files, and the two things it must not share are
+# the port (the release container is already on it) and the config directory —
+# a dev build writing the release container's store is how testing a migration
+# destroys the install it was being tested against.
+DEV_XML = ROOT / "unraid" / "mediareducer-dev.xml"
+if DEV_XML.is_file():
+    dev = ET.parse(DEV_XML).getroot()
+
+    def dev_text(tag):
+        el = dev.find(tag)
+        return (el.text or "").strip() if el is not None else None
+
+    dev_paths = {c.get("Target"): c for c in dev.findall("Config")
+                 if c.get("Type") == "Path"}
+    dev_port = next(c for c in dev.findall("Config") if c.get("Type") == "Port")
+
+    check("[dev] the two containers cannot both claim one host port",
+          dev_port.get("Default") != port_cfg.get("Default"),
+          (dev_port.get("Default"), port_cfg.get("Default")))
+    # Only the HOST side moves. The image serves on 7474 whatever the template
+    # says, so a dev template that remapped the container port would install a
+    # container whose health check probes a port nothing is listening on.
+    check("[dev] ...while the container port stays the one the image serves",
+          dev_port.get("Target") == str(INTERNAL), dev_port.get("Target"))
+    # Unraid resolves [PORT:n] by looking up the CONTAINER port n and printing
+    # the host port mapped to it. Naming the host port here would send the WebUI
+    # button to a port that only happens to be right while the two agree.
+    check("[dev] ...and the WebUI link names the container port, so it follows",
+          f"[PORT:{INTERNAL}]" in (dev_text("WebUI") or ""), dev_text("WebUI"))
+
+    check("[dev] the config directories are separate",
+          dev_paths["/config"].get("Default") != paths["/config"].get("Default"),
+          (dev_paths["/config"].get("Default"), paths["/config"].get("Default")))
+
+    # The capabilities are derived from what entrypoint.py does, by
+    # test_container_hardening, against the release template. A dev container
+    # granted anything more would be testing a container nobody ships.
+    check("[dev] it runs under exactly the release container's hardening",
+          dev_text("ExtraParams") == text("ExtraParams"),
+          dev_text("ExtraParams"))
+    check("[dev] and is not privileged either",
+          dev_text("Privileged") == "false", dev_text("Privileged"))
+
+    # The mirror image of the check above: this listing is the one that MUST
+    # name the private repo, and it must not install the public image by
+    # accident — an alpha tag pulled into a dev container looks like it worked.
+    dev_owner, dev_name = dev_text("Project")[len("https://github.com/"):].split("/")
+    check("[dev] it installs the image the dev repo publishes, not the public one",
+          dev_text("Repository").split(":")[0]
+          == f"ghcr.io/{dev_owner.lower()}/{dev_name.lower()}",
+          dev_text("Repository"))
+    check("[dev] ...at a tag, like the release one",
+          ":" in dev_text("Repository").rsplit("/", 1)[-1], dev_text("Repository"))
+    # publish.yml only pushes this tag from the dev repo, so the two have to
+    # name it identically or the template tracks something never built.
+    dev_tag = dev_text("Repository").rsplit(":", 1)[-1]
+    check("[dev] ...which the publish workflow actually builds",
+          f'IMAGE:{dev_tag}"' in (ROOT / ".github" / "workflows" / "publish.yml").read_text(),
+          dev_tag)
+    # A raw.githubusercontent URL into a private repo 404s for the Unraid box
+    # fetching it, so the dev template carries no TemplateURL at all. The icon
+    # is the public repo's copy on purpose, and that one has to resolve.
+    check("[dev] it claims no template URL it cannot serve",
+          not (dev_text("TemplateURL") or ""), dev_text("TemplateURL"))
+    dev_icon = published_file(dev_text("Icon"))
+    check("[dev] the icon is the published repo's, so it loads without a login",
+          dev_icon is not None and dev_icon.is_file(), dev_text("Icon"))
+    # It ships nowhere, so nothing else would ever notice it had rotted out of
+    # the exclude list and started being published. The path is derived rather
+    # than written out: publish.sh warns about any published file naming a
+    # held-back path, and this test is published.
+    check("[dev] publish.sh holds this file back from the public repo",
+          DEV_XML.relative_to(ROOT).as_posix()
+          in (ROOT / "tools" / "publish.sh").read_text())
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

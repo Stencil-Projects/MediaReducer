@@ -16,11 +16,15 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _tmpout  # noqa: E402
 _OUT = tempfile.mkdtemp(prefix="mr-mediacheck.")
 atexit.register(shutil.rmtree, _OUT, True)
-os.environ["MEDIAREDUCER_CONFIG"] = str(Path(_OUT) / "config.json")
 os.environ.setdefault("MEDIAREDUCER_LIBRARY", _OUT)
-Path(_OUT, "config.json").write_text("{}")
+# A temp config is not enough on its own: it has to CARRY OUTPUT_DIR. Writing
+# `{}` here left output_dir() on its /config default, so importing app created
+# the store in the deployment data directory for real — which run_tests.sh's
+# /config comparison only catches on a machine where /config exists.
+_tmpout.config(_OUT)
 import app as A  # noqa: E402
 
 ok = True

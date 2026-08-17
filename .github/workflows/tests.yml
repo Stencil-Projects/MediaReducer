@@ -31,12 +31,17 @@ jobs:
     # the private dev repo runs on a self-hosted runner and the public one
     # stays on GitHub's.
     #
-    # This has to be an expression rather than a plain `self-hosted`, because
-    # the dev repo's publish script mirrors this directory into the public
-    # repo. Hardcoded, every public run — and every outside contributor's pull
+    # This has to be an expression rather than a plain label, because the dev
+    # repo's publish script mirrors this directory into the public repo.
+    # Hardcoded, every public run — and every outside contributor's pull
     # request — would queue for 24 hours waiting for a runner that repo does
     # not have, and then expire. The fallback is the load-bearing half.
-    runs-on: ${{ github.repository == 'Stencil-Projects/MediaReducer-Dev' && 'self-hosted' || 'ubuntu-latest' }}
+    #
+    # `builderbot` rather than `self-hosted`: two runners in the org answer to
+    # `self-hosted`, and that label alone sends this job to whichever is idle.
+    # Naming the one intended keeps it there. It is the narrower label — the
+    # other runner does not carry it — so this cannot silently widen back.
+    runs-on: ${{ github.repository == 'Stencil-Projects/MediaReducer-Dev' && 'builderbot' || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
       # First, before anything is checked out or installed. runs-on is an
@@ -91,9 +96,23 @@ jobs:
         # ESLint is not a runtime dependency either. test_js_lint skips itself
         # without it, so install it here or that test quietly does nothing —
         # the same arrangement as pyflakes above, for the same reason.
+        #
+        # --with-deps is the browser's SYSTEM libraries, and installing those
+        # needs root. GitHub's runners hand the job passwordless sudo, so the
+        # public repo takes the first branch and nothing about it changes.
+        # The runner this repo is pinned to does not: it runs as an
+        # unprivileged user with no sudo, and already carries those libraries
+        # in its image. Asking for them there fails the whole job over
+        # something that is already true, so ask only where it can be answered.
+        # The browser itself downloads fine either way.
         run: |
           npm install --no-save playwright@1.61.1 eslint@10.1.0
-          npx playwright install --with-deps chromium
+          if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then
+            npx playwright install --with-deps chromium
+          else
+            echo "No root: installing the browser only, and trusting the image's system libraries."
+            npx playwright install chromium
+          fi
 
       - name: Point the tests at the browser that was just installed
         # Belt and braces. Playwright picks chrome-headless-shell by default,

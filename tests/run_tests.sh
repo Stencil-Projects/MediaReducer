@@ -211,6 +211,7 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_server_toggle node tests/e2e/e2e_server_toggle.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_mode_stale   node tests/e2e/e2e_mode_stale.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_saved_state_gating node tests/e2e/e2e_saved_state_gating.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_reset_busy_gate node tests/e2e/e2e_reset_busy_gate.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_form_shows_saved_config node tests/e2e/e2e_form_shows_saved_config.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_notify_preview node tests/e2e/e2e_notify_preview.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_breach_note  node tests/e2e/e2e_breach_note.mjs
