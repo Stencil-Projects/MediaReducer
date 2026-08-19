@@ -30,6 +30,8 @@ you want fine-grained rule-based control instead, you probably want
 [Command line](#command-line) · [Files](#persistent-files) ·
 [Troubleshooting](#troubleshooting)
 
+![The dashboard after a Simulate: storage and cleanup-target cards, and the run stepper with its dry-run result](docs/screenshots/dashboard.png)
+
 ## Requirements
 
 - Docker Compose (or Unraid's Compose Manager).
@@ -160,6 +162,8 @@ not the form in front of you — a section unlocks and a mode becomes selectable
 when a save makes it true. The threshold calculators are the exception: they
 follow what you type, because they decide nothing.
 
+![The Configuration tab: Scheduler Mode expanded, with the other sections collapsed below it](docs/screenshots/configuration.png)
+
 ### 1. Scheduler Mode
 
 A fresh install starts **Paused** with the other modes ghosted. Monitor Only
@@ -270,6 +274,8 @@ than in the config, so your phone and your desktop can differ:
 Every rule deciding *what* can be deleted and *in what order*, previewed live
 against your full library. Four collapsible categories; a category holding a
 field that needs attention shows a red **!** on its header.
+
+![The Filtering & Scoring tab: cleanup scope, the single-movie score explorer, and the full library scored in deletion order](docs/screenshots/filtering-scoring.png)
 
 ### Cleanup scope
 
