@@ -531,10 +531,10 @@ def _time_zone_options() -> list[str]:
     return options
 
 # Application version; shown in the welcome guide and the debug report so bug
-# reports name the build. Bump on release. SemVer pre-release: the number is the
-# release being worked TOWARD, not one that shipped, and alpha < beta < rc < the
-# plain version when anything sorts them.
-APP_VERSION = "1.0.0-alpha.22"
+# reports name the build. It mirrors the VERSION file at the repo root, which is
+# what `bb version` moves and what tools/publish.sh cuts the release tag from —
+# publish.yml refuses a tag where the two disagree, so move them together.
+APP_VERSION = "0.7.0"
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings

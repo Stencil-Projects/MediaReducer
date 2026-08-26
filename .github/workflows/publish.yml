@@ -3,7 +3,7 @@ name: Publish image
 # Push a version tag to publish. Nothing else publishes: no branch push, no
 # schedule, so an image only ever appears because someone tagged a release.
 #
-#   git tag vX.Y.Z-alpha.N && git push origin vX.Y.Z-alpha.N   (must match APP_VERSION)
+#   git tag vX.Y.Z && git push origin vX.Y.Z      (must match the VERSION file)
 #
 # workflow_dispatch runs the whole pipeline WITHOUT pushing, which is how to
 # check a Dockerfile change before committing to a tag.
@@ -41,7 +41,10 @@ jobs:
         # A prerelease never becomes :latest. It gets its channel pointer
         # (:alpha, :beta, :rc) so an installer can follow the channel, while
         # :latest keeps meaning "the newest stable" even when no stable exists
-        # yet. That is why the Unraid template tracks :alpha for now.
+        # yet. Versions are plain now, so :latest is what the Unraid template
+        # follows — and test_unraid_listing pins that pairing, because a
+        # template left on a pointer this version no longer publishes does not
+        # fail, it just silently stops updating.
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -90,21 +93,32 @@ jobs:
             for t in $TAGS; do echo "  $t"; done
           fi
 
-      - name: Refuse a tag that disagrees with APP_VERSION
+      - name: Refuse a tag that disagrees with the VERSION file
         # The version in the welcome guide and the debug report is what a bug
-        # report quotes. If the tag and APP_VERSION drift, every report from this
+        # report quotes. If the tag and the app drift, every report from this
         # build names a version that was never released, and nothing downstream
         # would ever notice.
+        #
+        # VERSION is the source: `bb version` moves it and tools/publish.sh tags
+        # from it. APP_VERSION is the copy the app shows, so it is checked here
+        # too — the tag agreeing with one of the two while the other says
+        # something else is the drift this step exists to catch.
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
+          FILEVER="$(head -1 VERSION | tr -d '[:space:]')"
           APPVER="$(grep -m1 '^APP_VERSION' app.py | sed -E 's/.*"([^"]+)".*/\1/')"
-          if [ "$VERSION" != "$APPVER" ]; then
-            echo "Tag $GITHUB_REF_NAME means version $VERSION, but app.py says $APPVER."
-            echo "Bump APP_VERSION in app.py, or tag the version that is actually in the code."
+          if [ "$VERSION" != "$FILEVER" ]; then
+            echo "Tag $GITHUB_REF_NAME means version $VERSION, but VERSION says $FILEVER."
+            echo "Tag the version the code is actually at, or move VERSION first."
             exit 1
           fi
-          echo "tag and APP_VERSION agree on $APPVER"
+          if [ "$APPVER" != "$FILEVER" ]; then
+            echo "VERSION says $FILEVER, but app.py's APP_VERSION says $APPVER."
+            echo "They must agree, or the app reports a version that was never released."
+            exit 1
+          fi
+          echo "tag, VERSION and APP_VERSION agree on $FILEVER"
 
       - uses: docker/setup-buildx-action@v4
 

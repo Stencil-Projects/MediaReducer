@@ -6,8 +6,12 @@ name: Tests
 # push is limited to main, because a commit on a branch WITH a pull request
 # open was being tested twice: push and pull_request are separate concurrency
 # groups, so neither cancelled the other and both ran to the end. Branch work
-# is covered by the pull_request run, main by the merge, and workflow_dispatch
-# covers a branch with no pull request yet.
+# is covered by the pull_request run, and workflow_dispatch covers a branch
+# with no pull request yet.
+#
+# What remains — the run on a merge into main — is for the PUBLIC repo, where
+# nothing else covers what lands. The dev repo skips it at the job below; see
+# the reasoning there.
 on:
   push:
     branches: [main]
@@ -27,6 +31,28 @@ permissions:
 
 jobs:
   tests:
+    # Not on a merge into main, and only in the dev repo. Work lands there
+    # through pull requests, and the pull_request run tested the merge result
+    # on this same box minutes before — so the merge run is the same commits a
+    # second time, holding the one runner a session may be waiting on. It is
+    # also the third pass: the suite and `bb lint` are run locally before any
+    # of it is pushed.
+    #
+    # The public repo keeps its merge run. A push can arrive there without a
+    # pull request having been run here first, and nothing else would cover it.
+    #
+    # Matched on the REF rather than the event name, and that is the whole
+    # care in this condition. A release reaches this file through publish.yml's
+    # workflow_call, and inside a called workflow the github context is the
+    # CALLER's — so a tag push reads as event_name 'push' here too. Skipping on
+    # the event alone would skip the suite the release gates on, and a skipped
+    # job satisfies `needs:` rather than failing it, so the image would build
+    # with nothing having tested it. Only the ref separates the two.
+    if: >-
+      !(github.repository == 'Stencil-Projects/MediaReducer-Dev'
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main')
+
     # Minutes are billed on private repositories and free on public ones, so
     # the private dev repo runs on a self-hosted runner and the public one
     # stays on GitHub's.

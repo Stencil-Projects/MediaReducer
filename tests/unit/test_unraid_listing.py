@@ -101,6 +101,28 @@ check("Registry and Repository name the same image",
 check("the image is tagged, not left floating on latest-by-default",
       ":" in repo_img.rsplit("/", 1)[-1], repo_img)
 
+# Which pointers publish.yml actually pushes depends on the VERSION being
+# released: a prerelease gets its channel (:alpha/:beta/:rc) and nothing else,
+# a plain version gets :latest and the major/minor pointers. A template left on
+# a channel this version no longer produces does not fail anywhere — the
+# container simply never updates again — which is how :alpha outlived the last
+# alpha release here. So the pairing is pinned rather than remembered.
+_version = (ROOT / "VERSION").read_text().strip()
+if "-alpha" in _version:
+    _pointers = {"alpha"}
+elif "-beta" in _version:
+    _pointers = {"beta"}
+elif "-rc" in _version:
+    _pointers = {"rc"}
+elif "-" in _version:
+    _pointers = set()          # some other prerelease: it gets no pointer at all
+else:
+    _parts = _version.split(".")
+    _pointers = {"latest", _parts[0], ".".join(_parts[:2]), _version}
+check("the listing tracks a tag that publishing " + _version + " would push",
+      repo_img.rsplit(":", 1)[-1] in _pointers,
+      (repo_img, sorted(_pointers)))
+
 # publish.yml builds the image name from $GITHUB_REPOSITORY, lowercased, so the
 # owner in this template has to be the owner that publishes — and neither half
 # is visible from the other. Getting it wrong breaks nothing at publish time and

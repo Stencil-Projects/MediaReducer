@@ -107,6 +107,27 @@ for tool, why in (("pyflakes", "test_no_undefined_names"),
     check(f"CI installs {tool}, or {why} silently checks nothing",
           re.search(rf"\b{tool}[@=\s]", _tests_yml) is not None)
 
+# ── When the suite does NOT run ──────────────────────────────────────────────
+# The dev repo skips the merge run: a pull request tested the merge result
+# minutes earlier and the suite is run locally before the push. The public repo
+# must keep it, because a push can reach that repo without any of that having
+# happened — so the condition has to name the dev repo, not describe a merge.
+gate = str(tests["jobs"]["tests"].get("if", ""))
+check("the test job states when it does not run", gate != "", gate)
+check("...keyed to the private repo in full, so the public one still tests a merge",
+      "Stencil-Projects/MediaReducer-Dev" in gate, gate)
+check("...and only for a push, so pull requests are untouched",
+      "'push'" in gate, gate)
+# The trap, and the reason this is asserted rather than trusted: a release
+# arrives through publish.yml's workflow_call, and inside a called workflow the
+# github context belongs to the CALLER — so a tag push reads as event_name
+# 'push' in here too. A condition written on the event alone would skip the
+# very suite the release gates on, and `needs:` treats a skipped job as
+# satisfied rather than failed, so the image would build having tested nothing.
+# Matching the branch ref is what keeps a tag out of it.
+check("...matched on the branch ref, so a release tag is never skipped",
+      "refs/heads/main" in gate, gate)
+
 # ── The release gate ─────────────────────────────────────────────────────────
 # The image is what deletes people's files. It must not be buildable without
 # the suite passing on the exact commit being tagged.
