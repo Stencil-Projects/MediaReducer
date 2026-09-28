@@ -742,7 +742,10 @@ tr.prune td:first-child{box-shadow:inset 3px 0 0 var(--border-danger)}
 const SCORING = {{ scoring | tojson }};
 const VOTE_LOG_MIN=0,VOTE_LOG_MAX=6.6;
 let poolState={loaded:false,message:'Loading library…'};
-window.addEventListener('resize',()=>{if(!poolState.loaded)renderT();});
+// Registered before the deferred explorer.js has defined renderT, and a
+// resize can arrive in that gap (a phone's address bar showing or hiding
+// while the page loads): without the guard it threw a ReferenceError.
+window.addEventListener('resize',()=>{if(!poolState.loaded&&typeof renderT==='function')renderT();});
 let raw=[],sc='order',sd=1,appliedPruneGb=0,selectedMovieId=null;
 let appliedCfg=null,savedCfg=null,cfgSaving=false;
 // Last entered values of the optional fields, kept while disabled so the

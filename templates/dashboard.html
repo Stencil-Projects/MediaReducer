@@ -609,7 +609,9 @@
                   title="Review everything marked for deletion and the eligible order behind it">
             <span class="dashboard-history-segment">
               <span class="dashboard-mini-value">
-                <span id="pruned-marked-count"><span id="pruned-marked-hot" class="{{ 'marked-hot' if marked_imminent else '' }}">{{ marked_imminent|commafy(0) }} <span class="unit">ITEMS</span></span> <span class="unit" aria-hidden="true">·</span> {{ marked_count|commafy(0) }} <span class="unit">ITEMS</span></span>
+                {# The same no-wrap chunks as the Lifetime tile, so on a phone a
+                   wrap lands between the two figures, never inside one. #}
+                <span id="pruned-marked-count"><span class="dh-stat-chunk"><span id="pruned-marked-hot" class="{{ 'marked-hot' if marked_imminent else '' }}">{{ marked_imminent|commafy(0) }} <span class="unit">ITEMS</span></span></span> <span class="dh-stat-chunk"><span class="unit" aria-hidden="true">·</span> {{ marked_count|commafy(0) }} <span class="unit">ITEMS</span></span></span>
               </span>
               <span class="dashboard-mini-label"><span id="marked-label-word" class="{{ 'marked-hot' if marked_imminent else '' }}">Marked</span> &amp; Eligible Deletions</span>
             </span>
@@ -622,7 +624,7 @@
                 {# Each stat is a no-wrap chunk so a wrap lands between them and
                    the separator travels with the space figure, never dangling. #}
                 <span class="dh-stat-chunk"><span id="pruned-count-value">{{ deleted_count|commafy(0) }}</span>
-                <span class="unit" id="pruned-count-unit">{{ 'ITEM' if deleted_count == 1 else 'ITEMS' }}</span></span>
+                <span class="unit" id="pruned-count-unit">{{ 'FILE' if deleted_count == 1 else 'FILES' }}</span></span>
                 <span class="dh-stat-chunk"><span class="unit" aria-hidden="true">· </span><span id="pruned-space-value" data-reclaimed-bytes="{{ deleted_reclaimed_bytes or 0 }}"><span id="pruned-space-number">{{ reclaimed_parts[0]|group_int }}</span>
                 <span class="unit" id="pruned-space-unit">{{ reclaimed_parts[1]|default('GB', true)|upper }}</span></span></span>
               </span>
@@ -1297,6 +1299,8 @@ let _eligibleCount = null;
 let _markedEvent = {
   on: {{ delete_forecast.event_on|tojson }},
   count: {{ delete_forecast.event_count|tojson }},
+  movies: {{ delete_forecast.get('event_movies', delete_forecast.event_count)|tojson }},
+  seasons: {{ delete_forecast.get('event_seasons', 0)|tojson }},
   bytes: {{ delete_forecast.event_bytes|tojson }},
 };
 let _redlineOnly = {{ 'true' if redline_only else 'false' }};   // refreshed each status poll

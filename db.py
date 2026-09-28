@@ -105,7 +105,13 @@ CREATE TABLE IF NOT EXISTS movies (
     -- 1 when the series folder sits under a monitored directory. Monitored
     -- paths are the deletion allow-list for TV exactly as for movies: Sonarr
     -- supplies the inventory, monitored paths decide what cleanup MAY touch.
-    tv_in_scope         INTEGER
+    tv_in_scope         INTEGER,
+    -- JSON list of the folders a show was out of scope over when its folder was
+    -- AMBIGUOUS — claimed by two rows, or its name found under two monitored
+    -- directories — rather than simply unmonitored. Kept so the page can say
+    -- which, instead of sending someone to their path settings for a problem
+    -- that is not there. NULL otherwise.
+    tv_scope_conflict   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_movies_path ON movies(path);
 CREATE TABLE IF NOT EXISTS queue (
@@ -402,6 +408,8 @@ def _movie_row_to_dict(r) -> dict:
         "tv_episodes_watched": r["tv_episodes_watched"],
         "tv_seasons": json.loads(r["tv_seasons"]) if r["tv_seasons"] else None,
         "tv_in_scope": r["tv_in_scope"],
+        "tv_scope_conflict": (json.loads(r["tv_scope_conflict"])
+                              if r["tv_scope_conflict"] else None),
     }
 
 
@@ -426,7 +434,8 @@ def _queue_row_to_entry(r) -> dict:
 _MOVIE_COLUMNS = ("ord", "path", "title", "year", "rating", "votes", "plays",
                   "users", "last_played", "size_gb", "size_bytes", "added_at",
                   "protected", "favorite", "excluded", "source_id",
-                  "jf_source_id", "tmdb_id", "section_id", "media_type", "tv_status", "tv_episodes", "tv_episodes_watched", "tv_seasons", "tv_in_scope")
+                  "jf_source_id", "tmdb_id", "section_id", "media_type", "tv_status", "tv_episodes", "tv_episodes_watched", "tv_seasons", "tv_in_scope",
+                  "tv_scope_conflict")
 _QUEUE_COLUMNS = ("path", "ord", "title", "score", "size_bytes", "marked_at",
                   "delay_days", "tmdb_id", "section_id")
 
@@ -470,7 +479,8 @@ def _replace_type_rows(conn, media_type: str, rows_list) -> None:
           m.get("media_type") or media_type, m.get("tv_status"),
           m.get("tv_episodes"), m.get("tv_episodes_watched"),
           json.dumps(m["tv_seasons"]) if m.get("tv_seasons") else None,
-          m.get("tv_in_scope"))
+          m.get("tv_in_scope"),
+          json.dumps(m["tv_scope_conflict"]) if m.get("tv_scope_conflict") else None)
          for i, m in enumerate(rows_list or []) if isinstance(m, dict)],
     )
 
@@ -490,9 +500,10 @@ def replace_tv_series(conn, series_list) -> None:
 
 def delete_movies(conn, paths) -> None:
     """Remove library-snapshot rows whose path is in `paths`. Used when a run
-    confirms a file is physically gone (vanished outside MediaReducer): the light
-    upkeep and fast-delete paths don't rewrite the whole snapshot, so without this
-    a deleted title would linger as a phantom row until the next full scan."""
+    confirms a file is physically gone (deleted by the run, or vanished outside
+    MediaReducer): no deleting path rewrites the snapshot after it deletes, so
+    without this a deleted title would linger as a phantom row until the next
+    full scan, and a settings save's rebuild would mark it again."""
     rows = [(str(p),) for p in (paths or ()) if p]
     if not rows:
         return

@@ -278,6 +278,13 @@ check("survivors stay in the queue as eligible",
 check("...with no clock running", all(e["marked_at"] is None for e in q.values()))
 check("...and deleted files are not rebuilt back into it",
       str(cands[0]["path"]) not in q)
+# The scan wrote the snapshot before it deleted, so the row of every file this
+# run removed is a phantom, as a vanished file's is. Left there, the next
+# settings save (which rebuilds the plan from the snapshot, no rescan) marked
+# the films a Cleanup had just deleted: seen in the test lab.
+check("...and their snapshot rows are pruned in the same write",
+      kw.get("snapshot_delete_paths") == {str(cands[0]["path"]), str(cands[1]["path"])},
+      kw.get("snapshot_delete_paths"))
 check("the rebuilt queue carries the Radarr identity",
       all(e["tmdb_id"] and e["section_id"] for e in q.values()), q)
 check("...and is stamped against the thresholds it was built under",
@@ -315,6 +322,9 @@ if r.saves:
     q = r.saves[-1][0]
     check("...with the file it did delete dropped from the queue",
           str(cands[0]["path"]) not in q, sorted(q))
+    check("...and from the snapshot",
+          str(cands[0]["path"]) in (r.saves[-1][1].get("snapshot_delete_paths") or ()),
+          r.saves[-1][1])
     check("...and the ones it never reached still in it",
           str(cands[2]["path"]) in q, sorted(q))
     check("...without stamping a partial pass as a fresh plan",

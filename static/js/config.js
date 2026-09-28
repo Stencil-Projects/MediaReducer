@@ -1512,12 +1512,14 @@ function _applySafetyLimitNotes() {
 
   // The cap works the other way round: it sets a size to trim DOWN to, so the
   // danger is setting it too low, and the limit is a share of the library.
+  // Rounded UP, never to nearest: a 137.1 GB floor shown as "137" advised the
+  // one whole number the gate refuses.
   const floor = Number(v.cap_floor_gb);
   const lib = Number(v.library_gb);
   note('cap-safety-note',
     (Number.isFinite(floor) && Number.isFinite(pct) && Number.isFinite(lib))
-      ? `No lower than ${gb(floor)} GB — one cleanup may trim at most ${pct}% of the `
-        + `${gb(lib)} GB library.`
+      ? `No lower than ${Math.ceil(floor).toLocaleString()} GB — one cleanup may trim at `
+        + `most ${pct}% of the ${gb(lib)} GB library.`
       : '');
 }
 
@@ -2968,7 +2970,7 @@ async function refreshArchivedLogsStatus() {
   }
 }
 
-function _setRadarrSectionDetectionIdle(message = 'The Plex section ID is detected automatically after Radarr and Plex connect.') {
+function _setRadarrSectionDetectionIdle(message = 'The Plex section ID is detected when you save with Radarr and Plex connected.') {
   const el = document.getElementById('section-detected');
   if (!el) return;
   el.textContent = message;
@@ -3355,6 +3357,18 @@ function _immediatePruneWarning(cfg, nowCleanup) {
     if (!capChanged && !armingCleanup) return '';
     const size = Math.round(_lastKnownLibraryGb).toLocaleString();
     const cap = prCommaNum(capGb);
+    // Below the safety floor the cap prunes nothing at all: the gate refuses the
+    // Cleanup it would need. Said here, while the value is still being chosen —
+    // saved without a word, the first sign was a Simulate reporting the target
+    // past the safety percentage.
+    const floor = Number(_serverThresholds?.cap_floor_gb);
+    if (Number.isFinite(floor) && capGb < floor) {
+      const pct = Number(_serverThresholds?.safety_pct);
+      return `Library Size Cap (${cap} GB) is below the safety floor of `
+        + `${Math.ceil(floor).toLocaleString()} GB`
+        + (Number.isFinite(pct) ? ` — one cleanup may trim at most ${pct}% of the library` : '')
+        + ' — so Cleanup will not delete anything until the cap or the safety percentage is raised.';
+    }
     return nowCleanup
       ? `Library Size Cap (${cap} GB) is below the current library (~${size} GB) — Automatic Cleanup prunes it at the next daily run.`
       : `Library Size Cap (${cap} GB) is below the current library (~${size} GB) — the next Cleanup will prune down to it.`;

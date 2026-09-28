@@ -335,10 +335,12 @@ minutes. The pipeline, in order:
    A file confirmed **physically gone** is also pruned from the library snapshot in
    the same write (`save_pending(..., snapshot_delete_paths=…)`), so a title deleted
    outside MediaReducer doesn't linger as a phantom `movies` row until the next full
-   scan. The redline fast path and the full-scan cleanup's external-vanish branch
-   prune the snapshot the same way — every no-rescan path that confirms a file is
-   gone sheds its row. (Protected-since marks leave the file on disk, so their
-   snapshot row stays.)
+   scan. The redline fast path and the full-scan cleanup prune the snapshot the
+   same way, for the files they delete as well as the ones that vanished — every
+   path that confirms a file is gone sheds its row. A settings save rebuilds the
+   plan from the snapshot, so a deleted film's row left behind is re-scored and
+   marked again. (Protected-since marks leave the file on disk, so their snapshot
+   row stays.)
 3. **Re-size the marked set to the CURRENT headroom/cap deficit**
    (`_daily_deficit_bytes`) from the cached queue, no full scan: mark the
    File-size-optimized covering set (the SAME `_pop_next_deletion` a real delete

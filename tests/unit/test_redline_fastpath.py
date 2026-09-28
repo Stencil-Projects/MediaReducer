@@ -208,6 +208,63 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     check("the spared (watched) movie keeps its mark; deleted ones trimmed",
           list(data["entries"]) == [str(paths[0])])
 
+# ── Fast path: entries past the fresh-data horizon are not "spared" ──────────
+# Only the leading ~1.5x of the target is re-checked on fresh watch data;
+# everything behind it is simply not deletable this run. It used to be logged,
+# entry by entry, as "sparing (watched since marked, or unverifiable)": on the
+# test lab's queue that named every eligible film up to Shawshank as watched,
+# and the spared count the fall-back message quotes counted them all.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    paths = setup(td)
+    _log, _lines = engine.log, []
+    engine.log = lambda m: _lines.append(str(m))
+    try:
+        handled = engine._redline_fast_path(2 * MB)   # lead: A, B — C and D never re-checked
+    finally:
+        engine.log = _log
+    _spared = [ln for ln in _lines if "sparing" in ln]
+    check("entries past the fresh-data horizon are not logged as spared",
+          handled is True and not _spared)
+    check("...and the emergency still deletes from the head of the queue",
+          not paths[0].exists() and paths[2].exists() and paths[3].exists())
+
+# ── Fast path: the library it leaves is what the dashboard reads next ────────
+# Only a full-scan Cleanup adjusted the stored library measure, and only the
+# stored one: after a fast-path Cleanup the dashboard read the pre-Cleanup size,
+# said "Over space limits — run Simulate", and the app's follow-up check read
+# the same figure and launched a Simulate that replaced the Cleanup's result.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    paths = setup(td)
+    handled = engine._redline_fast_path(5 * MB, library_gb=0.01)   # deletes 3 x 2 MB
+    import db as _db
+    with _db.connect(engine.DB_FILE) as _c:
+        _mem = _db.get_meta(_c, "library_size") or {}
+        _dash = _db.get_meta(_c, "dashboard_stats") or {}
+    check("the stored library measure is the run's own less what it deleted",
+          handled is True and _mem.get("gb") == round(0.01 - 0.006, 3))
+    check("...and the dashboard's copy says the same right away",
+          _dash.get("library_gb") == round(0.01 - 0.006, 1) and "disk" in _dash)
+
+# ── Fast path: the films it deleted leave the library snapshot ──────────────
+# A settings save rebuilds the plan from the snapshot without a rescan. The
+# fast path pruned only files that had vanished on their own, so the films a
+# Cleanup had just deleted stayed as rows and the next save marked them again
+# (test lab: Cats and Jack and Jill, deleted a minute earlier, were marked and
+# counted as the next deletion). The follow-up Simulate a stale library figure
+# used to launch after every Cleanup had been rescanning them away.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    paths = setup(td)
+    import db as _db
+    with _db.transaction(engine.DB_FILE) as _c:
+        _db.replace_movies(_c, [{"path": str(p), "title": p.stem, "size_bytes": 2 * MB}
+                                for p in paths])
+        _db.set_meta(_c, "snapshot_built_at", 1_000_000_000)
+    handled = engine._redline_fast_path(5 * MB)   # deletes 3 x 2 MB
+    with _db.connect(engine.DB_FILE) as _c:
+        _rows = {r["path"] for r in (_db.read_snapshot(_c) or {}).get("movies") or []}
+    check("the rows of the films the fast path deleted are pruned from the snapshot",
+          handled is True and _rows == {str(paths[3])} and paths[3].exists())
+
 # ── Fast path: if the fresh fetch is unavailable, fall back to the full scan ──
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     paths = setup(td)

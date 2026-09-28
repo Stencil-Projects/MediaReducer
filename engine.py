@@ -5797,6 +5797,35 @@ def _recent_library_size_gb():
     return None
 
 
+def _record_library_after_deletions(library_gb, bytes_freed) -> None:
+    """The library as this run left it — its own measurement less what it
+    deleted — stored for the Summaries that reuse the measure AND written to
+    the dashboard's stats now, with fresh disk numbers beside it.
+
+    Only the stored measure used to be adjusted, and the fast path adjusted
+    nothing. So right after a Cleanup brought the library under its cap, the
+    dashboard still read the pre-Cleanup size and said "Over space limits —
+    run Simulate to mark the ~23.3 GB deletion plan", and the app's check for
+    a follow-up Simulate ("limits still exceeded?") read the same stale figure,
+    launched one, and its "Dry run — nothing marked" replaced the Cleanup's
+    own result in the run panel (seen in the test lab)."""
+    if not bytes_freed or not isinstance(library_gb, (int, float)):
+        return
+    after = max(0.0, library_gb - bytes_to_gb(bytes_freed))
+    _remember_library_size(after)
+    stats = {"library_gb": round(after, 1)}
+    try:
+        info = get_usage_info()
+        total = round(bytes_to_gb(info["total"]), 1)
+        used = info["used_gb"]
+        stats["disk"] = {"used_gb": used, "total_gb": total,
+                         "free_gb": round(bytes_to_gb(info["free"]), 1),
+                         "pct_used": round(used / total * 100, 1) if total else 0}
+    except Exception:
+        pass   # the library figure alone still corrects the cap reading
+    emit_stats(**stats)
+
+
 def _remember_library_size(gb) -> None:
     """Store a freshly measured (or deletion-adjusted) library size for the
     Summary to reuse. Best-effort: a store hiccup costs one extra walk, never
@@ -5832,41 +5861,9 @@ def _tv_share_bytes() -> int:
     return 0
 
 
-def _least_wasteful_index(pool, remaining, near_tie):
-    """Index of the next item to take from the worst-first pool.
-
-    The head, unless the near-tied band at the head holds MORE than what is
-    left to free — then only some of that band needs to go. Those scores are
-    equivalent by definition, so the least wasteful cover wins: the SMALLEST
-    item that still finishes the job, movie or season alike. When nothing in
-    the band covers it alone, the largest goes first (fastest progress), the
-    same rule the movie deletion loop applies at its own boundary.
-
-    This is the only place the two media types are compared by size, and it is
-    deliberately the last question asked: score decides which items reach the
-    boundary at all, and this decides only which of several equally-scored
-    ones is the cheapest way to finish. Without it the type with the bigger
-    unit — always TV — would overshoot every small deficit by a whole season
-    while a near-tied movie covered it with a fraction of the waste.
-    """
-    if not near_tie or remaining <= 0:
-        return 0
-    head = pool[0][0]
-    band = []
-    for i, t in enumerate(pool):
-        if t[0] - head > near_tie:
-            break
-        band.append(i)
-    # Short-circuit, not a guard: when the whole band is needed every member is
-    # taken whatever order they go in, so this cannot change the outcome — it
-    # skips the work and mirrors the condition the movie loop uses to decide
-    # whether a tie group forms at all.
-    if sum(pool[i][1] for i in band) <= remaining:
-        return 0
-    covers = [i for i in band if pool[i][1] >= remaining]
-    if covers:
-        return min(covers, key=lambda i: (pool[i][1], pool[i][0]))
-    return max(band, key=lambda i: (pool[i][1], -pool[i][0]))
+# The split's near-tie rule lives in shared.py, where the app's season pass
+# reaches the same code; kept under this name for callers here.
+_least_wasteful_index = shared.least_wasteful_index
 
 
 def _season_order_for_run():
@@ -5907,20 +5904,10 @@ def _split_pool_with_seasons(candidates, daily_deficit_bytes):
         return 0, None
     if not order or daily_deficit_bytes <= 0:
         return 0, []
-    pool = [(float(e.get("score") or 0.0), int(e.get("size_bytes") or 0),
-             "season", e.get("key")) for e in order]
-    pool += [(float(c.get("retention_score") or 0.0),
-              int(c.get("file_size") or 0), "movie", None) for c in candidates]
-    pool.sort(key=lambda t: (t[0], -t[1]))
-    covered, tv_share, takes = 0, 0, []
-    while pool and covered < daily_deficit_bytes:
-        _score, size, kind, key = pool.pop(
-            _least_wasteful_index(pool, daily_deficit_bytes - covered, NEAR_TIE_PTS))
-        if kind == "season":
-            tv_share += size
-            takes.append({"key": key, "size_bytes": size})
-        covered += size
-    return tv_share, takes
+    return shared.split_pool(
+        [(e.get("score"), e.get("size_bytes"), e.get("key")) for e in order],
+        [(c.get("retention_score"), c.get("file_size")) for c in candidates],
+        daily_deficit_bytes, NEAR_TIE_PTS)
 
 
 def _movie_target_after_split(raw_daily_bytes, tv_share_bytes,
@@ -5979,6 +5966,66 @@ def _season_side_report() -> dict:
     except Exception:
         pass
     return {}
+
+
+def _season_deletions_this_run() -> tuple:
+    """(seasons deleted, bytes freed) by THIS run's season side, which deletes
+    in-process before this engine is launched. Every closing line a deleting run
+    writes has to count them: a Cleanup that only freed seasons once ended on
+    "Nothing to do", Deleted 0, because each exit spoke for the movie half alone.
+
+    The run REPORT stays movie-only on purpose. The app attaches the season
+    side's numbers to it separately (_enrich_run_report) and the notification
+    adds the two, so folding seasons in here as well would count each twice."""
+    rep = _season_side_report()
+    return (len(rep.get("deleted_seasons") or []), int(rep.get("freed_bytes") or 0))
+
+
+def _season_takes_this_run() -> tuple:
+    """(seasons, bytes) THIS run's merge gave the season side — the seasons the
+    app marks as the run ends. A dry run counts them in its closing line and
+    tiles: a Simulate whose whole plan was seasons said "space limits are
+    satisfied, nothing marked" while the library stood 6.6 GB over its cap."""
+    try:
+        with db.connect(DB_FILE) as conn:
+            doc = db.get_meta(conn, "tv_takes")
+        if (isinstance(doc, dict)
+                and shared.same_run(doc.get("run_started_at"), _run_started_at())):
+            entries = [e for e in (doc.get("entries") or []) if isinstance(e, dict)]
+            return len(entries), sum(int(e.get("size_bytes") or 0) for e in entries)
+    except Exception:
+        pass
+    return 0, 0
+
+
+def _seasons_phrase(count: int, freed_bytes: int) -> str:
+    """'2 season(s), ~8.1 GB' — the season half of a closing line."""
+    return f"{count} season(s), ~{bytes_to_gb(freed_bytes):.1f} GB"
+
+
+def _within_limits_close(prefix: str, used_gb, free_gb, nothing_line: str) -> str:
+    """Log and emit the closing frame of a deleting run the gate stops because
+    nothing is over a limit. Returns the message shown.
+
+    Sometimes that is only true because of THIS run: the season side deleted
+    first and the engine measured afterwards. Then the run did not do nothing —
+    it freed the space — and the stepper keeps Deleting ticked. Otherwise a run
+    that decided at Checking not to proceed performed nothing past it, so the
+    stepper greys stages 1-3 instead of ticking a library read, a scoring pass,
+    and a deletion pass that never happened (the same declaration channel as the
+    queue fast path)."""
+    n, b = _season_deletions_this_run()
+    if n:
+        log(f"{prefix}this run's season side deleted {_seasons_phrase(n, b)}; usage is "
+            f"now {used_gb:.1f} GB ({free_gb:.1f} GB free), within all space limits — "
+            "no movie needed deleting.")
+        msg = f"Deleted {_seasons_phrase(n, b)} — space limits are now satisfied."
+    else:
+        log(nothing_line)
+        msg = "Nothing to do — space limits are satisfied."
+    emit_progress(status="done", phase="done",
+                  skipped_stages=[1, 2] if n else [1, 2, 3], message=msg)
+    return msg
 
 
 def _daily_deficit_bytes(used_gb, max_gb, library_gb) -> int:
@@ -6089,7 +6136,7 @@ def _candidate_from_snapshot_row(row, key_by_resolved=None):
     }
 
 
-def _reconcile_target_bytes():
+def _reconcile_target_bytes(*, raw=False):
     """(bytes the marked set must cover, redline_only). Sizes the delay-clocked
     marked set to the headroom + Library Cap deficit — the same daily target the
     15-minute upkeep uses — from fresh disk and the library size (no walk).
@@ -6121,6 +6168,11 @@ def _reconcile_target_bytes():
     except Exception:
         pass
     max_gb = disk["total_gb"] - (HEADROOM_GB or 0)
+    if raw:
+        # The whole pool's deficit, before any season share comes off it — what
+        # a reconcile that splits the pool itself divides.
+        return int(shared.pool_deficit_gb(disk["used_gb"], max_gb, library_gb,
+                                          MAX_LIBRARY_GB) * 1_000_000_000), False
     return _daily_deficit_bytes(disk["used_gb"], max_gb, library_gb), False
 
 
@@ -6231,6 +6283,22 @@ def reconcile_from_snapshot(trigger="config change", *, refetch_protection=False
 
     score_and_rank_candidates(candidates)   # scores + deletion order (in place)
     to_free_bytes, redline_only = _reconcile_target_bytes()
+    # The pool split, made here as a full scan makes it — when the app has
+    # stamped this reconcile's season order (from the stored snapshot). The
+    # movie target used to be the deficit less the LAST scan's season share, so
+    # a threshold lowered past it had the movies cover all the growth: in the
+    # test lab a cap cut from 138 to 120 GB marked Pacific Rim and Battleship
+    # while two seasons scoring below them stayed unmarked. The app marks the
+    # takes stamped here as this reconcile ends.
+    if not redline_only:
+        _raw, _ = _reconcile_target_bytes(raw=True)
+        _share, _takes = _split_pool_with_seasons(candidates, _raw)
+        if _takes is not None:
+            _stamp_tv_takes(_takes, _share)
+            to_free_bytes = max(0, _raw - _share)
+            log(f"Reconcile [{trigger}]: pool split — seasons take "
+                f"{bytes_to_gb(_share):.1f} GB ({len(_takes)} season(s)), movies target "
+                f"{bytes_to_gb(to_free_bytes):.1f} GB of the {bytes_to_gb(_raw):.1f} GB deficit.")
     planned, would_count = _reconcile_select(candidates, to_free_bytes)
     write_plan_to_queue(planned, scheduled_count=0 if redline_only else would_count)
     log(f"Reconcile [{trigger}]: {len(rows)} snapshot movie(s), {len(candidates)} eligible, "
@@ -6376,7 +6444,8 @@ def _plan_stamp_current() -> bool:
                for key in _PLAN_CONFIG_KEYS)
 
 
-def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> bool:
+def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False,
+                       library_gb=None) -> bool:
     """Delete straight from the standing marked queue, in its order, WITHOUT the
     full library rescan — the shared incremental delete path. Used for a Redline
     emergency (the default) AND for a manual Cleanup (trigger set, do_radarr on),
@@ -6479,6 +6548,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
         snap = join.get(key)
         if snap:
             lead_ids.update(_snapshot_ids(snap))
+    lead_set = set(lead)
     try:
         fresh = _fresh_watch_data(lead_ids) if lead_ids else {}
     except SystemExit:
@@ -6495,7 +6565,7 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     work = []          # (key, Path, size_bytes, entry)
     dead = []          # marks whose file is already gone; dropped from the queue
     unmounted = 0      # marks whose branch is offline; left alone, not "gone"
-    gone_snapshot: set = set()   # physically-gone files; pruned from the snapshot too
+    gone_snapshot: set = set()   # gone files, deleted here or vanished; pruned from the snapshot too
     covered = 0
     spared_watched = 0
     sizes_refreshed = 0
@@ -6521,6 +6591,13 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
             dead.append(key)
             continue
         if not is_safe_to_delete(p):
+            continue
+        if key not in lead_set:
+            # Past the fresh-data horizon: nothing here was re-checked, so it is
+            # not deletable this run — and not "spared" either. Logging it as
+            # spared named every eligible title in the library as watched since
+            # marked, and inflated the count the fall-back message quotes. The
+            # loop still walks the whole queue for the dead-mark drop above.
             continue
         if not _confirmed_unwatched(join.get(key), fresh):
             # Watched since marking, or can't be verified fresh; spare it and let
@@ -6637,6 +6714,12 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
                     unlink_errors += 1
                     continue
                 _RUN_DELETED_FILES = True
+                # Its snapshot row is a phantom now, as a vanished file's is. A
+                # settings save rebuilds the plan from the snapshot without a
+                # rescan, and left there the row was re-scored and marked again:
+                # in the test lab the films a Cleanup had just deleted were the
+                # next save's plan.
+                gone_snapshot.add(key)
                 # The section banner lands only once a deletion actually does:
                 # a fast path that deletes nothing falls back to the full scan,
                 # and an early DELETIONS banner would make the dashboard's
@@ -6689,13 +6772,22 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False) -> 
     log(f"{trigger} fast path complete: deleted {deleted_count} movie(s), freed "
         f"{bytes_to_gb(bytes_freed):.1f} GB (target {bytes_to_gb(to_free_bytes):.1f} GB) | "
         f"free now {bytes_to_gb(final['free']):.1f} GB | {len(store)} movie(s) still marked.")
+    _record_library_after_deletions(library_gb, bytes_freed)
+    # The fast path prints no run summary, so this is the only place the log
+    # can say what the run's season side deleted before the movies went.
+    _sn, _sb = _season_deletions_this_run()
+    if _sn:
+        log(f"Season side (this run): deleted {_seasons_phrase(_sn, _sb)} before the "
+            "movie side ran.")
     # queue_rebuild tells the web app to kick a background Simulate so the
     # standing preview grows back to full strength after the emergency; only
     # when marks were actually consumed (a knife-edge free==floor firing has a
     # 0-byte deficit and must not spawn rebuild runs every tick).
-    _fp_msg = (f"Cleared from the marked queue — deleted {deleted_count} "
-               f"movie(s), ~{bytes_to_gb(bytes_freed):.1f} GB (no rescan)."
-               if deleted_count else
+    _removed = ([f"{deleted_count} movie(s)"] if deleted_count else []) + (
+        [f"{_sn} season(s)"] if _sn else [])
+    _fp_msg = (f"Cleared from the marked queue — deleted {' and '.join(_removed)}, "
+               f"~{bytes_to_gb(bytes_freed + _sb):.1f} GB (no rescan)."
+               if _removed else
                "Free space already met the target — nothing needed deleting.")
     # The fast path skips log_run_summary, so print the issue block here; a
     # failed unlink was already logged where it happened, but the categorized
@@ -7177,6 +7269,10 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
     row("Movies scanned:", total_scanned)
     if seasons.get("seasons_seen"):
         row("Seasons scanned:", seasons["seasons_seen"])
+        # The run panel's Scanned tile counts what its Eligible tile counts —
+        # movies AND seasons, restated below — or a plan with seasons in it
+        # read "Scanned 20 · Eligible 24": more eligible than scanned.
+        emit_progress(scanned=total_scanned + int(seasons["seasons_seen"]))
     if build_stats.get("movie_cleanup_off"):
         row("Cleanup off:", f"{build_stats['movie_cleanup_off']} (movie cleanup is turned off in Filtering & Scoring)")
     if seasons.get("cleanup_off"):
@@ -7211,10 +7307,18 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
         # total.
         emit_progress(eligible=build_stats["eligible"] + _elig_seasons)
     log_raw("-" * 34)
-    _del_seasons = len(seasons.get("deleted_seasons") or [])
+    # A dry run deletes no season; what it WOULD delete is what its merge took,
+    # which the app marks as the run ends.
+    _del_seasons = (_season_takes_this_run()[0] if is_sim
+                    else len(seasons.get("deleted_seasons") or []))
     row("Would delete:" if is_sim else "Deleted:",
         f"{removed_count} movie(s) + {_del_seasons} season(s)"
         if _del_seasons else removed_count)
+    if _del_seasons and not is_sim:
+        # "Space freed" above is measured across this scan, which began after
+        # the season side had deleted — so it cannot include the seasons.
+        row("Seasons freed:", f"{bytes_to_gb(int(seasons.get('freed_bytes') or 0)):.2f} GB "
+                              "(before the movie scan)")
     if seasons.get("marked_new"):
         row("Seasons marked:", f"{seasons['marked_new']} new "
                                "(deletable after the same delay as a marked movie)")
@@ -7575,6 +7679,7 @@ def _run_simulation(*, candidates, build_stats, total_scanned, usage_info,
 
     log_blank()
     _rest = simulated_count - _would_count
+    _take_n, _take_b = _season_takes_this_run()
     if _redline_only_mode():
         _sim_msg = summary_message(
             "Dry run — Redline is breached." if _would_count
@@ -7587,23 +7692,31 @@ def _run_simulation(*, candidates, build_stats, total_scanned, usage_info,
              f"(~{bytes_to_gb(simulated_freed_bytes):.1f} GB)"),
             ("Deletes when", "free space hits the Redline floor, worst-scored first"),
         )
-    elif _would_count == 0:
+    elif _would_count == 0 and not _take_n:
         _sim_msg = summary_message(
             "Dry run — space limits are satisfied, nothing marked.",
             ("Eligible in deletion order",
              f"{simulated_count:,} movie{'' if simulated_count == 1 else 's'}"),
         )
     else:
+        # The seasons this run's merge took are marked as the run ends, the
+        # way these movies are marked now: one plan, so one line counts both.
+        _what = " and ".join(
+            ([f"{_would_count:,} movie{'' if _would_count == 1 else 's'}"] if _would_count else [])
+            + ([f"{_take_n} season{'' if _take_n == 1 else 's'}"] if _take_n else []))
         _sim_msg = summary_message(
-            f"Dry run — would mark {_would_count:,} "
-            f"movie{'' if _would_count == 1 else 's'} for deletion.",
-            ("Marked", f"~{bytes_to_gb(_would_bytes):.1f} GB"),
+            f"Dry run — would mark {_what} for deletion.",
+            ("Marked", f"~{bytes_to_gb(_would_bytes + _take_b):.1f} GB"),
             ("Deletes", f"after a {DELETE_DELAY_DAYS}-day delay" if DELETE_DELAY_DAYS > 0
                         else "at the next daily run"),
             ("Also eligible", f"{_rest:,} movie{'' if _rest == 1 else 's'}"),
         )
+    # The seasons ride their own fields, as a deleting run's do; the tiles add
+    # them into Would delete and Would free.
     emit_progress(status="done", phase="done", deleted=_would_count,
                   bytes_freed=_would_bytes, target_bytes=to_free_bytes,
+                  seasons_deleted=0 if _redline_only_mode() else _take_n,
+                  seasons_bytes_freed=0 if _redline_only_mode() else _take_b,
                   current_title="", message=_sim_msg)
     # Report for the app's notifications (the app only alerts for the
     # SCHEDULED daily Simulate; manual ones are decided app-side).
@@ -7732,20 +7845,14 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
         # pace automatic runs only. Does not stamp the daily-run window, so
         # the scheduler's window is unaffected.
         if not (daily_breach or redline_hit):
-            log(
+            _msg = _within_limits_close(
+                "MANUAL CLEANUP: ", used_gb, free_gb,
                 f"MANUAL CLEANUP: usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
-                "within all space limits. Nothing to do."
-            )
-            # A run that decided at Checking not to proceed performed nothing
-            # past it — the stepper greys stages 1-3 instead of ticking a
-            # library read, a scoring pass, and a deletion pass that never
-            # happened. Same declaration channel as the queue fast path.
-            emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
-                          message="Nothing to do — space limits are satisfied.")
+                "within all space limits. Nothing to do.")
             write_run_report(
                 mode="cleanup", eligible_count=None, marked_count=0,
                 deleted_count=0, bytes_freed=0, redline_only=_redline_only_mode(),
-                message="Nothing to do — space limits are satisfied.",
+                message=_msg,
                 deleted_items=[], marked_items=[],
             )
             return True
@@ -7768,7 +7875,8 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
         # normally proceeds; it falls back to the full scan only if the plan turns
         # out stale or the queue can't cover the target. do_radarr=True so a manual
         # deletion forgets the movie in Radarr exactly like the full scan.
-        if _redline_fast_path(to_free_bytes, trigger=trigger, do_radarr=True):
+        if _redline_fast_path(to_free_bytes, trigger=trigger, do_radarr=True,
+                              library_gb=library_gb):
             return True
     elif immediate_trigger:
         # Redline runs on every cron tick, bypassing the daily schedule AND
@@ -7788,7 +7896,7 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
         # instead of rescanning the whole library first (Simulate is the audit;
         # the sim branch below never takes this). Falls back to the full scan
         # whenever it can't proceed safely; the reason is logged.
-        if not _is_sim and _redline_fast_path(to_free_bytes):
+        if not _is_sim and _redline_fast_path(to_free_bytes, library_gb=library_gb):
             return True
     else:
         # Headroom and Library Size Cap share the once-per-day window;
@@ -7842,24 +7950,20 @@ def _run_gate(*, _manual_cleanup, _is_sim, daily_breach, redline_hit, immediate_
                     emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
                                   message="Already ran today — waiting until tomorrow.")
                 else:
-                    log(
+                    _within_limits_close(
+                        "", used_gb, free_gb,
                         f"Usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
-                        "within all space limits. Nothing to do."
-                    )
-                    emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
-                                  message="Nothing to do — space limits are satisfied.")
+                        "within all space limits. Nothing to do.")
                 return True
             if not daily_breach:
                 # The daily window is only consumed by an actual cleanup —
                 # a within-limits tick must not burn it, or a breach later the
                 # same day would be skipped until tomorrow ("triggers once per
                 # calendar day WHEN a limit is breached").
-                log(
+                _within_limits_close(
+                    "", used_gb, free_gb,
                     f"Usage is {used_gb:.1f} GB ({free_gb:.1f} GB free), "
-                    "within all space limits. Nothing to do today."
-                )
-                emit_progress(status="done", phase="done", skipped_stages=[1, 2, 3],
-                              message="Nothing to do — space limits are satisfied.")
+                    "within all space limits. Nothing to do today.")
                 return True
             if time.strftime("%H:%M") < DAILY_RUN_TIME:
                 # An eligible day still waits for the scheduled time of day.
@@ -7933,8 +8037,10 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
     # in redline-only mode (never clocked) can't skip the delay grace here.
     mark_store_dirty = False
     kept_marks: dict = {}
-    _gone_keys: set = set()   # deleted (or externally vanished) this run
-    _vanished_keys: set = set()   # vanished OUTSIDE MediaReducer; prune from the snapshot too
+    # Deleted (or externally vanished) this run. The snapshot was written at
+    # scan time, when every one of these files still existed, so their rows are
+    # phantoms: each queue save below prunes them from it in the same write.
+    _gone_keys: set = set()
     now_ts = time.time()
     emit_progress(phase="deleting", trigger=trigger, target_bytes=to_free_bytes,
                   deleted=0, bytes_freed=0, current_title="",
@@ -8035,12 +8141,10 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
                 # Gone, but not by us (vanished externally between the scan and
                 # this loop). Drop any mark; the file no longer needs one, but
                 # don't claim the deletion: deleted.log has no record of it, and
-                # this run freed nothing by it. Its snapshot row (written at scan
-                # time, when the file still existed) is now a phantom, so prune it.
+                # this run freed nothing by it. Its snapshot row goes all the same.
                 planned_bytes += size_before
                 vanished_bytes += size_before
                 _gone_keys.add(key)
-                _vanished_keys.add(key)
                 if mark_store.pop(key, None) is not None:
                     mark_store_dirty = True
             elif use_delay:
@@ -8065,7 +8169,7 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
                     "keeping its existing mark (will retry next run).")
     except SystemExit:
         if use_delay or mark_store_dirty:
-            save_pending({**mark_store, **kept_marks}, snapshot_delete_paths=_vanished_keys)
+            save_pending({**mark_store, **kept_marks}, snapshot_delete_paths=_gone_keys)
             log("Stopped mid-run — marked-queue changes so far were saved.")
         raise
 
@@ -8104,7 +8208,7 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
         if unscheduled:
             log(f"Unmarked {unscheduled} movie(s) no longer in the deletion plan "
                 "(they stay eligible in deletion order).")
-        save_pending(_full_queue(), stamp_thresholds=True, snapshot_delete_paths=_vanished_keys)
+        save_pending(_full_queue(), stamp_thresholds=True, snapshot_delete_paths=_gone_keys)
         if marked_count:
             log_blank()
             log(f"Marked for deletion: {marked_count} movie(s), "
@@ -8114,13 +8218,13 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
         # Delay disabled, or a manual Cleanup that pruned to every breached
         # target: everything planned was deleted outright, so nothing stays
         # marked — the surviving candidates remain as the eligible queue.
-        save_pending(_full_queue(), stamp_thresholds=True, snapshot_delete_paths=_vanished_keys)
+        save_pending(_full_queue(), stamp_thresholds=True, snapshot_delete_paths=_gone_keys)
     elif mark_store_dirty:
         # Redline runs never reshape the daily plan; they only drop entries
         # whose files they deleted. Redline-only mode lands here for EVERY live
         # run, including manual: the queue is the standing preview, so runs only
         # ever trim it (the app tops it back up afterwards).
-        save_pending(mark_store, snapshot_delete_paths=_vanished_keys)
+        save_pending(mark_store, snapshot_delete_paths=_gone_keys)
 
     # Say it out loud when this run took materially more than it needed, so a
     # 2 GB deficit costing a 42 GB file doesn't have to be worked out by
@@ -8136,11 +8240,9 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
         log_blank()
         log(f"NOTE: this run {_over}")
 
-    # Keep the stored library measure honest about what this run just removed,
-    # so the Summaries that reuse it for the next few hours aren't stale by
-    # exactly the bytes freed here.
-    if bytes_freed and isinstance(effective_library_gb, (int, float)):
-        _remember_library_size(max(0.0, effective_library_gb - bytes_to_gb(bytes_freed)))
+    # Keep the stored library measure — and the dashboard's — honest about what
+    # this run just removed.
+    _record_library_after_deletions(effective_library_gb, bytes_freed)
 
     final_info = get_usage_info()
     final_gb = final_info["used_gb"]
@@ -8155,12 +8257,21 @@ def _delete_and_report(*, candidates, build_stats, total_scanned,
         build_stats=build_stats, total_scanned=total_scanned,
     )
     log_blank()
+    # The season side deleted before this scan began; its seasons are this
+    # run's too, so they belong in the total and on the Deleted line.
+    _sn, _sb = _season_deletions_this_run()
+    # Seasons this run's merge took are marked as it ends — except after a
+    # manual Cleanup, which split and deleted its own share up front.
+    _tk = 0 if _manual_cleanup else _season_takes_this_run()[0]
+    _marked_what = " + ".join(
+        ([f"{marked_count:,} movie{'' if marked_count == 1 else 's'}"] if marked_count else [])
+        + ([f"{_tk} season{'' if _tk == 1 else 's'}"] if _tk else []))
     _cleanup_msg = summary_message(
-        f"Cleanup finished — freed {bytes_to_gb(bytes_freed):.1f} GB.",
-        ("Deleted", f"{deleted_count:,} movie{'' if deleted_count == 1 else 's'}"),
+        f"Cleanup finished — freed {bytes_to_gb(bytes_freed + _sb):.1f} GB.",
+        ("Deleted", f"{deleted_count:,} movie{'' if deleted_count == 1 else 's'}"
+                    + (f" + {_sn} season{'' if _sn == 1 else 's'}" if _sn else "")),
         ("Marked for deletion",
-         f"{marked_count:,} movie{'' if marked_count == 1 else 's'} "
-         f"({DELETE_DELAY_DAYS}-day delay)" if marked_count else ""),
+         f"{_marked_what} ({DELETE_DELAY_DAYS}-day delay)" if _marked_what else ""),
     )
     emit_progress(status="done", phase="done", deleted=deleted_count, marked=marked_count,
                   bytes_freed=bytes_freed, target_bytes=to_free_bytes, current_title="", message=_cleanup_msg)
@@ -8387,6 +8498,14 @@ def main():
                   deleted=0, bytes_freed=0, target_bytes=0, trigger="",
                   current_title="", message="Checking connections…",
                   started_at=_run_started_at())
+    # The season side has already deleted whatever this run deletes of TV, so
+    # say so from the first frame; emit_progress merges, and every later frame
+    # carries it. Fields of their own, which the dashboard adds into its Deleted
+    # and Freed tiles: `deleted` and `bytes_freed` keep meaning the movie side's
+    # work, because the queue-rebuild trigger reads them that way.
+    _seasons_n, _seasons_b = _season_deletions_this_run()
+    if _seasons_n:
+        emit_progress(seasons_deleted=_seasons_n, seasons_bytes_freed=_seasons_b)
 
     if not validate_connections():
         emit_progress(status="error", phase="checking",
@@ -8569,15 +8688,20 @@ def main():
             write_plan_to_queue([], scheduled_count=0)
         record_identity_mismatches(build_stats)
         log_issue_block()
+        # No MOVIE to remove says nothing about the seasons this run's season
+        # side may already have deleted; lead with those when there were any.
+        _sn, _sb = (0, 0) if _is_sim else _season_deletions_this_run()
+        _none_msg = (f"Deleted {_seasons_phrase(_sn, _sb)} — no eligible movies to remove."
+                     if _sn else "No eligible movies to remove.")
         emit_progress(status="done", phase="done", scanned=total_scanned,
-                      message="No eligible movies to remove.")
+                      message=_none_msg)
         # Zero eligible is still a completed run; the daily-summary
         # notification should say so rather than silently not arrive.
         write_run_report(
             mode="simulate" if _is_sim else "cleanup",
             eligible_count=0, marked_count=0, deleted_count=0, bytes_freed=0,
             redline_only=_redline_only_mode(),
-            message="No eligible movies to remove.",
+            message=_none_msg,
             deleted_items=[], marked_items=[],
         )
         return

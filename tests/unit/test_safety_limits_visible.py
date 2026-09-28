@@ -21,6 +21,7 @@ The limits are published even when the threshold they bound is off — you read
 them BEFORE typing a value, which is the moment they are worth having.
 """
 import json
+import math
 import os
 import sys
 import tempfile
@@ -169,6 +170,34 @@ check("no cap set: an unmeasured library holds nothing",
 check("a measured library and disk with the reported settings stays clickable",
       unmeasured(DISK, LIB, MAX_LIBRARY_GB=22000)["ok_for_cleanup"] is True)
 
+# ── The published cap floor is rounded UP, never to nearest ──────────────
+# A 161.3 GB library at 15% has an exact floor of 137.105 GB. Published rounded
+# to nearest, the page said "no lower than 137 GB" — the one whole number the
+# gate refuses, and the engine too, which compares unrounded. Seen in the test
+# lab: 137 was accepted on save, then Simulate reported the target past the
+# safety percentage and marked nothing.
+def state_lib(lib, **over):
+    A.CONFIG_PATH.write_text(json.dumps({**BASE, **over}))
+    with A._config_memo_lock:
+        A._config_memo["key"] = object()
+    return A._space_threshold_state(A.load_config(), dict(DISK), lib)
+
+
+SMALL = 161.3
+EXACT = SMALL * (100 - PCT) / 100
+st = state_lib(SMALL)
+check("the published cap floor is never below the exact one",
+      st["cap_floor_gb"] >= EXACT, (st["cap_floor_gb"], EXACT))
+check("the whole number shown for it is a cap the gate allows",
+      state_lib(SMALL, MAX_LIBRARY_GB=math.ceil(st["cap_floor_gb"]))["safety_blocked"] is False)
+check("...and the whole number under the exact floor is refused",
+      state_lib(SMALL, MAX_LIBRARY_GB=137)["safety_blocked"] is True)
+_tip = state_lib(SMALL, MAX_LIBRARY_GB=137)["cleanup_tooltip"]
+check("the refusal quotes the floor rounded up, a value it would accept",
+      "no lower than 138 GB" in _tip, _tip)
+check("a cap between the exact and the published floor is judged on the exact one",
+      state_lib(SMALL, MAX_LIBRARY_GB=137.11)["safety_blocked"] is False)
+
 # ── And the page can show them without recomputing anything ───────────────
 # A second copy of the formula in the browser is how a control comes to
 # disagree with the rule it is reporting; these read the server's numbers.
@@ -183,6 +212,14 @@ check("the note reads the server's limits rather than deriving its own",
       and "/ 100" not in body and "* 0.15" not in body, body[:200])
 check("...and is refreshed by the status poll, not only at first paint",
       js.count("_applySafetyLimitNotes()") >= 3)
+check("the cap note shows its floor rounded UP",
+      "Math.ceil(floor)" in body, body[:400])
+_prune = js.split("function _immediatePruneWarning(")[1].split("\nfunction ")[0]
+check("the save dialog says so when a new cap is below the safety floor",
+      "below the safety floor" in _prune and "cap_floor_gb" in _prune)
+_tpl = (ROOT / "templates/config.html").read_text(encoding="utf-8")
+check("no threshold input steps in hundreds from 1, which made 137 or 10 'invalid'",
+      'step="100"' not in _tpl)
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

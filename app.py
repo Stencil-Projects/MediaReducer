@@ -46,9 +46,12 @@ import sys
 import re
 import shutil
 import signal
+import socket
+import ssl
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone as _utc_tz
 from pathlib import Path, PurePosixPath
@@ -2580,6 +2583,17 @@ def run_script(mode_override: str | None = None, manual: bool = False,
             if stopped:
                 _mark_progress_terminal("stopped", "Run stopped.", force=True)
             elif returncode == 0:
+                # The seasons this run's merge gave the season side are marked
+                # now, in the run that decided them, as its movies were. Not
+                # after a manual Cleanup: it split and deleted its own share up
+                # front, and whatever its full scan merged afterwards is left for
+                # the regular cycle rather than marked on top of a done job.
+                # (`manual` alone is every Dashboard button, Simulate included.)
+                if not (manual and _is_cleanup_mode(_effective_mode)):
+                    try:
+                        _mark_engine_takes(_run_started_at, _tv_report)
+                    except Exception as e:
+                        print(f"TV cleanup: marking this run's seasons failed: {e}", flush=True)
                 # A completed Redline fast path asks for its preview to be rebuilt;
                 # any cleanup in redline-only mode that thinned the preview does too.
                 _maybe_rebuild_preview_after_run(
@@ -2880,13 +2894,18 @@ _reconcile_deferred_ticks = 0
 _RECONCILE_DEFER_TICKS = 4
 
 def _run_reconcile_subprocess(config_path: Path, *, refetch: bool,
-                              trigger: str, timeout: int = 600) -> bool:
-    """Run engine.py in the quiet `reconcile` mode against config_path."""
+                              trigger: str, timeout: int = 600,
+                              run_started_at: float | None = None) -> bool:
+    """Run engine.py in the quiet `reconcile` mode against config_path.
+    run_started_at, when given, is the identity the reconcile's season order
+    was stamped under, so the engine's split can find it."""
     env = os.environ.copy()
     env["MEDIAREDUCER_CONFIG"] = str(config_path)
     env["MEDIAREDUCER_MODE_OVERRIDE"] = "reconcile"
     env["MEDIAREDUCER_RECONCILE_REFETCH"] = "1" if refetch else "0"
     env["MEDIAREDUCER_RECONCILE_TRIGGER"] = trigger
+    if run_started_at:
+        env["MEDIAREDUCER_RUN_STARTED_AT"] = repr(float(run_started_at))
     try:
         proc = subprocess.run(
             ["python3", "-u", str(SCRIPT_PATH)], env=env,
@@ -2911,10 +2930,46 @@ def _maybe_launch_queued_reconcile() -> None:
         run_reconcile(refetch=nxt[0], trigger=nxt[1])
 
 
+def _reconcile_season_order(cfg: dict) -> list | None:
+    """The eligible season order a config-save reconcile splits the pool with:
+    the stored snapshot through the current plan — the same seasons, in the
+    same order, the Marked & Eligible window lists. None when seasons take no
+    part (TV cleanup off or out of scope, or no TV in the snapshot)."""
+    if not _tv_cleanup_armed(cfg):
+        return None
+    try:
+        data, _err = _read_library_snapshot()
+        rows = [r for r in ((data or {}).get("movies") or [])
+                if isinstance(r, dict) and r.get("media_type") == "tv"]
+    except Exception:
+        return None
+    if not rows:
+        return None
+    return [e for e in _tv_season_plan(rows, cfg)["order"]
+            if e.get("sid") and e.get("path")]
+
+
 def _reconcile_worker(refetch: bool, trigger: str) -> None:
     global _summary_active, _summary_queued, _reconcile_active
+    # A reconcile rebuilds the movie plan without a scan, so it splits the pool
+    # without one too: this reconcile's season order goes to the engine under
+    # an identity of its own, and the seasons its split takes are marked when it
+    # ends — the same handshake a full-scan run makes. Any failure here leaves
+    # the reconcile movie-only, which is what it always was.
+    rid = None
     try:
-        _run_reconcile_subprocess(CONFIG_PATH, refetch=refetch, trigger=trigger)
+        order = _reconcile_season_order(load_config())
+        if order is not None:
+            rid = time.time()
+            _stamp_tv_season_order(order, rid)
+            _TV_PASS_PLAN.clear()
+            _TV_PASS_PLAN.update(run=rid, order=order)
+    except Exception:
+        rid = None
+    try:
+        if (_run_reconcile_subprocess(CONFIG_PATH, refetch=refetch, trigger=trigger,
+                                      run_started_at=rid) and rid):
+            _mark_engine_takes(rid, None)
     except Exception:
         pass
     with _run_lock:
@@ -3425,11 +3480,18 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
             queued_gb = 0.0   # unreadable queue nets out nothing: keep the strict floor
         if max_pct_ok and library_gb_val and library_gb_val > 0:
             queued_gb = min(queued_gb, library_gb_val * max_pct / 100)
+    cap_floor_exact = None
     if max_pct_ok and library_gb_val and library_gb_val > 0:
         # Computed whether or not a cap is set: with the cap off there is nothing
         # to judge, but the page still shows the floor so you can see where the
         # limit sits BEFORE typing a value into it.
-        cap_floor_gb = round(max(0.0, library_gb_val - queued_gb) * (100 - max_pct) / 100, 1)
+        #
+        # Judged against the EXACT floor, published rounded UP. Rounded to
+        # nearest, a 137.1 GB floor went out as "no lower than 137 GB" — the one
+        # value the page advised was the one the gate (and the engine, which
+        # compares unrounded) refused. Rounded up, whatever is shown is allowed.
+        cap_floor_exact = max(0.0, library_gb_val - queued_gb) * (100 - max_pct) / 100
+        cap_floor_gb = math.ceil(cap_floor_exact * 10) / 10
     if cap_configured and cap_floor_gb is None:
         # Same hole on the cap side, and a worse one: the cap's whole job is to
         # trim the library down, so with no library measurement there was no
@@ -3441,14 +3503,16 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
                               "Simulate first.")
         safety_errors.append(cap_safety_message)
     elif cap_configured:
-        cap_safety_ok = cap_gb >= cap_floor_gb
+        cap_safety_ok = cap_gb >= cap_floor_exact
         if not cap_safety_ok:
             # Name the library the floor was actually derived from. With a queue
             # netted out that is not the library's size, and quoting the raw
-            # figure would make the stated sum fail to add up.
+            # figure would make the stated sum fail to add up. The floor is quoted
+            # rounded UP, like the published one: rounded to nearest it could
+            # name a value that is itself refused.
             cap_safety_message = (
                 f"Library Size Cap would delete more than the safety percentage of the "
-                f"library — no lower than {cap_floor_gb:,.0f} GB ({max_pct:g}% of the "
+                f"library — no lower than {math.ceil(cap_floor_gb):,} GB ({max_pct:g}% of the "
                 f"{library_gb_val - queued_gb:,.0f} GB library"
                 + (f", after the {queued_gb:,.0f} GB already marked" if queued_gb else "")
                 + ").")
@@ -4121,17 +4185,31 @@ def _plex_series_inventory(conn: dict) -> list | None:
 
 def _merge_tv_sources(jf_rows: list | None, px_rows: list | None) -> list:
     """One inventory from up to two servers watching the same files, joined by
-    normalized title AND year. The year matters: same-title distinct shows are
-    real (Doctor Who 1963/2005), and a title-only join would graft one show's
+    the series' IMDb id when both servers name one, and otherwise by
+    normalized title AND year.
+
+    The IMDb id first because titles differ between servers: Plex calls a
+    show "The Office (US)" where Jellyfin says "The Office", and the title join
+    split it into two rows — which then both claimed one folder, so the scope
+    pass took the show out of cleanup for good (seen in the test lab). The
+    year matters for the title join: same-title distinct shows are real
+    (Doctor Who 1963/2005), and a title-only join would graft one show's
     Jellyfin identity onto the other's folder — the deletion pass would then
-    list show A's files under show B's path. Sizes measure the same files, so
-    a disagreement keeps the larger measurement; identity from both sides is
-    kept (source_id = Plex, jf_source_id = Jellyfin) so the deletion pass can
-    ask either server for the season's file list."""
+    list show A's files under show B's path. For the same reason two rows
+    whose IMDb ids DIFFER are never joined on their title. Sizes measure the
+    same files, so a disagreement keeps the larger measurement; identity from
+    both sides is kept (source_id = Plex, jf_source_id = Jellyfin) so the
+    deletion pass can ask either server for the season's file list."""
     def _key(r):
         return (_norm_series_title(r["title"]), r.get("year") or None)
 
+    def _imdb(r):
+        v = str(r.get("imdb_id") or "").strip().lower()
+        return v if v.startswith("tt") else None
+
     by_title: dict[tuple, dict] = {}
+    by_imdb: dict[str, dict] = {}
+    shared_imdb: set = set()
     for r in (px_rows or []):
         k = _key(r)
         # Two same-title same-year shows on ONE server cannot be told apart
@@ -4139,13 +4217,35 @@ def _merge_tv_sources(jf_rows: list | None, px_rows: list | None) -> list:
         while k in by_title:
             k = (k[0], k[1], id(r))
         by_title[k] = r
+        i = _imdb(r)
+        if i:
+            if i in by_imdb:
+                shared_imdb.add(i)   # one id on two rows: no identity to join on
+            by_imdb[i] = r
+    for i in shared_imdb:
+        by_imdb.pop(i, None)
     for r in (jf_rows or []):
         k = _key(r)
-        base = by_title.get(k)
+        i = _imdb(r)
+        base = by_imdb.get(i) if i else None
         if base is None:
+            base = by_title.get(k)
+            if base is not None and i and _imdb(base) and _imdb(base) != i:
+                base = None   # same title and year, different shows
+        if base is None:
+            while k in by_title:
+                k = (k[0], k[1], id(r))
             by_title[k] = r
             continue
         base["jf_source_id"] = r.get("jf_source_id")
+        # The name the other server knows the show by. Watch history,
+        # favorites and protected collections are joined to rows by title, and
+        # a row joined by IMDb id carries only Plex's: without this, Jellyfin's
+        # plays, favorite and collections for "The Office" would all miss a row
+        # called "The Office (US)" — a watched, protected show scoring as
+        # never-watched and unprotected.
+        if _norm_series_title(r.get("title")) != _norm_series_title(base.get("title")):
+            base["alt_titles"] = sorted(set(base.get("alt_titles") or []) | {r["title"]})
         base["tv_status"] = base.get("tv_status") or r.get("tv_status")
         base["imdb_id"] = base.get("imdb_id") or r.get("imdb_id")
         base["added_at"] = base.get("added_at") or r.get("added_at")
@@ -4486,16 +4586,28 @@ def _annotate_tv_watch(rows: list, cfg: dict, strict: bool = False) -> None:
     if not taut and not jf and not jf_favs and not protected:
         return
     empty = _new_series_agg()
+
+    def _richest(src: dict, keys: list) -> dict:
+        # Each server files a show under its own title; a row merged across
+        # servers answers to all of them. Of several matches, the one with the
+        # most watching keeps the show longest — the safe side of a doubt.
+        found = [src[k] for k in keys if k in src]
+        return max(found, key=lambda g: (g["plays"], g["last_played"])) if found else empty
+
     for row in rows:
-        k = _norm_series_title(row.get("title"))
-        a, b = taut.get(k, empty), jf.get(k, empty)
+        keys = list(dict.fromkeys(
+            k for k in [_norm_series_title(row.get("title"))]
+            + [_norm_series_title(t) for t in (row.get("alt_titles") or [])] if k))
+        a, b = _richest(taut, keys), _richest(jf, keys)
         row["plays"] = max(a["plays"], b["plays"])
         row["users"] = max(len(a["users"]), len(b["users"]))
         row["last_played"] = max(a["last_played"], b["last_played"])
         row["tv_episodes_watched"] = max(len(a["eps"]), len(b["eps"]))
-        if _norm_series_title(row.get("title")) in jf_favs:
+        # Protection by ANY name the show goes by — a favorite on one server or
+        # a collection on the other shields the one set of files.
+        if any(k in jf_favs for k in keys):
             row["favorite"] = True
-        if _norm_series_title(row.get("title")) in protected:
+        if any(k in protected for k in keys):
             row["protected"] = True
 
         for season in row.get("tv_seasons") or []:
@@ -4678,7 +4790,7 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
     imdb_in_use = ss["quality_weight"] > 0 or ss["max_imdb_rating"] is not None
 
     order = []
-    excluded = {"off_path": 0, "protected": 0, "favorite": 0,
+    excluded = {"off_path": 0, "ambiguous_folder": 0, "protected": 0, "favorite": 0,
                 "latest_of_continuing": 0, "oversized_season": 0, "season_rule": 0,
                 "recently_added": 0, "high_rated": 0, "no_imdb_data": 0,
                 "unplayed": 0}
@@ -4689,7 +4801,9 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
         if not seasons:
             continue
         if not r.get("tv_in_scope"):
-            excluded["off_path"] += len(seasons)
+            # Out of scope either way; counted apart when it was an ambiguous
+            # folder, which no path setting would fix.
+            excluded["ambiguous_folder" if r.get("tv_scope_conflict") else "off_path"] += len(seasons)
             continue
         if r.get("protected"):
             excluded["protected"] += len(seasons)
@@ -5005,6 +5119,115 @@ def _engine_takes_for_pass(order: list, cfg: dict) -> tuple[dict, dict]:
     return takes, pool
 
 
+def _fresh_takes_for_pass(order: list, cfg: dict) -> tuple[dict, dict]:
+    """The season takes for a manual Cleanup: TODAY's pool deficit split afresh
+    between TODAY's eligible seasons and the stored movie queue, instead of the
+    last full scan's merge (_engine_takes_for_pass). Same shape as that one.
+
+    The engine's merge is sized to the deficit of the scan that made it, and a
+    manual Cleanup often faces a different one: a lowered cap, a threshold
+    save, files added since. The movie side then covered all the growth,
+    because nothing had given the seasons a share of it — in the test lab a
+    Cleanup after the cap went from 138 to 120 GB deleted Pacific Rim (47.0)
+    and Battleship (55.5) while Manifest S1 (33.3) and Riverdale S1 (40.7) sat
+    below them in the pool order. The movie queue carries every eligible
+    movie's score and size as the last plan left them — re-scored by a
+    config-save reconcile, watch-refreshed by the upkeep — so the merge here
+    ranks the whole pool on today's numbers, with the same shared split the
+    engine uses."""
+    pool = {"target_bytes": _pool_deletion_target_bytes(cfg),
+            "tv_share_bytes": 0, "movie_share_bytes": 0}
+    takes: dict = {}
+    if pool["target_bytes"] <= 0:
+        return takes, pool
+    by_key = {_tv_mark_key(e): e for e in order if e.get("sid") and e.get("path")}
+    movies = [(e.get("score"), e.get("size_bytes"))
+              for e in (_pending_raw() or {}).values() if isinstance(e, dict)]
+    share, picked = shared.split_pool(
+        [(e.get("score"), e.get("size_bytes"), k) for k, e in by_key.items()],
+        movies, pool["target_bytes"],
+        _clamp_near_tie_pts(cfg.get("NEAR_TIE_PTS", 2)))
+    for t in picked:
+        e = by_key[t["key"]]
+        e["take"] = True
+        takes[t["key"]] = e
+    pool["tv_share_bytes"] = share
+    pool["movie_share_bytes"] = max(0, pool["target_bytes"] - share)
+    return takes, pool
+
+
+# The season plan the run's pass built, for the marking step at the run's end.
+# One run at a time (the run lock), so one slot; matched by run identity.
+_TV_PASS_PLAN: dict = {}
+
+
+def _mark_engine_takes(run_started_at, report: dict | None = None) -> int:
+    """Mark the seasons THIS run's engine merge gave the season side, as the run
+    ends — the way the movie side marks its share in the run that decides it.
+    Returns how many seasons were newly marked.
+
+    They used to wait for the NEXT pass to be marked. So a Simulate whose plan
+    was all seasons finished saying "Dry run — space limits are satisfied,
+    nothing marked", the dashboard said "Over space limits — run Simulate to
+    mark the plan", and it took a second Simulate before the Marked list showed
+    the seasons (seen in the test lab). In Automatic Cleanup it cost a day: the
+    delay clock started a run late, so seasons deleted a day after the films
+    their split was decided with.
+
+    Only a merge from THIS run, over this run's own plan, and only the marking
+    step: whatever the merge no longer takes is unmarked, a season it keeps
+    marked keeps its clock, and nothing is deleted here — deletion stays the
+    pass's, which re-fetches every fact first."""
+    plan = _TV_PASS_PLAN
+    if not run_started_at or not shared.same_run(plan.get("run"), run_started_at):
+        return 0
+    try:
+        with db.connect(db_path()) as conn:
+            doc = db.get_meta(conn, "tv_takes")
+    except Exception:
+        return 0
+    if not (isinstance(doc, dict)
+            and shared.same_run(doc.get("run_started_at"), run_started_at)):
+        return 0
+    by_key = {_tv_mark_key(e): e for e in (plan.get("order") or [])
+              if e.get("sid") and e.get("path")}
+    take_keys = [t.get("key") for t in (doc.get("entries") or [])
+                 if isinstance(t, dict) and t.get("key") in by_key]
+    st = _tv_cleanup_state()
+    marked = st.setdefault("marked", {})
+    dropped = [k for k in marked if k not in take_keys]
+    for k in dropped:
+        del marked[k]
+    try:
+        delay = max(1, int(float(load_config().get("DELETE_DELAY_DAYS") or 1)))
+    except (TypeError, ValueError):
+        delay = 1
+    now = time.time()
+    new = 0
+    for k in take_keys:
+        if k in marked:
+            continue
+        e = by_key[k]
+        marked[k] = {"marked_at": now, "delay_days": delay,
+                     "title": e["title"], "season": e["season"],
+                     "year": e.get("year"), "path": e["path"],
+                     "size_bytes": e["size_bytes"], "score": e["score"]}
+        new += 1
+    if not (new or dropped):
+        return 0
+    # The run's report says what the run did, and these marks are its doing:
+    # both the copy the notification is about to read and the persisted one.
+    # (Keyed by identity, so one object passed twice is counted once.)
+    reps = {id(r): r for r in (report, st.get("last_pass")) if isinstance(r, dict)}
+    for rep in reps.values():
+        rep["marked_new"] = int(rep.get("marked_new") or 0) + new
+        rep["unmarked"] = int(rep.get("unmarked") or 0) + len(dropped)
+    _save_tv_cleanup_state(st)
+    print(f"TV cleanup: {new} season(s) marked from this run's split"
+          + (f", {len(dropped)} unmarked" if dropped else ""), flush=True)
+    return new
+
+
 def _tv_marked_count() -> int:
     """Marked seasons with a running delay clock — counted right alongside
     the marked movies in the dashboard's one number. One cleanup, one
@@ -5139,7 +5362,14 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
         print(f"TV cleanup is off — {report['cleanup_off']} season(s) planned "
               f"but not eligible", flush=True)
         return _finish()
-    takes, pool = _engine_takes_for_pass(plan["order"], cfg)
+    # A manual Cleanup deletes what it takes right now, so it splits the deficit
+    # it faces now; every other pass executes the last scan's merge, whose
+    # marks wait out the delay (see the two functions). Both flags: `immediate`
+    # comes from `manual`, which a Dashboard SIMULATE sets too — and a dry run's
+    # pass splitting against the queue it is about to rebuild claimed the wrong
+    # season share before its own scan had run.
+    takes, pool = (_fresh_takes_for_pass(plan["order"], cfg) if (execute and immediate)
+                   else _engine_takes_for_pass(plan["order"], cfg))
     report["pool_target_gb"] = round(pool["target_bytes"] / 1e9, 1)
     report["tv_share_gb"] = round(pool["tv_share_bytes"] / 1e9, 1)
     report["movie_share_gb"] = round(pool["movie_share_bytes"] / 1e9, 1)
@@ -5214,9 +5444,12 @@ def _run_tv_cleanup_pass(cfg: dict, *, execute: bool, immediate: bool = False,
     # bytes no season will free. Stamped only on this path — the abort, off,
     # safety and disarmed paths return earlier, so the engine sees no same-run
     # order there and merges movies-only.
-    _stamp_tv_season_order(
-        [e for e in plan["order"] if _tv_mark_key(e) not in _gone_keys],
-        run_started_at)
+    _remaining_order = [e for e in plan["order"] if _tv_mark_key(e) not in _gone_keys]
+    _stamp_tv_season_order(_remaining_order, run_started_at)
+    # Kept for the end of this run: the engine's merge names seasons by key,
+    # and marking one needs the facts this plan holds (see _mark_engine_takes).
+    _TV_PASS_PLAN.clear()
+    _TV_PASS_PLAN.update(run=run_started_at, order=_remaining_order)
 
     # Same note the engine prints for movies, for the season side's own share:
     # a season is the biggest deletion unit there is, so this is where a small
@@ -5630,13 +5863,58 @@ def _appdata_mount_state() -> dict:
     }
 
 
-def _probe_json(url: str, headers: dict | None = None, timeout: int = 5) -> tuple[bool, str]:
-    """Small JSON HTTP probe used by the Config health check."""
+def _probe_endpoint(url: str) -> str:
+    """host:port of a probe URL — the only part of it safe to show. Never the
+    path or query: Tautulli's and Plex's probe URLs carry the key there."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return "the server"
+    return f"{host}:{port}" if host else "the server"
+
+
+def _probe_failure_reason(e: BaseException, url: str, key_word: str = "API key") -> str:
+    """What stopped a connection probe, and what to check, in words safe for
+    the page. Every failure used to read "<service> did not connect. Check the
+    URL and API key." — the same for a wrong port, a stopped server and a bad
+    key — and Auto Detect fills keys but never ports, so anyone off the default
+    port was sent to a key that was fine. Never the raw exception text: some
+    errors quote the URL they failed on, and a probe URL can carry the key."""
+    where = _probe_endpoint(url)
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code in (401, 403):
+            return f"{where} refused the {key_word} (HTTP {e.code}) — check the {key_word}"
+        if e.code == 404:
+            return (f"{where} answered, but not as this service (HTTP 404) — "
+                    "check the URL and port")
+        return f"{where} answered with HTTP {e.code} — check the URL"
+    reason = getattr(e, "reason", e)   # URLError wraps the socket-level error
+    if isinstance(reason, (socket.timeout, TimeoutError)) or isinstance(e, (socket.timeout, TimeoutError)):
+        return f"{where} did not answer in time — check the URL, and that the server is running"
+    if isinstance(reason, ConnectionRefusedError):
+        return f"nothing is listening at {where} (connection refused) — check the URL and port"
+    if isinstance(reason, socket.gaierror):
+        return f"{where.rsplit(':', 1)[0]} could not be found — check the URL"
+    if isinstance(reason, ssl.SSLError) or isinstance(e, ssl.SSLError):
+        return (f"the secure connection to {where} failed — check http:// against "
+                "https:// in the URL")
+    if isinstance(e, ValueError):   # JSONDecodeError and UnicodeDecodeError included
+        return (f"{where} answered, but not with this service's API — "
+                "check the URL and port")
+    return f"could not reach {where} — check the URL, and that the server is running"
+
+
+def _probe_json(url: str, headers: dict | None = None, timeout: int = 5,
+                key_word: str = "API key") -> tuple[bool, str]:
+    """Small JSON HTTP probe used by the Config health check. A failure's
+    message is _probe_failure_reason's, never the raw error."""
     try:
         _json_request(url, headers=headers, timeout=timeout)
         return True, "reachable"
     except Exception as e:
-        return False, str(e)
+        return False, _probe_failure_reason(e, url, key_word)
 
 
 def _settled(call):
@@ -5675,7 +5953,7 @@ def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: boo
             purl = (f"{conn['plex_url'].rstrip('/')}/library/sections"
                     f"?X-Plex-Token={conn['plex_token']}")
             jobs["plex"] = lambda: _probe_json(
-                purl, headers={"Accept": "application/json"}, timeout=6)
+                purl, headers={"Accept": "application/json"}, timeout=6, key_word="token")
     if use_jellyfin and conn.get("jellyfin_url") and conn.get("jellyfin_key"):
         jf_key = conn["jellyfin_key"]
         jurl = f"{conn['jellyfin_url'].rstrip('/')}/System/Info"
@@ -5728,7 +6006,9 @@ def _probe_result(pre: dict, name: str) -> tuple[bool, str]:
     got = pre.get(name)
     if isinstance(got, tuple):
         return got
-    return False, str(got) if got is not None else "not probed"
+    # Not the exception's text, for the reason _probe_failure_reason gives.
+    return False, ("the check did not complete — check the URL" if got is not None
+                   else "not probed")
 
 
 def _sample_result(pre: dict, name: str) -> list:
@@ -7043,7 +7323,9 @@ def api_debug_cache():
                          f"{pex['latest_of_continuing']} latest-of-continuing, "
                          f"{pex['oversized_season']} over the episode cap, "
                          f"{pex['season_rule']} by the season-eligibility rule, "
-                         f"{pex['off_path']} off-path")
+                         f"{pex['off_path']} off-path"
+                         + (f", {pex['ambiguous_folder']} with an ambiguous folder"
+                            if pex.get('ambiguous_folder') else ""))
             lp = tv_state.get("last_pass") if isinstance(tv_state.get("last_pass"), dict) else None
             if lp:
                 lines.append(f"  seasons in the last run: {lp.get('date')} ({lp.get('mode')}) | "
@@ -7107,7 +7389,7 @@ def api_debug_cache():
                 if not _title.endswith(f"({r.get('year')})"):
                     _title = f"{_title} ({r.get('year')})"
                 lines.append(
-                    f"    {'[in-scope]' if r.get('tv_in_scope') else '[off-path]'} "
+                    f"    {'[in-scope]' if r.get('tv_in_scope') else ('[ambiguous]' if r.get('tv_scope_conflict') else '[off-path]')} "
                     f"{_title} | {r.get('tv_status') or '?'} | "
                     f"{(r.get('size_bytes') or 0) / 1e9:.1f} GB | "
                     f"eps {r.get('tv_episodes_watched') or 0}/{r.get('tv_episodes') or 0} watched | "
@@ -8061,7 +8343,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
             if not ok:
                 tautulli_blocker = True
                 add_error(
-                    "Tautulli did not connect. Check the URL and API key.",
+                    f"Tautulli did not connect: {msg}.",
                     ["TAUTULLI_URL", "TAUTULLI_API_KEY"],
                     mounts_to_highlight=["tautulli"],
                 )
@@ -8085,7 +8367,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
             plex_connected = ok
             if not ok:
                 add_warning(
-                    "Plex did not connect. Check the URL and token.",
+                    f"Plex did not connect: {msg}.",
                     ["PLEX_URL", "PLEX_TOKEN"],
                 )
                 if cleanup_auto_section:
@@ -8112,7 +8394,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
             jellyfin_connected = ok
             if not ok:
                 jellyfin_blocker = True
-                add_error("Jellyfin did not connect. Check the URL and API key.", ["JELLYFIN_URL", "JELLYFIN_API_KEY"])
+                add_error(f"Jellyfin did not connect: {msg}.", ["JELLYFIN_URL", "JELLYFIN_API_KEY"])
 
     # Radarr is optional and its API key is the on/off switch: no key means Radarr
     # integration stays locked with no warning, whatever the URL holds. With a key, a
@@ -8133,7 +8415,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
         radarr_connected = ok
         if not ok:
             add_warning(
-                "Radarr did not connect. Optional cleanup is locked.",
+                f"Radarr did not connect: {msg}. Optional cleanup is locked.",
                 ["RADARR_URL", "RADARR_API_KEY"],
                 )
 
@@ -8151,7 +8433,7 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
         sonarr_connected = ok
         if not ok:
             add_warning(
-                "Sonarr did not connect.",
+                f"Sonarr did not connect: {msg}.",
                 ["SONARR_URL", "SONARR_API_KEY"],
                 )
 
@@ -9530,22 +9812,33 @@ def pending_delete_forecast(cfg: dict | None = None) -> dict:
     # and no delay to age against.
     if _redline_only_mode_cfg(cfg):
         return {"count": len(entries), "marked": 0, "ripe": 0, "event_on": None,
-                "event_count": 0, "event_bytes": 0}
+                "event_count": 0, "event_movies": 0, "event_seasons": 0,
+                "event_bytes": 0}
     # Only CLOCKED entries are scheduled; the eligible remainder of the queue
     # (days_remaining None) has no dates and never enters the forecast.
     clocked = [e for e in entries if e["days_remaining"] is not None]
-    ripe = [e for e in clocked if e["days_remaining"] <= 0]
+    # The EVENT is the whole pool's next batch. Marked seasons age on the same
+    # clock and go in the same daily run, so they are part of it; a plan of
+    # seasons alone used to read as no plan at all ("run Simulate to mark the
+    # plan", with two seasons marked). `count` and `marked` stay movie-only:
+    # the queue size and _marked_clocked_count read them that way.
+    pool_clocked = clocked + [e for e in _tv_marked_entries(cfg)
+                              if e.get("days_remaining") is not None]
+    ripe = [e for e in pool_clocked if e["days_remaining"] <= 0]
     if ripe:
         event_on, batch = None, ripe   # deletable at the next daily run
     else:
-        event_on = min((e["delete_on"] for e in clocked), default=None)
-        batch = [e for e in clocked if e["delete_on"] == event_on] if event_on else []
+        event_on = min((e["delete_on"] for e in pool_clocked), default=None)
+        batch = [e for e in pool_clocked if e["delete_on"] == event_on] if event_on else []
+    seasons = sum(1 for e in batch if e.get("media") == "tv")
     return {
         "count": len(entries),
         "marked": len(clocked),
         "ripe": len(ripe),
         "event_on": event_on,
         "event_count": len(batch),
+        "event_movies": len(batch) - seasons,
+        "event_seasons": seasons,
         "event_bytes": int(sum(e.get("size_bytes") or 0 for e in batch)),
     }
 
@@ -9735,8 +10028,11 @@ def api_library_snapshot():
     imdb_on_disk = tsv.exists() or tsv.with_name(tsv.name + ".gz").exists()
     # The snapshot carries each movie's /library path as an internal join key for
     # the engine's incremental re-verify. Paths never leave the server (the debug
-    # report redacts them too), so strip it from the browser payload.
-    movies = [{k: v for k, v in m.items() if k != "path"} if isinstance(m, dict) else m
+    # report redacts them too), so strip it from the browser payload. A show's
+    # scope conflict is a list of folder PATHS too; the page only needs to know
+    # there was one, to say "ambiguous folder" rather than "off monitored paths".
+    movies = [{k: (bool(v) if k == "tv_scope_conflict" else v)
+               for k, v in m.items() if k != "path"} if isinstance(m, dict) else m
               for m in movies]
     resp = jsonify({"ok": True, "built_at": data.get("built_at"), "movies": movies,
                     "imdb_dataset_on_disk": imdb_on_disk})
@@ -9820,6 +10116,10 @@ def api_status():
         "marked_clocked_count":    _marked_clocked_count(cfg, _forecast),
         "marked_event_on":         _forecast["event_on"],
         "marked_event_count":      _forecast["event_count"],
+        # .get: a forecast without the split (a stubbed or older one) reads as
+        # the movie count it always was.
+        "marked_event_movies":     _forecast.get("event_movies", _forecast["event_count"]),
+        "marked_event_seasons":    _forecast.get("event_seasons", 0),
         "marked_event_bytes":      _forecast["event_bytes"],
         "delete_delay_days":       _delay_days,
         # Redline-only mode (Headroom disabled): the marked queue is a standing
@@ -10740,6 +11040,16 @@ def api_save_config():
         save_health = None
         radarr_section_detection = None
         radarr_section_cache_incomplete = _radarr_section_detection_cache_incomplete(cfg)
+        # Switched on with nothing detected: look again on this save. The
+        # one-shot below otherwise ran only when the credentials changed, so a
+        # detection that failed then (Radarr held no films yet, or its paths did
+        # not match Plex) never ran again, and the page kept promising one
+        # "after Radarr and Plex connect" while both were connected. The form
+        # posts "auto" for an enabled cleanup, normalized below to the cached
+        # section when there is one — so "auto" here means none is cached.
+        radarr_section_cache_missing = (
+            str(cfg.get("RADARR_OVERSEERR_SECTION_ID") or "").strip().lower() == "auto"
+            and not str(cfg.get("_RADARR_DETECTED_SECTION_ID") or "").strip())
         if radarr_section_credentials_changed:
             # The cached section was detected with different Radarr/Plex values. Clear
             # it; a successful one-shot detection below repopulates it for the UI and
@@ -11060,15 +11370,17 @@ def api_save_config():
             save_health["radarr_cleanup_forced_disabled"] = True
 
         if (
-            (radarr_section_credentials_changed or radarr_section_cache_incomplete)
+            (radarr_section_credentials_changed or radarr_section_cache_incomplete
+             or radarr_section_cache_missing)
             and save_health
             and save_health.get("radarr_connected")
             and save_health.get("plex_connected")
         ):
-            # One-shot section auto-detection: runs after saved Radarr/Plex credentials
-            # connect, not when the cleanup checkbox is toggled. The cache-repair branch
-            # re-runs detection when the cached entry has a section ID but is missing its
-            # name/match metadata.
+            # Section auto-detection: runs after saved Radarr/Plex credentials
+            # connect, and on any save while the cleanup is on with nothing
+            # detected yet — never on a save that has a detection to keep. The
+            # cache-repair branch re-runs detection when the cached entry has a
+            # section ID but is missing its name/match metadata.
             radarr_section_detection = _detect_radarr_plex_section(cfg)
             detected_section_id = str(radarr_section_detection.get("section_id") or "").strip()
             if _store_radarr_section_detection_cache(cfg, radarr_section_detection):

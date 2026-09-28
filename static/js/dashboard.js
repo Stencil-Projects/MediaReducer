@@ -469,7 +469,7 @@ function renderProgress(p) {
   // box (Scanned / Eligible / Would-delete) inert. Summary is exempt — see
   // _logBoxJumpable — so its count isn't tracked here.
   _rpStatCounts = { scan: Number(p.scanned) || 0, eligible: Number(p.eligible) || 0,
-                    deletions: Number(p.deleted) || 0 };
+                    deletions: (Number(p.deleted) || 0) + (Number(p.seasons_deleted) || 0) };
   _applyLogJumpAffordance();
 
   document.getElementById('rp-trigger').textContent = (active && p.trigger) ? ('· ' + _rpTriggerLabel(p.trigger)) : '';
@@ -655,9 +655,14 @@ function renderProgress(p) {
   // Dry runs (Simulate AND Debug Cleanup) never delete — their tiles must say
   // "Would", not claim removals that didn't happen.
   document.getElementById('rp-stat-deleted-label').textContent = (isSim || isDebugCleanup) ? 'Would delete' : 'Deleted';
-  document.getElementById('rp-stat-deleted').textContent = (Number(p.deleted) || 0).toLocaleString();
+  // Seasons the run's season side deleted ride their own fields (the movie
+  // side's `deleted` feeds the queue-rebuild trigger), but they are this run's
+  // deletions all the same, so the tiles count both.
+  document.getElementById('rp-stat-deleted').textContent =
+    ((Number(p.deleted) || 0) + (Number(p.seasons_deleted) || 0)).toLocaleString();
   document.getElementById('rp-stat-freed-label').textContent = (isSim || isDebugCleanup) ? 'Would free' : 'Freed';
-  document.getElementById('rp-stat-freed').textContent = _formatReclaimedBytes(p.bytes_freed);
+  document.getElementById('rp-stat-freed').textContent =
+    _formatReclaimedBytes((Number(p.bytes_freed) || 0) + (Number(p.seasons_bytes_freed) || 0));
 }
 
 let _progressFetchSeq = 0;
@@ -848,7 +853,10 @@ function _updateDeletedCounter(count, reclaimedBytes = 0, reclaimedLabel = '', m
   const spaceNumber = document.getElementById('pruned-space-number');
   const spaceUnit = document.getElementById('pruned-space-unit');
   if (value) value.textContent = prCommaNum(safe, 0);
-  if (unit) unit.textContent = safe === 1 ? 'ITEM' : 'ITEMS';
+  // FILES, not items: deleted.log has a line per file, so a TV season counts
+  // one per episode. Called items, it read as seasons and films next to the
+  // Marked tile, whose items are exactly that.
+  if (unit) unit.textContent = safe === 1 ? 'FILE' : 'FILES';
   if (markedCount !== null) {
     const countEl = document.getElementById('pruned-marked-count');
     const m = Math.max(0, Math.trunc(Number(markedCount) || 0));
@@ -857,9 +865,10 @@ function _updateDeletedCounter(count, reclaimedBytes = 0, reclaimedLabel = '', m
     // dot separator as the pruned & regained button). The marked number AND
     // the word "Marked" in the label go red the moment anything is marked.
     if (countEl) {
+      // Same no-wrap chunks as the server-rendered markup (see dashboard.html).
       countEl.innerHTML =
-        `<span id="pruned-marked-hot" class="${imm > 0 ? 'marked-hot' : ''}">${prCommaNum(imm, 0)} <span class="unit">ITEMS</span></span> ` +
-        `<span class="unit" aria-hidden="true">·</span> ${prCommaNum(m, 0)} <span class="unit">ITEMS</span>`;
+        `<span class="dh-stat-chunk"><span id="pruned-marked-hot" class="${imm > 0 ? 'marked-hot' : ''}">${prCommaNum(imm, 0)} <span class="unit">ITEMS</span></span></span> ` +
+        `<span class="dh-stat-chunk"><span class="unit" aria-hidden="true">·</span> ${prCommaNum(m, 0)} <span class="unit">ITEMS</span></span>`;
     }
     document.getElementById('marked-label-word')?.classList.toggle('marked-hot', imm > 0);
   }
@@ -1069,7 +1078,7 @@ async function loadDeletedHistory() {
                 // all, in the mode whose whole premise is that it is the trigger.
                 ? `${marked.length} ${marked.length === 1 ? 'item is' : 'items are'} eligible, in the order they would go when free space hits the Redline floor.`
                 : `${marked.length} ${marked.length === 1 ? 'item is' : 'items are'} eligible, in the order they would go if space is needed — none marked yet.`))
-        : `${count} ${count === 1 ? 'item has' : 'items have'} been pruned · ${reclaimed} reclaimed.`;
+        : `${count} ${count === 1 ? 'file has' : 'files have'} been pruned · ${reclaimed} reclaimed.`;
     }
     // One list per view (both already come newest-first / in plan order from
     // the server): the left button shows the queue, the stats button the history.
@@ -1145,7 +1154,7 @@ async function clearDeletedHistory() {
     _dhRenderPage();
     _updateDeletedCounter(0, 0, '0.0 GB');
     const summary = document.getElementById('deleted-history-summary');
-    if (summary) summary.textContent = '0 items have been pruned · 0 GB reclaimed.';
+    if (summary) summary.textContent = '0 files have been pruned · 0 GB reclaimed.';
     showToast(d.message || 'Deleted history erased.', 'success');
   } catch (err) {
     showToast(String(err.message || err), 'danger');
@@ -1358,7 +1367,15 @@ function _updateBreachNote() {
           ? `today at ${_runTimeLabel()}` : 'at the next check');
     const ev = _markedEvent || {};
     const evGb = prGbAmount((ev.bytes || 0) / 1e9);
-    const evN = `${ev.count} movie${ev.count === 1 ? '' : 's'}`;
+    // The batch is the whole pool's: marked seasons go in the same run as the
+    // movies. Counts by type when the server sends them; a count with no split
+    // (an older server) is movies, as it always was.
+    const evMovies = Number.isFinite(ev.movies) ? ev.movies : (ev.count || 0);
+    const evSeasons = Number.isFinite(ev.seasons) ? ev.seasons : 0;
+    const evN = [
+      evMovies ? `${evMovies} movie${evMovies === 1 ? '' : 's'}` : '',
+      evSeasons ? `${evSeasons} season${evSeasons === 1 ? '' : 's'}` : '',
+    ].filter(Boolean).join(' and ') || `${ev.count} movies`;
     // Being armed is not the same as being able to run. A media server that
     // stops answering leaves the mode on Automatic Cleanup while the server
     // sends next_run_time=null and the countdown right beside this note reads
@@ -1416,10 +1433,13 @@ function _updateBreachNote() {
         : `Over space limits — a run would delete ${evN}, ${evGb} GB.`;
     } else {
       // Future-dated batch: eligibility starts that calendar day; an armed
-      // scheduler deletes it at the daily run time.
+      // scheduler deletes it at the daily run time. When nothing will run on
+      // its own (Monitor Only, Paused, a scheduler that can't run), no date
+      // holds: nothing deletes then, and a Cleanup pressed now does not wait
+      // for it — so the wording is the ripe branch's conditional one.
       text = willRunItself
         ? `Over space limits — ${evN} (${evGb} GB) delete${ev.count === 1 ? 's' : ''} ${ev.on} at ${_runTimeLabel()}.`
-        : `Over space limits — next deletion ${ev.on}: ${evN}, ${evGb} GB.`;
+        : `Over space limits — a run would delete ${evN}, ${evGb} GB.`;
     }
     el.textContent = text;
     el.hidden = false;
@@ -1686,7 +1706,8 @@ async function syncStatus({refreshLog = true} = {}) {
     if (d.marked_count !== undefined) _eligibleCount = d.marked_count;
     if (d.plan_rebuilding !== undefined) _planRebuilding = !!d.plan_rebuilding;
     if (d.marked_event_count !== undefined) {
-      _markedEvent = { on: d.marked_event_on, count: d.marked_event_count, bytes: d.marked_event_bytes };
+      _markedEvent = { on: d.marked_event_on, count: d.marked_event_count, bytes: d.marked_event_bytes,
+                       movies: d.marked_event_movies, seasons: d.marked_event_seasons };
     }
     _updateStorageCard(d.disk, d.library_gb);
     _renderTargetRows(d);

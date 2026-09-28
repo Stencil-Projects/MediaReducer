@@ -149,6 +149,41 @@ check("...and a merged season keeps the LATER added date",
 check("...and the series totals follow the merged seasons",
       both["size_bytes"] == 17 * GB and both["tv_episodes"] == 4, both)
 
+# ── The IMDb id joins what the titles do not ────────────────────────────────
+# Plex titles the US Office "The Office (US)"; Jellyfin says "The Office". The
+# title join split the show into two rows, both claiming one folder, and the
+# scope pass then took the show out of cleanup for good (seen in the test lab).
+# Both servers report the series' IMDb id, and that is an identity.
+def _tv(title, year, imdb, *, plex=None, jf=None):
+    return A._new_tv_row(title=title, year=year, path=f"/tv/{title}",
+                         seasons=[{"n": 1, "eps": 3, "size_bytes": 3 * GB, "added_at": 1_600_000_000}],
+                         added_at=1_600_000_000, status="ended",
+                         source_id=plex, jf_source_id=jf, imdb_id=imdb)
+
+
+office = A._merge_tv_sources([_tv("The Office", 2005, "tt0386676", jf="jellyfin:o")],
+                             [_tv("The Office (US)", 2005, "tt0386676", plex="plex:446")])
+check("a show the servers title differently is ONE row when its IMDb id matches",
+      len(office) == 1 and office[0]["source_id"] == "plex:446"
+      and office[0]["jf_source_id"] == "jellyfin:o", [(r["title"], r["source_id"], r["jf_source_id"]) for r in office])
+twins = A._merge_tv_sources([_tv("Same Name", 2010, "tt1111111", jf="jellyfin:a")],
+                            [_tv("Same Name", 2010, "tt2222222", plex="plex:b")])
+check("...and two shows sharing a title and year, but not an IMDb id, stay two",
+      len(twins) == 2, [(r["title"], r["source_id"], r["jf_source_id"]) for r in twins])
+bare = A._merge_tv_sources([_tv("No Id Show", 2012, None, jf="jellyfin:n")],
+                           [_tv("No Id Show", 2012, "tt3333333", plex="plex:n")])
+check("...while a side with no IMDb id still joins on title and year",
+      len(bare) == 1 and bare[0]["jf_source_id"] == "jellyfin:n" and bare[0]["source_id"] == "plex:n",
+      [(r["title"], r["source_id"], r["jf_source_id"]) for r in bare])
+dup = A._merge_tv_sources([_tv("Rebooted", 2019, "tt4444444", jf="jellyfin:r")],
+                          [_tv("Rebooted", 2019, "tt4444444", plex="plex:r1"),
+                           _tv("Rebooted Again", 2019, "tt4444444", plex="plex:r2")])
+_dup = {r["title"]: r for r in dup}
+check("...and an IMDb id Plex gives to two rows is no identity: the title decides",
+      len(dup) == 2 and _dup["Rebooted"]["jf_source_id"] == "jellyfin:r"
+      and not _dup["Rebooted Again"].get("jf_source_id"),
+      [(r["title"], r["source_id"], r["jf_source_id"]) for r in dup])
+
 # ── Strictness: the deletion path never works from a partial inventory ──────
 CFG = {"USE_JELLYFIN": True, "JELLYFIN_URL": "http://jf.test",
        "JELLYFIN_API_KEY": "k", "USE_PLEX": True,

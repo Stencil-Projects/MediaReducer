@@ -83,6 +83,21 @@ check('an unshielded season is eligible, not inventory', /1 eligible/.test(s.sta
 check('the continuing show\'s LATEST season is the filtered one',
       /filtered — latest season/.test(s.body) && !/inventory/.test(s.body),
       s.body.slice(0, 200));
+// A season row shows the facts its own score reads — the season's plays,
+// watchers and added date — not the series'. Gamma's series row carries 1 play
+// and a 2017 added date; S1 has 5 plays and was added 90 days ago, S2 none and
+// 700 days ago. Showing the series' figures had a season read "Added 1 yr ago"
+// while its own date put it in the grace period, and both seasons shared one
+// play count.
+const seasonCells = await p.evaluate(() => [...document.querySelectorAll('#mtbody tr')]
+  .map(tr => [...tr.querySelectorAll('td')].map(td => td.textContent.trim())));
+const cS1 = seasonCells.find(c => (c[2] || '').endsWith('S1'));
+const cS2 = seasonCells.find(c => (c[2] || '').endsWith('S2'));
+check("a season row's Plays and Users are the season's own",
+      cS1 && cS1[6] === '5' && cS1[7] === '1' && cS2 && cS2[6] === '0' && cS2[7] === '0',
+      [cS1, cS2]);
+check("...and its Added date is the season's, not the series'",
+      cS1 && cS1[9] === '3 mo ago' && cS2 && cS2[9] === '1 yr ago', [cS1, cS2]);
 // The season-eligibility dropdown, live: the default is oldest-only (S1 IS
 // the oldest, so it stays eligible); "any except the newest" holds back the
 // most recently ADDED season — S1, even though it is not the latest.

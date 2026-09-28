@@ -461,7 +461,7 @@ function scoreOne(m,cfg){
   else sc.status='ok';
   return sc;
 }
-const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed',tv_off:'TV cleanup off',tv_oos:'off monitored paths',tv_latest:'latest season',tv_not_oldest:'not the oldest season',tv_newest:'newest season',tv_bigseason:'over the episode cap'};
+const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:'favorite',nodata:'no IMDb data',cutoff:'rating cutoff',grace:'grace period',unplayed:'unplayed',tv_off:'TV cleanup off',tv_oos:'off monitored paths',tv_ambiguous:'ambiguous folder',tv_latest:'latest season',tv_not_oldest:'not the oldest season',tv_newest:'newest season',tv_bigseason:'over the episode cap'};
 // One TV SEASON's eligibility, mirroring _tv_season_plan's exclusion ladder:
 // seasons are IN the pool, so an unfiltered season is eligible and ranks in
 // the same deletion order as the movies. Whole-series shields first (scope,
@@ -469,7 +469,7 @@ const FILTER_LABELS={mov_off:'movie cleanup off',protected:'protected',favorite:
 // season of a not-known-ended show, skip-unplayed).
 function seasonStatus(m,cfg){
   if(!cfg.TV_ON)return 'tv_off';
-  if(!m.tvInScope)return 'tv_oos';
+  if(!m.tvInScope)return m.tvScopeConflict?'tv_ambiguous':'tv_oos';
   if(m.protected)return 'protected';
   if(cfg.JF_FAV&&m.favorite)return 'favorite';
   // Rung order mirrors _tv_season_plan exactly, so a season shielded by two
@@ -546,11 +546,23 @@ const FILTER_REASONS={
   unplayed:'Unplayed movies are skipped',
   tv_off:'TV cleanup is turned off in Cleanup scope — no season is eligible',
   tv_oos:'This series folder is not under a monitored directory, so cleanup will never touch it',
+  tv_ambiguous:'Two library entries claim this series folder (the servers may title or date the show differently), or its name is under more than one monitored directory — cleanup leaves it alone until one show owns the folder',
   tv_latest:'The latest season of a show not known to be ended — the household may be keeping up with it',
   tv_not_oldest:'Season eligibility is "only the oldest season" — this one waits its turn',
   tv_newest:'Season eligibility holds back the show\'s most recently added season',
   tv_bigseason:'More episodes than the season episode cap — a show filed under one season number, not a season',
 };
+// The facts a row's own score reads. A season row is scored on the SEASON's
+// plays, watchers, last watch and added date, so those are what its columns
+// show: showing the series' figures had a season read "Added 1 yr ago" while
+// its own date put it in the grace period, and every season of a show shared
+// one play count. Fallbacks match the season scoring's.
+function rowFacts(m){
+  if(m.seasonN==null)
+    return{plays:m.playCount||0,users:m.users||0,lastPlayedDays:m.lastPlayedDays,addedDays:m.addedDays};
+  return{plays:m.seasonPlays||0,users:m.seasonUsers||0,lastPlayedDays:m.seasonLastPlayedDays,
+         addedDays:(m.seasonAddedDays!=null)?m.seasonAddedDays:m.addedDays};
+}
 function fmtV(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':n.toLocaleString();}
 function fmtE(m){return m<1?'< 1 mo':m<2?'1 mo ago':m<12?Math.round(m)+' mo ago':m<24?'1 yr ago':Math.floor(m/12)+'+ yr ago';}
 function scC(s){return s<10?'var(--text-danger)':s<40?'var(--text-warning)':s<80?'var(--text-secondary)':'var(--text-accent)';}
@@ -723,11 +735,11 @@ function columnCompare(a,b,col,plan,rank){
   if(col==='year'){va=Number(a.year)||0;vb=Number(b.year)||0;}
   else if(col==='rating'){va=Number.isFinite(a.rating)?a.rating:-1;vb=Number.isFinite(b.rating)?b.rating:-1;}
   else if(col==='votes'){va=a.votes||0;vb=b.votes||0;}
-  else if(col==='plays'){va=a.playCount||0;vb=b.playCount||0;}
-  else if(col==='users'){va=a.users||0;vb=b.users||0;}
+  else if(col==='plays'){va=rowFacts(a).plays;vb=rowFacts(b).plays;}
+  else if(col==='users'){va=rowFacts(a).users;vb=rowFacts(b).users;}
   else if(col==='size'){va=a.sizeGb;vb=b.sizeGb;}
-  else if(col==='added'){va=a.addedDays??1e9;vb=b.addedDays??1e9;}
-  else{va=(a.lastPlayedDays!=null)?a.lastPlayedDays:1e9;vb=(b.lastPlayedDays!=null)?b.lastPlayedDays:1e9;}
+  else if(col==='added'){va=rowFacts(a).addedDays??1e9;vb=rowFacts(b).addedDays??1e9;}
+  else{va=rowFacts(a).lastPlayedDays??1e9;vb=rowFacts(b).lastPlayedDays??1e9;}
   return va===vb?0:va<vb?-1:1;
 }
 function renderT(){
@@ -854,6 +866,7 @@ function renderT(){
   const pageStart=tablePage*tblPageSize;
   document.getElementById('mtbody').innerHTML=rows.slice(pageStart,pageStart+tblPageSize).map((m,pi)=>{
     const i=pageStart+pi;
+    const f=rowFacts(m);
     const pruned=plan.ids.has(m.id);
     const bh=pruned
       ?`<span class="table-status marked">marked</span>`
@@ -867,10 +880,10 @@ function renderT(){
 <td style="color:var(--text-secondary)">${m.year}</td>
 <td>${Number.isFinite(m.rating)?m.rating.toFixed(1):'—'}</td>
 <td style="color:var(--text-secondary)">${m.votes>0?fmtV(m.votes):'—'}</td>
-<td style="color:var(--text-secondary)">${m.playCount||0}</td>
-<td style="color:var(--text-secondary)">${m.users||0}</td>
-<td style="color:var(--text-secondary)">${m.lastPlayedDays!=null?fmtE(m.lastPlayedDays/30):'never'}</td>
-<td style="color:var(--text-secondary)">${m.addedDays!=null?fmtE(m.addedDays/30):'—'}</td>
+<td style="color:var(--text-secondary)">${f.plays}</td>
+<td style="color:var(--text-secondary)">${f.users}</td>
+<td style="color:var(--text-secondary)">${f.lastPlayedDays!=null?fmtE(f.lastPlayedDays/30):'never'}</td>
+<td style="color:var(--text-secondary)">${f.addedDays!=null?fmtE(f.addedDays/30):'—'}</td>
 <td style="color:var(--text-secondary)">${m.sizeGb.toFixed(1)} GB</td>
 <td><div class="scbar"><div class="scfill" style="width:${retBarPct(m.retention).toFixed(0)}%;background:${scF(m.retention)}"></div><div class="sctxt" style="color:${scC(m.retention)}">${m.retention.toFixed(1)}</div></div></td>
 <td>${bh}</td></tr>`;
@@ -1061,6 +1074,9 @@ async function loadPool(){
         // Truthy-only, matching the plan: a row that somehow reaches the
         // snapshot unstamped must preview as off-path, not as deletable.
         tvInScope:!!m.tv_in_scope,
+        // Out of scope because the folder was AMBIGUOUS (claimed twice, or its
+        // name under two monitored dirs), not because nobody monitors it.
+        tvScopeConflict:!!m.tv_scope_conflict,
       };
       if(base.mediaType!=='tv')return[base];
       // The season is the TV unit: one row per season on disk, each scored on

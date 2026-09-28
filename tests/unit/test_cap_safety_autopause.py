@@ -118,7 +118,9 @@ check("...with the reason recorded for the page to show",
 check("...and no deletion pass launched on the way out", not launched)
 ghosted, tip = button_ghosted(23489.5, MAX_LIBRARY_GB=19000)
 check("...and manual Cleanup ghosts — it deletes immediately", ghosted, tip)
-check("...naming the floor, not just the percentage", "19,966 GB" in tip, tip)
+# The exact floor is 19,966.075 GB, so a 19,966 GB cap is itself refused: the
+# message names the first whole GB it would accept, never a rounded-down one.
+check("...naming the floor, not just the percentage", "19,967 GB" in tip, tip)
 
 # ── The library GREW under a legal cap: same treatment ────────────────────
 # 22,000 is legal at 23,489.5 (floor 19,966) and a violation at 26,500

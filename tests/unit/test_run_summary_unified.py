@@ -68,7 +68,7 @@ def _store_season_report(rep):
 EMITTED = []
 
 
-def _summary(stats=None):
+def _summary(stats=None, is_sim=True):
     lines = []
     EMITTED.clear()
     _log_raw, _log = E.log_raw, E.log
@@ -77,7 +77,7 @@ def _summary(stats=None):
     E.emit_progress = lambda **k: EMITTED.append(k)
     try:
         E.log_run_summary(
-            is_sim=True, trigger="scheduled daily", to_free_gb=0.0,
+            is_sim=is_sim, trigger="scheduled daily", to_free_gb=0.0,
             used_gb=36518.4, free_before_gb=17475.8, final_gb=36518.4,
             final_free_gb=17475.8, freed_bytes=0, removed_count=0,
             skipped_under_limit=0, effective_library_gb=23207.1, max_gb=52994.2,
@@ -105,9 +105,28 @@ check("...and the standing queue count matches the merged window",
 # this very line's 2,760. The summary restates the merged total to progress.
 check("...and the panel's Eligible tile is told the same merged total",
       any(e.get("eligible") == 2760 for e in EMITTED), EMITTED)
+# Its Scanned tile was left counting movies alone: "Scanned 2,879" beside
+# "Eligible 2,760" is fine, but a small library read "Scanned 20 · Eligible 24"
+# — more eligible than scanned. Scanned counts the seasons seen too.
+check("...and its Scanned tile counts the seasons seen, beside the movies",
+      any(e.get("scanned") == 2879 + 221 for e in EMITTED), EMITTED)
 check("what the run did to seasons is reported too",
-      "Seasons marked: 4 new" in text and "Seasons waiting: 2" in text
-      and "1 season(s)" in text, text)
+      "Seasons marked: 4 new" in text and "Seasons waiting: 2" in text, text)
+# What a run deleted (or would) counts its seasons too. A Cleanup counts the
+# seasons its season side deleted; a dry run's season side deletes nothing,
+# so its "Would delete" counts what this run's merge TOOK — the seasons marked
+# as the run ends. (It used to read the pass's deletions, always none in a dry
+# run, so a Simulate whose plan was all seasons said it would delete nothing.)
+check("a Cleanup's Deleted line counts the seasons it deleted",
+      "Deleted: 0 movie(s) + 1 season(s)" in _summary(is_sim=False))
+with db.transaction(E.DB_FILE) as conn:
+    db.set_meta(conn, "tv_takes", {"run_started_at": E._run_started_at(), "at": time.time(),
+                                   "entries": [{"key": "a|S1", "size_bytes": 4_000_000_000},
+                                               {"key": "b|S1", "size_bytes": 4_100_000_000}]})
+check("a dry run's Would delete counts the seasons its merge took",
+      "Would delete: 0 movie(s) + 2 season(s)" in _summary())
+with db.transaction(E.DB_FILE) as conn:
+    db.set_meta(conn, "tv_takes", {})
 
 # ── Out-of-scope is not a fault ─────────────────────────────────────────────
 check("path issues count only real problems",

@@ -32,19 +32,19 @@ await p.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 20000 });
 
 // Armed and over limits, with 12 ripe marks. `canRun` is the difference between
 // a scheduler that will act and one the server has told us cannot.
-const note = (canRun) => p.evaluate((able) => {
+const note = (canRun, on = null, paused = false) => p.evaluate(([able, day, monitorOnly]) => {
   _monitoringActive = true;
-  _paused = false; _schedOff = false;
+  _paused = monitorOnly; _schedOff = false;
   _safetyBlocked = false; _simulateRequired = false;   // _debugMode is a const, and false here
   _cleanupOk = able;
   _nextRunTime = able ? new Date(Date.now() + 9e5).toISOString() : null;
-  _markedEvent = { on: null, count: 12, bytes: 340e9 };
+  _markedEvent = { on: day, count: 12, bytes: 340e9 };
   _headroomWindowUsedToday = false;
   _currentDeficits = () => ({ max: 340, headroom: 340, redline: 0, cap: 0 });
   _updateBreachNote();
   const el = document.getElementById('breach-note');
   return { hidden: !!el.hidden, text: el.textContent };
-}, canRun);
+}, [canRun, on, paused]);
 
 let r = await note(false);
 check('a blocked scheduler does not promise an imminent deletion',
@@ -55,6 +55,34 @@ check('...and still says what a run WOULD free, so the number is not lost',
 r = await note(true);
 check('a scheduler that can actually run still says when', /delete/.test(r.text)
       && !/would delete/.test(r.text), r.text);
+
+// A batch dated to a later day, in Monitor Only. Nothing deletes on that day —
+// Monitor Only never deletes on its own — and a Cleanup pressed now would not
+// wait for it, so the note must not state the date as a deletion that will
+// happen. It read "Over space limits — next deletion 2026-09-28: 5 movies".
+r = await note(true, '2031-01-02', true);
+check('Monitor Only does not announce a dated deletion as fact',
+      !/2031-01-02/.test(r.text) && /would delete/.test(r.text), r.text);
+r = await note(true, '2031-01-02', false);
+check('...while an armed scheduler that can run still names the day',
+      /2031-01-02/.test(r.text) && !/would delete/.test(r.text), r.text);
+
+// A plan of seasons is a plan. The batch used to be counted as movies only, so
+// two marked seasons read "Over space limits — run Simulate to mark the plan".
+const seasonsNote = (movies, seasons) => p.evaluate(([mv, ss]) => {
+  _monitoringActive = true; _paused = true; _schedOff = false;
+  _safetyBlocked = false; _simulateRequired = false; _cleanupOk = true;
+  _nextRunTime = new Date(Date.now() + 9e5).toISOString();
+  _markedEvent = { on: null, count: mv + ss, movies: mv, seasons: ss, bytes: 8.1e9 };
+  _currentDeficits = () => ({ max: 6.6, headroom: 0, redline: 0, cap: 6.6 });
+  _updateBreachNote();
+  return document.getElementById('breach-note').textContent;
+}, [movies, seasons]);
+let t = await seasonsNote(0, 2);
+check('two marked seasons read as the plan they are', /would delete 2 seasons/.test(t)
+      && !/run Simulate/.test(t), t);
+t = await seasonsNote(1, 2);
+check('...and a mixed batch names both kinds', /1 movie and 2 seasons/.test(t), t);
 
 // ── The Space Thresholds rows ───────────────────────────────────────────────
 await p.goto(BASE + '/config', { waitUntil: 'networkidle', timeout: 20000 });

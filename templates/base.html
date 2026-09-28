@@ -2061,8 +2061,8 @@
         </div>
         <div class="welcome-warning welcome-warning--caution">
           <strong>Do not expose this app to the internet.</strong> There is no login —
-          anyone who can reach the web UI can delete your media. Keep port 7474 on your
-          LAN or behind a VPN.
+          anyone who can reach the web UI can delete your media. Keep its port on your
+          LAN or behind a VPN, and never forward it from your router.
         </div>
 
         <h6 class="welcome-heading">Quick start</h6>
@@ -2086,8 +2086,10 @@
         </p>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Get started</button>
-        <button type="button" class="btn btn-outline-primary" onclick="prWelcomeOpenConfig()">Open Configuration</button>
+        {# The quick start begins in Configuration, so that is the button that
+           starts; the other one only closes the guide and says so. #}
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-outline-primary" onclick="prWelcomeOpenConfig()">Get started in Configuration</button>
       </div>
     </div>
   </div>

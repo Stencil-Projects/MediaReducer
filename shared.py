@@ -316,3 +316,73 @@ def grace_rung(added_at, grace_days, now) -> bool:
 def unplayed_rung(played, skip_unplayed) -> bool:
     """True = never played while the skip-unplayed switch is on."""
     return bool(skip_unplayed) and not played
+
+
+# ── The one-pool split ─────────────────────────────────────────────────────
+# Movies and seasons are one deletion order on one score scale, with one
+# deficit between them. Which executor frees what is decided here, once: the
+# engine calls it with a fresh scan's movie scores, the app's season pass with
+# the stored movie queue when a manual Cleanup has to split the deficit it
+# faces NOW (the last scan's split was sized for the deficit THEN).
+
+def least_wasteful_index(pool, remaining, near_tie):
+    """Index of the next item to take from the worst-first pool.
+
+    The head, unless the near-tied band at the head holds MORE than what is
+    left to free — then only some of that band needs to go. Those scores are
+    equivalent by definition, so the least wasteful cover wins: the SMALLEST
+    item that still finishes the job, movie or season alike. When nothing in
+    the band covers it alone, the largest goes first (fastest progress), the
+    same rule the movie deletion loop applies at its own boundary.
+
+    This is the only place the two media types are compared by size, and it is
+    deliberately the last question asked: score decides which items reach the
+    boundary at all, and this decides only which of several equally-scored
+    ones is the cheapest way to finish. Without it the type with the bigger
+    unit — always TV — would overshoot every small deficit by a whole season
+    while a near-tied movie covered it with a fraction of the waste.
+    """
+    if not near_tie or remaining <= 0:
+        return 0
+    head = pool[0][0]
+    band = []
+    for i, t in enumerate(pool):
+        if t[0] - head > near_tie:
+            break
+        band.append(i)
+    # Short-circuit, not a guard: when the whole band is needed every member is
+    # taken whatever order they go in, so this cannot change the outcome — it
+    # skips the work and mirrors the condition the movie loop uses to decide
+    # whether a tie group forms at all.
+    if sum(pool[i][1] for i in band) <= remaining:
+        return 0
+    covers = [i for i in band if pool[i][1] >= remaining]
+    if covers:
+        return min(covers, key=lambda i: (pool[i][1], pool[i][0]))
+    return max(band, key=lambda i: (pool[i][1], -pool[i][0]))
+
+
+def split_pool(season_entries, movie_entries, deficit_bytes, near_tie):
+    """(tv_share_bytes, takes) for one deficit over the merged pool.
+
+    season_entries: (score, size_bytes, key) per eligible season; movie_entries:
+    (score, size_bytes) per eligible movie. The covering prefix of the merged
+    worst-first order decides who frees what: seasons inside it are the season
+    side's (takes, in pick order, as [{key, size_bytes}]); the movie bytes are
+    the movie side's. An exact score tie goes to the larger item (fewest units
+    disturbed); at the boundary the near-tie band takes the least wasteful
+    cover."""
+    pool = [(float(score or 0.0), int(size or 0), "season", key)
+            for score, size, key in season_entries]
+    pool += [(float(score or 0.0), int(size or 0), "movie", None)
+             for score, size in movie_entries]
+    pool.sort(key=lambda t: (t[0], -t[1]))
+    covered, tv_share, takes = 0, 0, []
+    while pool and covered < deficit_bytes:
+        _score, size, kind, key = pool.pop(
+            least_wasteful_index(pool, deficit_bytes - covered, near_tie))
+        if kind == "season":
+            tv_share += size
+            takes.append({"key": key, "size_bytes": size})
+        covered += size
+    return tv_share, takes

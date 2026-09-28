@@ -155,6 +155,29 @@ check("season last-played is that SEASON's latest, not the series-wide latest",
       s1["last_played"] == 1706745600 and s2["last_played"] == 1_600_000_000,
       (s1["last_played"], s2["last_played"]))
 
+# ── A row merged across servers answers to both servers' titles ─────────────
+# Joined by IMDb id, a show carries Plex's title ("The Wire (US)") while
+# Jellyfin files its plays, favorites and box sets under its own ("The Wire").
+# Joined by the row's title alone, all three missed: a watched, favorited,
+# box-set-protected show scored as never watched and unprotected — found in the
+# test lab with "The Office (US)" the moment the IMDb join brought it in scope.
+def _series(title, **ids):
+    return A._new_tv_row(title=title, year=2002, path="/tv/The Wire",
+                         seasons=[{"n": 1, "eps": 6, "size_bytes": 1}], added_at=0,
+                         status="ended", imdb_id="tt0306414", **ids)
+
+
+merged = A._merge_tv_sources([_series("The Wire", jf_source_id="jellyfin:w")],
+                             [_series("The Wire (US)", source_id="plex:w")])
+check("a row merged by IMDb id keeps the other server's title beside its own",
+      len(merged) == 1 and merged[0]["title"] == "The Wire (US)"
+      and merged[0].get("alt_titles") == ["The Wire"], merged)
+A._annotate_tv_watch(merged, {**CFG, "USE_PLEX": False})
+m = merged[0]
+check("...so Jellyfin's plays reach it under that title", m["plays"] == 5, m["plays"])
+check("...its Jellyfin favorite shields it", m.get("favorite") is True)
+check("...and its Jellyfin box set protects it", m.get("protected") is True)
+
 # ── One server only: the other contributes nothing, not an error ────────────
 r = rows()
 A._annotate_tv_watch(r, {**CFG, "USE_JELLYFIN": False})

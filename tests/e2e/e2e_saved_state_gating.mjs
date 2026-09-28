@@ -148,10 +148,15 @@ const panel = await p.evaluate(() => {
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = String(v); };
   const tick = (id, v) => { const e = document.getElementById(id); if (e) e.checked = v; };
   _configMonitoringActive = true;
-  tick('headroom-enabled', true); set('HEADROOM_GB', 100);
+  // Fractions of the disk the page reports, not fixed GB: on a filesystem
+  // smaller than both values (the harness's /tmp is 66 GB on one node) a 100
+  // and a 400 GB Headroom both land past the end of the bar, and it draws the
+  // same picture twice.
+  const total = Number(_diskStats?.total_gb) || 1000;
+  tick('headroom-enabled', true); set('HEADROOM_GB', Math.max(1, Math.round(total * 0.1)));
   _updateThresholdStatus();
   const a = read();
-  set('HEADROOM_GB', 400);
+  set('HEADROOM_GB', Math.max(2, Math.round(total * 0.4)));
   _updateThresholdStatus();
   return { changed: a !== read(), nonEmpty: read().length > 0 };
 });
