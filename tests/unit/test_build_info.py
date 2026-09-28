@@ -13,6 +13,9 @@ resolves the commit in a throwaway stage that .dockerignore feeds only HEAD and
 the refs of .git, with a plain COPY any builder runs, and the image takes
 only the answer.
 
+The version beside it is read from the VERSION file, the one copy a bump
+moves, and the image ships that file.
+
 Hermetic: temp directories for every checkout; the app renders from a temp config.
 """
 import atexit
@@ -112,8 +115,31 @@ line = welcome_line()
 check("...and the version alone when there is no build",
       line is not None and line.startswith(f"v{A.APP_VERSION} &middot; ") and "build" not in line, line)
 
+# ── The version beside it is the VERSION file's ───────────────────────────
+# It used to be typed into app.py as well, and publish.yml refused any tag the
+# two disagreed on. The dashboard's bump moves VERSION alone, so 0.8.0 could
+# never have been released: its tag would name a version the app did not.
+check("the app's version is what the VERSION file says",
+      A.APP_VERSION == (ROOT / "VERSION").read_text(encoding="utf-8").splitlines()[0].strip(),
+      A.APP_VERSION)
+check("...and app.py types no version of its own",
+      not re.search(r"""^APP_VERSION\s*=\s*['"]""", (ROOT / "app.py").read_text(encoding="utf-8"), re.M))
+v = repo("version-file", {"VERSION": "1.2.3\r\n"})
+check("a VERSION written with Windows line endings reads the same", A._read_app_version(v) == "1.2.3")
+check("...and a build without one says so rather than naming a version",
+      A._read_app_version(repo("no-version", {})) == "unknown"
+      and A._read_app_version(repo("empty-version", {"VERSION": "\n"})) == "unknown")
+workflow = (ROOT / ".github" / "workflows" / "publish.yml").read_text(encoding="utf-8")
+check("the release workflow checks the tag against VERSION, not against a copy in app.py",
+      'FILEVER="$(head -1 VERSION' in workflow
+      and not re.search(r"grep[^\n]*APP_VERSION[^\n]*app\.py", workflow))
+
 # ── The image works it out while it builds ────────────────────────────────
 docker = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+_image_copies = [ln.split() for ln in docker.split("FROM python:3.11-slim\n", 1)[1].splitlines()
+                 if ln.startswith("COPY ")]
+check("the image ships VERSION, which the app reads its version from",
+      any("VERSION" in words[1:-1] for words in _image_copies), _image_copies)
 ignore = [ln.strip() for ln in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
           if ln.strip() and not ln.startswith("#")]
 check("the Dockerfile resolves BUILD in a throwaway stage and the image takes only that",

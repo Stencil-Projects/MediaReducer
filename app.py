@@ -563,10 +563,23 @@ def _time_zone_options() -> list[str]:
     return list(_time_zone_list)
 
 # Application version; shown in the welcome guide and the debug report so bug
-# reports name the build. It mirrors the VERSION file at the repo root, which is
-# what `bb version` moves and what tools/publish.sh cuts the release tag from —
-# publish.yml refuses a tag where the two disagree, so move them together.
-APP_VERSION = "0.7.0"
+# reports name the build. Read from the VERSION file beside this module, which
+# is the only copy: `bb version` and the dashboard's bump move it, the image
+# ships it, and the release tag is cut from it. It used to be typed here as
+# well, and publish.yml refused any tag the two disagreed on — so a bump that
+# moved VERSION alone, as the dashboard's does, could never be released.
+def _read_app_version(root: Path | None = None) -> str:
+    root = root or Path(__file__).resolve().parent
+    try:
+        first = (root / "VERSION").read_text(encoding="utf-8").splitlines()[0].strip()
+    except (OSError, IndexError):
+        first = ""
+    # A build without the file is broken, and saying so beats naming a version
+    # it is not: the image's smoke test looks for the tag's version on the page.
+    return first or "unknown"
+
+
+APP_VERSION = _read_app_version()
 
 
 def _app_build(root: Path | None = None) -> str:

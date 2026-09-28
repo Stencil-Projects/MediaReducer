@@ -99,26 +99,21 @@ jobs:
         # build names a version that was never released, and nothing downstream
         # would ever notice.
         #
-        # VERSION is the source: `bb version` moves it and tools/publish.sh tags
-        # from it. APP_VERSION is the copy the app shows, so it is checked here
-        # too — the tag agreeing with one of the two while the other says
-        # something else is the drift this step exists to catch.
+        # VERSION is the only copy: `bb version` moves it, the release tag is
+        # cut from it, and the app reads it at startup (app.py's APP_VERSION). It
+        # used to be typed into app.py as well and checked here against it, so
+        # a bump that moved VERSION alone could never be released. The smoke
+        # test below still proves the running image reports this version.
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
           FILEVER="$(head -1 VERSION | tr -d '[:space:]')"
-          APPVER="$(grep -m1 '^APP_VERSION' app.py | sed -E 's/.*"([^"]+)".*/\1/')"
           if [ "$VERSION" != "$FILEVER" ]; then
             echo "Tag $GITHUB_REF_NAME means version $VERSION, but VERSION says $FILEVER."
             echo "Tag the version the code is actually at, or move VERSION first."
             exit 1
           fi
-          if [ "$APPVER" != "$FILEVER" ]; then
-            echo "VERSION says $FILEVER, but app.py's APP_VERSION says $APPVER."
-            echo "They must agree, or the app reports a version that was never released."
-            exit 1
-          fi
-          echo "tag, VERSION and APP_VERSION agree on $FILEVER"
+          echo "tag and VERSION agree on $FILEVER"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -172,8 +167,9 @@ jobs:
           curl -fsS http://127.0.0.1:7474/api/status >/dev/null \
             || { echo "never became healthy:"; docker logs mr-smoke; exit 1; }
           if [ "${{ github.event_name }}" = "push" ]; then
-            # The dashboard renders APP_VERSION, so this proves the image really
-            # is the code being tagged, not a stale layer from the build cache.
+            # The dashboard renders APP_VERSION, read from the image's VERSION
+            # file, so this proves the image really is the code being tagged,
+            # not a stale layer from the build cache, and that it ships VERSION.
             #
             # Fetched to a file rather than piped into grep. `curl | grep -q`
             # fails when it SUCCEEDS: grep exits at the first match, curl then

@@ -32,16 +32,16 @@ container whatever the UI says. Add it alongside the `/library` mapping rather
 than instead of it — free space is measured on `/library` itself, and without
 that mapping the reading comes from the container's own layer, not the array.
 
-`<Repository>` tracks `ghcr.io/stencil-projects/mediareducer:alpha`, which
+`<Repository>` tracks `ghcr.io/stencil-projects/mediareducer:latest`, which
 `.github/workflows/publish.yml` pushes on a version tag:
 
-    git tag vX.Y.Z-alpha.N && git push origin vX.Y.Z-alpha.N   # must match APP_VERSION in app.py
+    git tag vX.Y.Z && git push origin vX.Y.Z   # must match the VERSION file
 
-`:alpha` moves with each alpha release; `:latest` is reserved for the first
-non-prerelease, so point this at `:latest` at 1.0.0. The image path is lowercase
-even though the repository name is not, since registries reject uppercase:
+`:latest` moves with each release. A prerelease tag (`vX.Y.Z-alpha.N`) moves its
+channel's pointer, `:alpha`, instead. The image path is lowercase even though
+the repository name is not, since registries reject uppercase:
 
-    docker pull ghcr.io/stencil-projects/mediareducer:alpha
+    docker pull ghcr.io/stencil-projects/mediareducer:latest
 
 ## Installing it by hand
 
