@@ -34,6 +34,9 @@ run() {
   local name="$1"; shift
   if "$@" >"$TMP/$name.log" 2>&1; then
     echo "PASS $name"; pass=$((pass+1))
+    # A pass that had to work around something says so on a NOTE line. Shown
+    # here because a passing test's log goes with the temp dir.
+    grep -E '^NOTE' "$TMP/$name.log" | head -5 | sed 's/^/    /'
   else
     echo "FAIL $name (log: $TMP/$name.log)"
     # The lines that actually FAILED, then the tail. A blind tail alone is only
@@ -214,6 +217,7 @@ PY
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_reset_busy_gate node tests/e2e/e2e_reset_busy_gate.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_form_shows_saved_config node tests/e2e/e2e_form_shows_saved_config.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_notify_preview node tests/e2e/e2e_notify_preview.mjs
+      MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_config_requests node tests/e2e/e2e_config_requests.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_breach_note  node tests/e2e/e2e_breach_note.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_last_run_colon node tests/e2e/e2e_last_run_colon.mjs
       MR_BASE_URL="http://127.0.0.1:$PORT" run e2e_page_notes   node tests/e2e/e2e_page_notes.mjs

@@ -44,7 +44,8 @@ def check(name, cond, extra=""):
 
 A.app.config["TESTING"] = True
 client = A.app.test_client()
-REASON = "Automatic Cleanup is paused automatically after every restart."
+REASON = ("the library data was out of date when the app restarted — run Simulate, "
+          "then turn Automatic Cleanup back on.")
 # base.html wraps fetch() to put this on every mutating request; the server
 # rejects writes without it, so a test client has to look like a browser.
 WRITE = {"X-MediaReducer": "1"}

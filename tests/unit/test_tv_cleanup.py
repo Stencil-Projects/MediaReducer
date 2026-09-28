@@ -475,8 +475,15 @@ check("marked seasons count with their delay clocks running",
           if isinstance(m, dict) and m.get("marked_at")))
 _lp = _state.get("last_pass") or {}
 check("the run stores its plan-order size for the eligible number",
-      int(_lp.get("eligible_seasons") or 0) >= 1
-      and A._tv_eligible_count(CFG) == int(_lp.get("eligible_seasons") or 0), _lp)
+      int(_lp.get("eligible_seasons") or 0) >= 1, _lp)
+# That size is the run's own Eligible figure, counted before it deleted. The
+# standing number is that less what the run deleted: the snapshot here still
+# lists Dead Show S1, as a media server does until it rescans, and counting it
+# again is how a deleted season came back into every plan.
+check("...and the standing eligible number is that, less the seasons the run deleted",
+      A._tv_eligible_count(CFG) == int(_lp.get("eligible_seasons") or 0)
+      - len(_lp.get("deleted_seasons") or []) and _lp.get("deleted_seasons"),
+      (A._tv_eligible_count(CFG), _lp))
 check("disarmed TV contributes zero eligible seasons however stale the state",
       A._tv_eligible_count(dict(CFG, TV_CLEANUP_ENABLED=False)) == 0)
 

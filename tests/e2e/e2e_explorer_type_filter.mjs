@@ -152,7 +152,7 @@ const headings = await p.evaluate(() =>
     .map(h => h.textContent.replace('!', '').trim()));
 check('the card is organized into the four setting groups',
       JSON.stringify(headings) === JSON.stringify(
-        ['Cleanup scope', 'Scoring & ordering', 'Eligibility filters', 'TV show scoring']),
+        ['Cleanup Scope', 'Scoring & Ordering', 'Eligibility Filters', 'TV Show Scoring']),
       headings);
 check('both TV knobs are sliders', await p.evaluate(() =>
       document.getElementById('c-tv-weight')?.type === 'range'
@@ -181,7 +181,7 @@ await setFilter('movie');
 s = await state();
 check('a row with no media_type key counts as a movie', s.body.includes('Legacy Movie'), s.stat);
 
-// ── The Cleanup scope toggles ───────────────────────────────────────────────
+// ── The Cleanup Scope toggles ───────────────────────────────────────────────
 // Both toggles preview live, each zeroing ITS type's eligibility: unticking
 // Movies leaves only the eligible season standing; unticking TV too reads
 // zero, with each row naming its own switch. Ticking back restores the count

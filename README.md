@@ -176,7 +176,7 @@ threshold and run **Simulate**, then switches on by itself.
   marked queue and library size current; a daily Simulate keeps the plan fresh.
 - **Automatic Cleanup** — deletes on schedule. Locked until setup is complete,
   the health check passes, and at least one media type is allowed in
-  [Cleanup scope](#cleanup-scope).
+  [Cleanup Scope](#cleanup-scope).
 
 Restarts keep Paused and Monitor Only. Automatic Cleanup drops back to Monitor
 Only, since a restart is usually an upgrade or a crash and the plan on disk may
@@ -277,7 +277,7 @@ field that needs attention shows a red **!** on its header.
 
 ![The Filtering & Scoring tab: cleanup scope, the single-movie score explorer, and the full library scored in deletion order](docs/screenshots/filtering-scoring.png)
 
-### Cleanup scope
+### Cleanup Scope
 
 Two per-type switches, **Movies** and **TV shows**, both off by default.
 Deleting files is opt-in: a fresh install scans, scores and shows you
@@ -290,7 +290,7 @@ selected, though Simulate still previews what cleanup would do. Turning both off
 while Automatic Cleanup is armed drops the scheduler to Monitor Only and says
 why on the Dashboard.
 
-### Scoring & ordering
+### Scoring & Ordering
 
 One scale for the whole pool: every eligible movie and season scores 0–100,
 higher means keep, lowest deletes first. The score blends:
@@ -306,7 +306,7 @@ history. **File size optimization** (on by default) breaks near-ties by deleting
 bigger files first, so you lose the fewest titles, and picks the lower-quality
 copy of a duplicated movie.
 
-### Eligibility filters
+### Eligibility Filters
 
 Applied before scoring — movies per title, TV per season, judged on the show's
 facts where noted:
@@ -324,7 +324,7 @@ facts where noted:
 
 Protected collections also apply, and are set on the Configuration tab.
 
-### TV show scoring
+### TV Show Scoring
 
 - **Season eligibility** — which seasons may delete: **only the oldest**
   (default), **any except the newest** (most recently *added*, which may not be
@@ -638,7 +638,7 @@ is connected, and the deleted file was the copy in Radarr's detected section.
 Redline emergency deletions skip Radarr cleanup.
 
 **Nothing is eligible.** If the Dashboard says you are over space limits but
-nothing is eligible, a media type is off in Cleanup scope or a filter is
+nothing is eligible, a media type is off in Cleanup Scope or a filter is
 disqualifying everything — the Filtering & Scoring table names the rule for each
 row.
 

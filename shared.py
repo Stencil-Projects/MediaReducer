@@ -133,6 +133,64 @@ def pool_deficit_gb(used_gb, used_limit_gb, library_gb, cap_gb) -> float:
     return max(headroom_deficit, cap_deficit)
 
 
+# ── The Library Size Cap's safety floor ──────────────────────────────────────
+
+def marked_awaiting_bytes(entries) -> int:
+    """Bytes the movie queue has already CLOCKED for deletion: entries with
+    marked_at set, decided deletions with a date that only wait out the delay
+    — not the merely-eligible rest (marked_at None) no run has committed to.
+    A hand-edited size that is not a number reads as 0."""
+    total = 0
+    for e in (entries.values() if isinstance(entries, dict) else ()):
+        if isinstance(e, dict) and e.get("marked_at") is not None:
+            try:
+                total += max(0, int(float(e.get("size_bytes") or 0)))
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return total
+
+
+def cap_floor(library_gb, queued_gb, max_pct):
+    """The lowest Library Size Cap one cleanup pass may trim the library to,
+    EXACT (unrounded), and the queued GB it netted out: (floor, netted). The
+    floor is None when there is no library measurement or no usable
+    percentage. The app judges a cap against it when it is saved and armed;
+    the engine re-checks it against the day's library before a Live run. One
+    function, so the two cannot disagree: the engine once checked the raw
+    library while the app netted the queue, and a library that grew while
+    marks waited stayed armed with every daily run refusing to delete.
+
+    Measured against the library NET OF WHAT IS ALREADY MARKED, because those
+    bytes are spoken for: they are on the way out, held only by the deletion
+    delay. Against the raw size the guard fires on its own tail — a legal cap
+    with marks waiting out the delay, a library that keeps growing meanwhile,
+    and the floor climbs over a cap nobody touched. Netting them out cannot
+    excuse a cap that is simply set too low: subtracting the queue lowers the
+    floor by (100 − pct)% of the queue, so a gap the queue does not cover still
+    trips. With a delay, a run deletes only marks that have waited it out, so
+    nothing it deletes goes unannounced.
+
+    CLAMPED to one pass's worth (pct% of the library). A queue bigger than that
+    is not evidence the cap is fine — it is the symptom of a cap far below the
+    floor that a Simulate already marked the whole library against. Netting it
+    in full would let those bytes lower the bar and then jump over it: with a
+    23,489 GB library and 8,800 GB marked, the unclamped floor lands at 12,486
+    and admits a 12,500 GB cap whose first pass deletes 37% of the library —
+    the exact thing this rule exists to stop."""
+    try:
+        lib, pct = float(library_gb), float(max_pct)
+    except (TypeError, ValueError):
+        return None, 0.0
+    if not (lib > 0 and 0 < pct <= 100):
+        return None, 0.0
+    try:
+        queued = max(0.0, float(queued_gb or 0.0))
+    except (TypeError, ValueError):
+        queued = 0.0
+    netted = min(queued, lib * pct / 100)
+    return max(0.0, lib - netted) * (100 - pct) / 100, netted
+
+
 # ── Run reporting ────────────────────────────────────────────────────────────
 
 def overshoot_note(committed_bytes, target_bytes, verb="freed") -> str:

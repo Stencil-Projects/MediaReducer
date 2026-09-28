@@ -604,7 +604,7 @@ def _compose(conn) -> dict:
     so every dict-shaped caller (load_cache, the app's memoized read) is simple."""
     out = {}
     for key in ("code_checksum", "config_hash", "last_cleanup_date", "dashboard_stats",
-                "code_reset_pending"):
+                "code_reset_pending", "tv_gone_seasons"):
         v = _get_meta_opt(conn, key)
         if v is not _MISSING:
             out[key] = v

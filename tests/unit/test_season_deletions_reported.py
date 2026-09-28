@@ -115,8 +115,9 @@ check("...on the window-already-used branch as well",
 src = (ROOT / "engine.py").read_text(encoding="utf-8")
 check("the first progress frame carries the season deletions in their own fields",
       "emit_progress(seasons_deleted=_seasons_n, seasons_bytes_freed=_seasons_b)" in src)
-check("the fast path's closing line counts seasons beside movies",
-      "_fp_msg = (f\"Cleared from the marked queue — deleted {' and '.join(_removed)}, \"" in src)
+check("the fast path's closing line counts seasons beside movies, in the full scan's shape",
+      "_fp_msg = (summary_message(f\"Cleanup finished — freed {bytes_to_gb(bytes_freed + _sb):.1f} GB.\"," in src
+      and "[f\"{_sn} season{'' if _sn == 1 else 's'}\"] if _sn else [])" in src)
 check("the full scan's closing line adds the seasons' bytes to the total",
       "freed {bytes_to_gb(bytes_freed + _sb):.1f} GB." in src)
 check("a run with no eligible movie still leads with the seasons it deleted",

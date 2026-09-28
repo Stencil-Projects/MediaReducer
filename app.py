@@ -64,6 +64,7 @@ from scoring_constants import SCORING, FINGERPRINT as SCORING_FINGERPRINT, seaso
 from flask import (Flask, g, has_request_context, jsonify, render_template, request,
                    send_from_directory, url_for)
 
+import build_info  # which commit this copy was built from (the welcome guide shows it)
 import db  # shared SQLite persistence (metadata cache, library snapshot, queue, meta)
 import notify  # best-effort outbound alerting (apprise wrapper); never raises
 import shared  # pass mechanics both executors must agree on (deficit, delay clock, log line, rungs)
@@ -357,10 +358,22 @@ def _security_headers(response):
     return response
 
 
-# Files whose bytes behind a URL never change, so the browser can keep them
-# forever. Two ways to earn that: static/vendor pins its version in the
-# filename, and this app's own scripts carry a content stamp from asset_url().
-_IMMUTABLE_STATIC = ("/static/vendor/", "/static/js/")
+# The static text files compressed once and kept in memory (see
+# _gzipped_static): the vendored files, and this app's own scripts and
+# stylesheets. Which URLs may be cached forever is _immutable_static_url's.
+_IMMUTABLE_STATIC = ("/static/vendor/", "/static/js/", "/static/css/")
+_asset_stamps: dict = {}
+
+
+def _immutable_static_url() -> bool:
+    """Whether the bytes behind this /static URL can never change: static/vendor
+    pins its version in the filename, and this app's own files carry
+    asset_url()'s content stamp. A hand-typed URL without the stamp has no
+    identity in it, and caching that for a year is how a stale file outlives
+    the container."""
+    path = request.path
+    return path.startswith("/static/") and (
+        path.startswith("/static/vendor/") or bool(request.args.get("v")))
 
 
 @app.template_global()
@@ -372,14 +385,23 @@ def asset_url(filename: str) -> str:
     one on every navigation — the round trips this app moved into the page in
     the first place — and with a stamp that is only the release version, a fix
     published without a version bump is served from cache and the page runs
-    yesterday's code. The size and modification time answer both: a changed
-    file is a different URL, and an unchanged one is never refetched."""
+    yesterday's code. A hash of the content answers both: a changed file is a
+    different URL, and an unchanged one is never refetched. Not the size and
+    modification time, which it once was: an image's files carry the time of
+    the build's checkout, so every release restamped every file and browsers
+    re-downloaded scripts that had not changed. Hashed once per file version."""
     url = url_for("static", filename=filename)
+    fp = Path(app.static_folder) / filename
     try:
-        st = (Path(app.static_folder) / filename).stat()
+        st = fp.stat()
+        version = (st.st_size, st.st_mtime_ns)
+        known = _asset_stamps.get(filename)
+        if not known or known[0] != version:
+            known = (version, hashlib.sha256(fp.read_bytes()).hexdigest()[:12])
+            _asset_stamps[filename] = known
     except OSError:
         return url
-    return f"{url}?v={st.st_size:x}-{int(st.st_mtime):x}"
+    return f"{url}?v={known[1]}"
 
 
 @app.after_request
@@ -393,11 +415,9 @@ def _cache_static_assets(response):
     the stamp: a hand-typed /static/js/base.js has no identity in it, and
     caching that for a year is how a stale script outlives the container."""
     try:
-        if response.status_code != 200 or not request.path.startswith(_IMMUTABLE_STATIC):
-            return response
-        if request.path.startswith("/static/js/") and not request.args.get("v"):
-            return response
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        # A 304 carries the same promise: it confirms the bytes the browser holds.
+        if response.status_code in (200, 304) and _immutable_static_url():
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     except Exception:
         pass
     return response
@@ -456,7 +476,10 @@ def _compress_response(response):
         if not ctype.startswith(_COMPRESSIBLE_TYPES):
             return response
         if response.direct_passthrough:
-            if not request.path.startswith(_IMMUTABLE_STATIC):
+            # Whole files only. A 206 carries one byte range of the file, and
+            # swapping in the gzip of the WHOLE file under that range's headers
+            # made a malformed response.
+            if response.status_code != 200 or not request.path.startswith(_IMMUTABLE_STATIC):
                 return response
             response.headers.add("Vary", "Accept-Encoding")
             if "gzip" not in (request.headers.get("Accept-Encoding") or "").lower():
@@ -520,24 +543,47 @@ _COMMON_TIME_ZONES = [
     "Australia/Sydney",
 ]
 
+_time_zone_list: list = []
+
+
 def _time_zone_options() -> list[str]:
-    try:
-        all_zones = sorted(available_timezones())
-    except Exception:
-        all_zones = []
-    seen = set()
-    options = []
-    for zone in _COMMON_TIME_ZONES + all_zones:
-        if zone and zone not in seen:
-            seen.add(zone)
-            options.append(zone)
-    return options
+    """The Configuration page's time-zone choices. Built once: the zone database
+    does not change under a running app, and reading it cost every Config
+    render a few milliseconds."""
+    if not _time_zone_list:
+        try:
+            all_zones = sorted(available_timezones())
+        except Exception:
+            all_zones = []
+        seen = set()
+        for zone in _COMMON_TIME_ZONES + all_zones:
+            if zone and zone not in seen:
+                seen.add(zone)
+                _time_zone_list.append(zone)
+    return list(_time_zone_list)
 
 # Application version; shown in the welcome guide and the debug report so bug
 # reports name the build. It mirrors the VERSION file at the repo root, which is
 # what `bb version` moves and what tools/publish.sh cuts the release tag from —
 # publish.yml refuses a tag where the two disagree, so move them together.
 APP_VERSION = "0.7.0"
+
+
+def _app_build(root: Path | None = None) -> str:
+    """The commit this copy was built from, as a short hash, shown beside the
+    version: an image's BUILD file (the Dockerfile writes it), else a checkout's
+    own .git. "" when neither says, and the guide shows the version alone."""
+    root = root or Path(__file__).resolve().parent
+    try:
+        stamped = (root / "BUILD").read_text(encoding="utf-8").strip()
+        if build_info.is_commit(stamped):
+            return stamped[:7]
+    except OSError:
+        pass
+    return build_info.commit_of(root)
+
+
+APP_BUILD = _app_build()
 
 # Episodes above which a "season" is really a whole show filed under one
 # number. Named here because two places need the same fallback: the settings
@@ -1226,10 +1272,11 @@ def force_paused_run_mode_on_startup():
                 # read as "my Automatic Cleanup setting didn't stick". Cleared by the next config save
                 # (the form never posts internal underscore keys).
                 cfg["_RUN_MODE_AUTOPAUSE_REASON"] = (
-                    "Automatic Cleanup is paused automatically after every restart."
+                    "the app restarted — \"Set to Monitor Only at startup\" does this after "
+                    "every restart."
                     if cfg.get("PAUSE_CLEANUP_ON_STARTUP", True) else
-                    "Automatic Cleanup did not resume after the restart: the library database is "
-                    "out of date. Run Simulate, then turn it back on.")
+                    "the library data was out of date when the app restarted — run "
+                    "Simulate, then turn Automatic Cleanup back on.")
                 if save_config(cfg):
                     print("Startup safety: RUN_MODE reset to paused.", flush=True)
         # Monitor Only also needs an up-to-date library database. A missing or
@@ -1815,6 +1862,7 @@ def inject_display_time_settings():
     cfg = load_config()
     return {
         "app_version": APP_VERSION,
+        "app_build": APP_BUILD,
         "display_time_format": cfg.get("DISPLAY_TIME_FORMAT", "12h"),
         "server_time_zone": _server_time_zone_name(),
         "host_time_zone": _host_time_zone_name(),
@@ -2939,8 +2987,8 @@ def _reconcile_season_order(cfg: dict) -> list | None:
         return None
     try:
         data, _err = _read_library_snapshot()
-        rows = [r for r in ((data or {}).get("movies") or [])
-                if isinstance(r, dict) and r.get("media_type") == "tv"]
+        rows = _without_gone_seasons([r for r in ((data or {}).get("movies") or [])
+                                      if isinstance(r, dict) and r.get("media_type") == "tv"])
     except Exception:
         return None
     if not rows:
@@ -3156,10 +3204,9 @@ _FULL_SCAN_MAX_AGE_SECONDS = 48 * 3600
 _MARKED_ITEMS_CAP = 200
 
 _SCAN_OVERDUE_MESSAGE = (
-    "It's been over two days since MediaReducer last scanned your whole library, so "
-    "the saved deletion plan may be out of date — run Simulate to refresh it "
-    "before running a Cleanup or enabling automatic mode. (A daily scan normally "
-    "does this for you.)")
+    "The last full library scan is over two days old, so the deletion plan may be "
+    "out of date. Run Simulate before a Cleanup or turning on Automatic Cleanup "
+    "(the daily scan normally does this for you).")
 
 
 def _full_scan_overdue() -> bool:
@@ -3219,7 +3266,7 @@ def _scan_lock_reason(cfg: dict) -> str:
     if _simulate_evidence(cfg) and _full_scan_overdue():
         return ("The last library scan is over two days old — run Simulate "
                 "again to refresh it.")
-    return "Run Simulate first — this enables automatically once the scan finishes."
+    return "Run Simulate first — Monitor Only turns on by itself once the scan finishes."
 
 
 def _monitor_mode_lock_reason(cfg: dict) -> str:
@@ -3452,45 +3499,29 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
     cap_floor_gb = None
     cap_safety_ok = True
     cap_safety_message = ""
-    #
-    # Measured against the library NET OF WHAT IS ALREADY MARKED, because those
-    # bytes are spoken for: they are on the way out, held only by the deletion
-    # delay. Against the raw size the guard fires on its own tail — a legal cap
-    # with marks waiting out the delay, a library that keeps growing meanwhile,
-    # and the floor climbs over a cap nobody touched. The trip then pauses
-    # Automatic Cleanup, which is what would have brought the library back
-    # under. Netting them out cannot excuse a cap that is simply set too low:
-    # subtracting the queue lowers the floor by 85% of the queue, so a gap the
-    # queue does not cover still trips.
-    #
-    # CLAMPED to one pass's worth. A queue bigger than the safety percentage is
-    # not evidence the cap is fine — it is the symptom of a cap far below the
-    # floor that a Simulate already marked the whole library against. Netting it
-    # in full would let those bytes lower the bar and then jump over it: with a
-    # 23,489 GB library and 8,800 GB marked, the unclamped floor lands at 12,486
-    # and admits a 12,500 GB cap whose first pass deletes 37% of the library —
-    # the exact thing this rule exists to stop. The delay case it is FOR can
-    # never exceed the clamp: those marks were sized by a cap that was legal
-    # when saved, so they are at most one safety percentage of the library.
+    # The floor is shared.cap_floor's — the one the engine re-checks before a
+    # Live run — measured net of the marks already waiting out the delay,
+    # clamped to one pass's worth (the reasons are on the function). Without
+    # the netting the guard fires on its own tail: a legal cap, marks waiting,
+    # a library that grows meanwhile, and the trip pauses Automatic Cleanup,
+    # which is what would have brought the library back under. An unreadable
+    # queue nets out nothing: keep the strict floor.
     queued_gb = 0.0
     if cap_configured:
         try:
             queued_gb = _marked_bytes_awaiting_delay() / 1e9
         except Exception:
-            queued_gb = 0.0   # unreadable queue nets out nothing: keep the strict floor
-        if max_pct_ok and library_gb_val and library_gb_val > 0:
-            queued_gb = min(queued_gb, library_gb_val * max_pct / 100)
-    cap_floor_exact = None
-    if max_pct_ok and library_gb_val and library_gb_val > 0:
-        # Computed whether or not a cap is set: with the cap off there is nothing
-        # to judge, but the page still shows the floor so you can see where the
-        # limit sits BEFORE typing a value into it.
-        #
+            queued_gb = 0.0
+    # Computed whether or not a cap is set: with the cap off there is nothing to
+    # judge, but the page still shows the floor so you can see where the limit
+    # sits BEFORE typing a value into it.
+    cap_floor_exact, queued_gb = shared.cap_floor(library_gb_val, queued_gb,
+                                                  max_pct if max_pct_ok else None)
+    if cap_floor_exact is not None:
         # Judged against the EXACT floor, published rounded UP. Rounded to
         # nearest, a 137.1 GB floor went out as "no lower than 137 GB" — the one
         # value the page advised was the one the gate (and the engine, which
         # compares unrounded) refused. Rounded up, whatever is shown is allowed.
-        cap_floor_exact = max(0.0, library_gb_val - queued_gb) * (100 - max_pct) / 100
         cap_floor_gb = math.ceil(cap_floor_exact * 10) / 10
     if cap_configured and cap_floor_gb is None:
         # Same hole on the cap side, and a worse one: the cap's whole job is to
@@ -3644,7 +3675,7 @@ def _space_threshold_state(cfg: dict | None = None, disk: dict | None = None,
                                              "preview before enabling Automatic Cleanup.")
             elif simulate_first_time:
                 simulate_required_message = ("Run Simulate once so MediaReducer has scanned "
-                                             "your library before enabling automatic mode.")
+                                             "your library before turning on Automatic Cleanup.")
             elif _pending_raw():
                 # A plan exists but its stamp no longer matches; the settings moved.
                 simulate_required_message = ("Settings changed since the last Simulate — "
@@ -4295,7 +4326,12 @@ def _tv_inventory_rows(cfg: dict, strict: bool = False) -> list | None:
             raise RuntimeError("Plex's TV inventory did not answer")
     if jf_rows is None and px_rows is None:
         return None
-    return _merge_tv_sources(jf_rows, px_rows)
+    complete = not ((bool(cfg.get("USE_JELLYFIN")) and conn.get("jellyfin_url")
+                     and conn.get("jellyfin_key") and jf_rows is None)
+                    or (bool(cfg.get("USE_PLEX")) and conn.get("plex_url")
+                        and conn.get("plex_token") and px_rows is None))
+    return _without_gone_seasons(_merge_tv_sources(jf_rows, px_rows), fresh=True,
+                                 complete=complete)
 
 
 def _annotate_tv_imdb(rows: list) -> None:
@@ -4896,6 +4932,10 @@ def _tv_season_plan(tv_rows: list, cfg: dict, now: float | None = None) -> dict:
                 # series folder is where the season's files live.
                 "sid": r.get("jf_source_id") or r.get("source_id"),
                 "path": r.get("path"),
+                # What finds the show in Sonarr when its folder does not
+                # (_sonarr_series_for): the id, and every name it goes by.
+                "imdb_id": r.get("imdb_id"),
+                "alt_titles": list(r.get("alt_titles") or []),
                 "size_bytes": s.get("size_bytes") or 0,
                 "eps": eps, "eps_watched": watched,
                 "last_played": s.get("last_played") or 0,
@@ -4951,6 +4991,120 @@ _TV_STATE_KEY = "tv_cleanup"
 
 def _tv_mark_key(entry: dict) -> str:
     return f"{entry.get('sid')}|S{entry.get('season')}"
+
+
+# ── Seasons this app deleted that a media server still lists ─────────────────
+# Plex and Jellyfin keep a deleted season in their listings, at its old size,
+# until they rescan: Jellyfin's scheduled scan runs every 12 hours, and
+# realtime monitoring is unreliable on Unraid user shares. The TV inventory is
+# what they list, so the season came straight back into every plan: a settings
+# save marked it again and the dashboard said "a run would delete 2 seasons,
+# 8.1 GB" for seasons already gone (seen in the test lab), and a run gave it a
+# share of the deficit that its deletion then found vanished, freeing nothing.
+# Each season deleted here is recorded until the servers catch up, and the
+# inventory leaves it out meanwhile.
+_TV_GONE_KEY = "tv_gone_seasons"
+_TV_GONE_MAX_AGE_S = 90 * 86400
+_tv_gone_announced: list = [None]
+
+
+def _record_tv_season_gone(entry: dict, files: list) -> None:
+    """Remember a season whose files this pass removed, or found already gone.
+    Best-effort: a record that fails to land costs one phantom season, which
+    the vanished branch of _delete_tv_season still catches at deletion."""
+    try:
+        with db.transaction(db_path()) as conn:
+            gone = db.get_meta(conn, _TV_GONE_KEY)
+            gone = gone if isinstance(gone, dict) else {}
+            gone[_tv_mark_key(entry)] = {
+                "at": time.time(), "season": entry.get("season"),
+                "folder": Path(str(entry.get("path") or "")).name,
+                "files": [str(f) for f in files][:50]}
+            db.set_meta(conn, _TV_GONE_KEY, gone)
+    except Exception as e:
+        print(f"TV cleanup: could not record {entry.get('title')} S{entry.get('season')} "
+              f"as deleted ({e})", flush=True)
+
+
+def _without_gone_seasons(rows: list, *, fresh: bool = False, complete: bool = False) -> list:
+    """The rows without the seasons this app deleted that a server still lists.
+    Never changes the rows it is given: a row that loses a season is copied,
+    with its size and episode count recomputed.
+
+    A recorded season counts again once it is a real one: the server lists it
+    as added after the deletion (re-downloaded), or, on a fresh fetch, one of
+    the recorded files is back on disk (restored). A fresh fetch from every
+    configured server (complete) also forgets the records the servers have
+    caught up with, whose season they no longer list. Stored rows (fresh=False)
+    touch neither the disk nor the record: they are read on the status poll."""
+    if fresh:
+        try:
+            with db.connect(db_path()) as conn:
+                gone = db.get_meta(conn, _TV_GONE_KEY)
+        except Exception:
+            return rows
+    else:
+        gone = _cache_file_data().get(_TV_GONE_KEY)
+    if not isinstance(gone, dict) or not gone:
+        return rows
+    by_place = {(str(v.get("folder") or "").casefold(), v.get("season")): k
+                for k, v in gone.items() if isinstance(v, dict)}
+
+    def back_on_disk(rec: dict) -> bool:
+        for f in rec.get("files") or []:
+            try:
+                if Path(f).exists():
+                    return True
+            except OSError:
+                continue
+        return False
+
+    still, dropped, out = {}, [], []
+    for r in rows:
+        seasons = (r.get("tv_seasons") or []) if isinstance(r, dict) else []
+        if not seasons:
+            out.append(r)
+            continue
+        ids = [i for i in (r.get("jf_source_id"), r.get("source_id")) if i]
+        folder = Path(str(r.get("path") or "")).name.casefold()
+        keep = []
+        for sn in seasons:
+            n = sn.get("n") if isinstance(sn, dict) else None
+            key = next((k for k in (f"{i}|S{n}" for i in ids) if k in gone),
+                       by_place.get((folder, n)))
+            rec = gone.get(key) if key else None
+            if not isinstance(rec, dict):
+                keep.append(sn)
+                continue
+            if (sn.get("added_at") or 0) > (rec.get("at") or 0) or (fresh and back_on_disk(rec)):
+                keep.append(sn)
+                continue
+            still[key] = rec
+            dropped.append(f"{r.get('title')} S{n}")
+        if len(keep) == len(seasons):
+            out.append(r)
+            continue
+        r = dict(r, tv_seasons=keep)
+        r["size_bytes"] = sum(int(x.get("size_bytes") or 0) for x in keep)
+        r["size_gb"] = round(r["size_bytes"] / 1e9, 2)
+        r["tv_episodes"] = sum(int(x.get("eps") or 0) for x in keep)
+        out.append(r)
+    if fresh:
+        if complete:
+            now = time.time()
+            kept = {k: v for k, v in still.items() if now - (v.get("at") or 0) < _TV_GONE_MAX_AGE_S}
+            if kept != gone:
+                try:
+                    with db.transaction(db_path()) as conn:
+                        db.set_meta(conn, _TV_GONE_KEY, kept)
+                except Exception:
+                    pass
+        if dropped and sorted(dropped) != _tv_gone_announced[0]:
+            print(f"TV inventory: {len(dropped)} season(s) MediaReducer deleted are still listed "
+                  f"by the media server — left out until it rescans: {', '.join(sorted(dropped))}",
+                  flush=True)
+        _tv_gone_announced[0] = sorted(dropped) or None
+    return out
 
 
 def _tv_in_scope(cfg: dict) -> bool:
@@ -5598,6 +5752,55 @@ def _tv_season_relpaths(cfg: dict, sid: str, season_n,
     return rels, None
 
 
+def _sonarr_series_for(series_list: list, entry: dict, folder_name: str) -> dict | None:
+    """The Sonarr series that manages this season's show, or None when Sonarr
+    has none. Raises when two series answer at the same step: unmonitoring a
+    coin-flip is worse than skipping the season.
+
+    The first step that finds any candidate decides. The series FOLDER comes
+    first: Sonarr's path names the very folder the files are deleted from,
+    matched by name like every path this app joins across containers. Then
+    the IMDb id both sides carry. Then the title, under every name the row
+    answers to, with the year to split same-title shows (Doctor Who
+    1963/2005); a lone title match whose year DIFFERS is a different show,
+    so ours is not in Sonarr. Title alone once read a show Sonarr calls "The
+    Office (US)" and the media server "The Office" as not in Sonarr, and the
+    season was deleted while Sonarr still monitored it, to download again."""
+    series = [s for s in (series_list or []) if isinstance(s, dict) and s.get("id") is not None]
+
+    def one(cands: list, by: str) -> dict | None:
+        if len(cands) > 1:
+            raise RuntimeError(f"{len(cands)} Sonarr series match by {by} — "
+                               "cannot tell which to unmonitor")
+        return cands[0] if cands else None
+
+    def folder_of(path) -> str:
+        parts = [seg for seg in str(path or "").replace("\\", "/").split("/") if seg]
+        return parts[-1].casefold() if parts else ""
+
+    if folder_name:
+        m = one([s for s in series if folder_of(s.get("path")) == folder_name.casefold()],
+                "series folder")
+        if m is not None:
+            return m
+    imdb = str(entry.get("imdb_id") or "").strip().lower()
+    if imdb.startswith("tt"):
+        m = one([s for s in series if str(s.get("imdbId") or "").strip().lower() == imdb],
+                "IMDb id")
+        if m is not None:
+            return m
+    names = {_norm_series_title(t) for t in [entry.get("title"), *(entry.get("alt_titles") or [])]}
+    names.discard("")
+    cands = [s for s in series if _norm_series_title(s.get("title")) in names]
+    year = entry.get("year")
+    if year and len(cands) > 1:
+        cands = [s for s in cands if s.get("year") == year] or cands
+    m = one(cands, "title")
+    if m is not None and year and m.get("year") and m["year"] != year:
+        return None
+    return m
+
+
 def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
     """Delete one season: unmonitor it in Sonarr first WHEN Sonarr is
     configured (it is optional and cleanup-only), then remove its episode
@@ -5663,28 +5866,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
                                         headers=s_headers, timeout=20)
             if not isinstance(series_list, list):
                 raise RuntimeError("series list did not answer")
-            candidates = [s for s in series_list if isinstance(s, dict)
-                          and s.get("id") is not None
-                          and _norm_series_title(s.get("title"))
-                          == _norm_series_title(entry.get("title"))]
-            # Same-title shows are real (Doctor Who 1963/2005): the year
-            # disambiguates. A candidate whose known year DIFFERS from ours
-            # is a different show; ambiguity that survives the year check is
-            # skipped fail-closed rather than unmonitoring a coin-flip.
-            entry_year = entry.get("year")
-            if entry_year and len(candidates) > 1:
-                same_year = [s for s in candidates if s.get("year") == entry_year]
-                if same_year:
-                    candidates = same_year
-            if len(candidates) > 1:
-                raise RuntimeError(
-                    f"{len(candidates)} Sonarr series share this title — "
-                    "cannot tell which to unmonitor")
-            match = candidates[0] if candidates else None
-            if match is not None and entry_year and match.get("year") \
-                    and match["year"] != entry_year:
-                # One title match, wrong year: OUR show is not in Sonarr.
-                match = None
+            match = _sonarr_series_for(series_list, entry, series_dir.name)
             if match is None:
                 # Not managed by Sonarr — no re-download risk, nothing to do.
                 print(f"TV cleanup: {entry.get('title')} is not in Sonarr — "
@@ -5730,10 +5912,12 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
             report["freed_bytes"] += freed
         return skip(why)
 
+    season_files = []
     for rp, want in rels:
         if not rp.parts or rp.is_absolute() or any(p in ("..", ".") for p in rp.parts):
             return abort(f"unsafe file path from the media server: {str(rp)!r}")
         target = series_dir.joinpath(*rp.parts)
+        season_files.append(target)
         try:
             if target.is_symlink():
                 return abort(f"refusing a symlink: {target}")
@@ -5795,6 +5979,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
         print(f"TV cleanup: {entry.get('title')} S{entry.get('season')} — every "
               "file already gone on disk (removed outside MediaReducer); "
               "clearing the mark and refreshing the inventory", flush=True)
+        _record_tv_season_gone(entry, season_files)
         return True
     report["deleted_seasons"].append({"title": entry.get("title"),
                                       "season": entry.get("season"),
@@ -5803,6 +5988,7 @@ def _delete_tv_season(cfg: dict, entry: dict, report: dict) -> bool:
     report["freed_bytes"] += freed
     print(f"TV cleanup: DELETED {entry.get('title')} S{entry.get('season')} — "
           f"{deleted} file(s), {freed / 1e9:.1f} GB", flush=True)
+    _record_tv_season_gone(entry, season_files)
     return True
 
 
@@ -5906,15 +6092,72 @@ def _probe_failure_reason(e: BaseException, url: str, key_word: str = "API key")
     return f"could not reach {where} — check the URL, and that the server is running"
 
 
+def _probe_failure_kind(e: BaseException) -> str:
+    """Which field a failed probe's message sends the person to: "key" when
+    the server refused the credential, "address" for everything else — a port
+    nothing listens on, a host that is not there, a server that answered as
+    something else or not at all."""
+    if isinstance(e, urllib.error.HTTPError) and e.code in (401, 403):
+        return "key"
+    return "address"
+
+
+def _probe_fields(kind: str | None, url_field: str, key_field: str) -> list:
+    """The Configuration fields a failed connection outlines: the one its
+    message names, and both only when the cause is unknown. Both used to be
+    outlined whatever the message said, so a refused port ("check the URL and
+    port") lit the key beside it too."""
+    if kind == "key":
+        return [key_field]
+    if kind == "address":
+        return [url_field]
+    return [url_field, key_field]
+
+
+_SERVARR_APPS = ("Radarr", "Sonarr", "Lidarr", "Readarr", "Prowlarr", "Whisparr")
+
+
+def _servarr_app_at(probe_url: str) -> str | None:
+    """Which *arr app answers at a probe URL's address, from its web UI page —
+    the title, or the realm of a Basic-auth prompt — which needs no key. None
+    when the page names none of them. Never sends the key: the page is the
+    probe URL's base, and the *arr probes carry their key in a header."""
+    base = probe_url.split("/api/", 1)[0].rstrip("/") + "/"
+    try:
+        req = urllib.request.Request(base, headers={"Accept": "text/html"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            page = resp.read(65536).decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        page = str(e.headers.get("WWW-Authenticate") or "")
+    except Exception:
+        return None
+    m = re.search(r"<title[^>]*>([^<]*)</title>", page, re.I)
+    named = m.group(1) if m else page
+    return next((a for a in _SERVARR_APPS if re.search(rf"\b{a}\b", named, re.I)), None)
+
+
 def _probe_json(url: str, headers: dict | None = None, timeout: int = 5,
-                key_word: str = "API key") -> tuple[bool, str]:
-    """Small JSON HTTP probe used by the Config health check. A failure's
-    message is _probe_failure_reason's, never the raw error."""
+                key_word: str = "API key", servarr: str | None = None) -> tuple[bool, str, str | None]:
+    """Small JSON HTTP probe used by the Config health check: (ok, message,
+    kind). A failure's message is _probe_failure_reason's, never the raw
+    error; its kind is _probe_failure_kind's.
+
+    servarr names the *arr app expected at the URL. Radarr and Sonarr reject
+    each other's key before their API says what they are, so a Radarr URL
+    left on Sonarr's port read as "refused the API key — check the API key"
+    for a key that was fine. A refused key is checked against the app the
+    address actually serves before it is blamed."""
     try:
         _json_request(url, headers=headers, timeout=timeout)
-        return True, "reachable"
+        return True, "reachable", None
     except Exception as e:
-        return False, _probe_failure_reason(e, url, key_word)
+        kind = _probe_failure_kind(e)
+        if servarr and kind == "key":
+            other = _servarr_app_at(url)
+            if other and other != servarr:
+                return (False, f"{_probe_endpoint(url)} is {other}, not {servarr} — "
+                        "check the port", "address")
+        return False, _probe_failure_reason(e, url, key_word), kind
 
 
 def _settled(call):
@@ -5966,11 +6209,13 @@ def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: boo
     if conn.get("radarr_url") and conn.get("radarr_key"):
         rurl = f"{conn['radarr_url'].rstrip('/')}/api/v3/system/status"
         rkey = conn["radarr_key"]
-        jobs["radarr"] = lambda: _probe_json(rurl, headers={"X-Api-Key": rkey}, timeout=6)
+        jobs["radarr"] = lambda: _probe_json(rurl, headers={"X-Api-Key": rkey}, timeout=6,
+                                             servarr="Radarr")
     if conn.get("sonarr_url") and conn.get("sonarr_key"):
         surl = f"{conn['sonarr_url'].rstrip('/')}/api/v3/system/status"
         skey = conn["sonarr_key"]
-        jobs["sonarr"] = lambda: _probe_json(surl, headers={"X-Api-Key": skey}, timeout=6)
+        jobs["sonarr"] = lambda: _probe_json(surl, headers={"X-Api-Key": skey}, timeout=6,
+                                             servarr="Sonarr")
     if not jobs:
         return {}
 
@@ -6001,14 +6246,16 @@ def _prefetch_connection_probes(conn: dict, *, use_plex: bool, use_jellyfin: boo
     return out
 
 
-def _probe_result(pre: dict, name: str) -> tuple[bool, str]:
-    """A prefetched _probe_json result, with a failed job reading as unreachable."""
+def _probe_result(pre: dict, name: str) -> tuple[bool, str, str | None]:
+    """A prefetched _probe_json result as (ok, message, kind), with a failed
+    job reading as unreachable."""
     got = pre.get(name)
     if isinstance(got, tuple):
-        return got
+        return (tuple(got) + (None,))[:3]
     # Not the exception's text, for the reason _probe_failure_reason gives.
-    return False, ("the check did not complete — check the URL" if got is not None
-                   else "not probed")
+    if got is not None:
+        return False, "the check did not complete — check the URL", "address"
+    return False, "not probed", None
 
 
 def _sample_result(pre: dict, name: str) -> list:
@@ -7056,7 +7303,8 @@ def api_debug_sonarr():
         return jsonify({"ok": False, "error": f"system/status failed: {e}"}), 400
 
     lines.append("")
-    lines.append("GET /api/v3/series (the pass matches by title + year here to unmonitor a season):")
+    lines.append("GET /api/v3/series (the pass finds a season's show here to unmonitor it — "
+                 "by series folder, then IMDb id, then title + year):")
     try:
         series = _json_request(f"{s_url}/api/v3/series",
                                headers={"X-Api-Key": s_key}, timeout=25) or []
@@ -7098,12 +7346,12 @@ def api_debug_sonarr():
     dups = {t: ys for t, ys in dup_titles.items() if len(ys) > 1}
     lines.append("")
     if dups:
-        lines.append("Same-title series (the pass disambiguates these by YEAR before unmonitoring;")
-        lines.append("ambiguity that survives the year check is skipped fail-closed):")
+        lines.append("Same-title series (only reached when neither the folder nor the IMDb id finds")
+        lines.append("the show: the YEAR disambiguates, and ambiguity that survives is skipped fail-closed):")
         for t, ys in list(dups.items())[:5]:
             lines.append(f"  - {t!r}: years {sorted(y for y in ys if y)}")
     else:
-        lines.append("No same-title series — the unmonitor lookup is unambiguous.")
+        lines.append("No same-title series — the unmonitor lookup's title step is unambiguous.")
 
     lines.append("")
     lines.append(f"SONARR_CLEANUP_ENABLED = {bool(cfg.get('SONARR_CLEANUP_ENABLED', False))} "
@@ -8338,14 +8586,16 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
                 ["TAUTULLI_URL"],
             )
         if probe and conn.get("tautulli_url") and conn.get("tautulli_key"):
-            ok, msg = _probe_result(pre, "tautulli")
+            ok, msg, kind = _probe_result(pre, "tautulli")
             tautulli_connected = ok
             if not ok:
                 tautulli_blocker = True
                 add_error(
                     f"Tautulli did not connect: {msg}.",
-                    ["TAUTULLI_URL", "TAUTULLI_API_KEY"],
-                    mounts_to_highlight=["tautulli"],
+                    _probe_fields(kind, "TAUTULLI_URL", "TAUTULLI_API_KEY"),
+                    # The appdata mount is where Auto Detect read the key: it
+                    # has nothing to say about an address that did not answer.
+                    mounts_to_highlight=[] if kind == "address" else ["tautulli"],
                 )
 
         # Plex is optional and the token is its on/off switch: no token means Plex-only
@@ -8363,17 +8613,17 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
                 ["PLEX_URL"],
             )
         if probe and plex_has_creds:
-            ok, msg = _probe_result(pre, "plex")
+            ok, msg, kind = _probe_result(pre, "plex")
             plex_connected = ok
             if not ok:
                 add_warning(
                     f"Plex did not connect: {msg}.",
-                    ["PLEX_URL", "PLEX_TOKEN"],
+                    _probe_fields(kind, "PLEX_URL", "PLEX_TOKEN"),
                 )
                 if cleanup_auto_section:
                     add_warning(
                         "Radarr section auto-detection needs Plex to connect.",
-                        ["PLEX_URL", "PLEX_TOKEN"],
+                        _probe_fields(kind, "PLEX_URL", "PLEX_TOKEN"),
                                 )
 
     # Jellyfin (native API), only checked when selected. Its API key must be created by
@@ -8390,11 +8640,12 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
             jellyfin_blocker = True
             add_error("Jellyfin URL is missing and no default address could be detected — enter it manually.", ["JELLYFIN_URL"])
         if probe and jf_url and jf_key:
-            ok, msg = _probe_result(pre, "jellyfin")
+            ok, msg, kind = _probe_result(pre, "jellyfin")
             jellyfin_connected = ok
             if not ok:
                 jellyfin_blocker = True
-                add_error(f"Jellyfin did not connect: {msg}.", ["JELLYFIN_URL", "JELLYFIN_API_KEY"])
+                add_error(f"Jellyfin did not connect: {msg}.",
+                          _probe_fields(kind, "JELLYFIN_URL", "JELLYFIN_API_KEY"))
 
     # Radarr is optional and its API key is the on/off switch: no key means Radarr
     # integration stays locked with no warning, whatever the URL holds. With a key, a
@@ -8411,12 +8662,12 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
             ["RADARR_URL"],
         )
     if probe and radarr_has_creds:
-        ok, msg = _probe_result(pre, "radarr")
+        ok, msg, kind = _probe_result(pre, "radarr")
         radarr_connected = ok
         if not ok:
             add_warning(
                 f"Radarr did not connect: {msg}. Optional cleanup is locked.",
-                ["RADARR_URL", "RADARR_API_KEY"],
+                _probe_fields(kind, "RADARR_URL", "RADARR_API_KEY"),
                 )
 
     # Sonarr is informational: it gates nothing yet, so a bad connection warns
@@ -8429,12 +8680,12 @@ def _connection_health_state(cfg: dict | None = None, *, probe: bool = False,
             ["SONARR_URL"],
         )
     if probe and sonarr_url and sonarr_key:
-        ok, msg = _probe_result(pre, "sonarr")
+        ok, msg, kind = _probe_result(pre, "sonarr")
         sonarr_connected = ok
         if not ok:
             add_warning(
                 f"Sonarr did not connect: {msg}.",
-                ["SONARR_URL", "SONARR_API_KEY"],
+                _probe_fields(kind, "SONARR_URL", "SONARR_API_KEY"),
                 )
 
     # A missing or empty library root makes every path sample fail, and "paths do
@@ -9294,8 +9545,8 @@ def api_reset_mark_delays():
                         "message": "Nothing is marked for deletion."})
     delay = int(load_config().get("DELETE_DELAY_DAYS") or 1)
     return jsonify({"ok": True, "reset": n,
-                    "message": f"Delay reset — {n} mark(s) now delete "
-                               f"{delay} day(s) from today."})
+                    "message": f"Delay restarted — {n} mark{'' if n == 1 else 's'} now "
+                               f"delete {delay} day{'' if delay == 1 else 's'} from today."})
 
 
 def code_reset_pending() -> bool:
@@ -9520,11 +9771,7 @@ def _marked_bytes_awaiting_delay() -> int:
 
     Redline-only mode has no cap to check and clocks nothing, so it contributes
     0 here by construction rather than by a special case."""
-    total = 0
-    for e in (_pending_raw() or {}).values():
-        if isinstance(e, dict) and e.get("marked_at") is not None:
-            total += _entry_size_bytes(e)
-    return total
+    return shared.marked_awaiting_bytes(_pending_raw() or {})
 
 
 def pending_deletion_entries(cfg: dict | None = None, *, with_lines: bool = True) -> list[dict]:
@@ -9707,8 +9954,8 @@ def _tv_eligible_entries(cfg: dict, marked_keys) -> list[dict]:
         return []
     try:
         data, _err = _read_library_snapshot()
-        tv_rows = [r for r in ((data or {}).get("movies") or [])
-                   if isinstance(r, dict) and r.get("media_type") == "tv"]
+        tv_rows = _without_gone_seasons([r for r in ((data or {}).get("movies") or [])
+                                         if isinstance(r, dict) and r.get("media_type") == "tv"])
     except Exception:
         return []
     if not tv_rows:
@@ -9862,8 +10109,10 @@ def favicon():
     markup is parsed, and again for bookmarks and shortcuts — so the <link> tags
     in base.html do not cover it. Without this the request 404s on every fresh
     page load, once in the access log and once in the console."""
+    # A day: this URL carries no stamp, and without a lifetime the browser
+    # revalidated it after every page load.
     return send_from_directory(app.static_folder, "favicon.ico",
-                               mimetype="image/x-icon")
+                               mimetype="image/x-icon", max_age=86400)
 
 
 @app.route("/")
@@ -10008,13 +10257,13 @@ def api_library_snapshot():
     data, pool_err = _read_library_snapshot()
     if pool_err == "missing":
         resp = jsonify({"ok": False, "reason": "no_pool",
-                        "message": "No library snapshot yet — run a Simulate to build it."})
+                        "message": "No library data yet — run Simulate to load it."})
         resp.headers["Cache-Control"] = "no-store"
         return resp
     movies = (data or {}).get("movies") or []
     if pool_err or not isinstance(movies, list):
         resp = jsonify({"ok": False, "reason": "bad_pool",
-                        "message": "The library snapshot is unreadable — run a Simulate to rebuild it."})
+                        "message": "The library data is unreadable — run Simulate to rebuild it."})
         resp.headers["Cache-Control"] = "no-store"
         return resp
     if not movies:
@@ -10033,7 +10282,7 @@ def api_library_snapshot():
     # there was one, to say "ambiguous folder" rather than "off monitored paths".
     movies = [{k: (bool(v) if k == "tv_scope_conflict" else v)
                for k, v in m.items() if k != "path"} if isinstance(m, dict) else m
-              for m in movies]
+              for m in _without_gone_seasons(movies)]
     resp = jsonify({"ok": True, "built_at": data.get("built_at"), "movies": movies,
                     "imdb_dataset_on_disk": imdb_on_disk})
     resp.headers["Cache-Control"] = "no-store"
@@ -11101,7 +11350,7 @@ def api_save_config():
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Headroom must be a number of GB (blank = 0)."}), 400
         if headroom_gb < 0:
-            return jsonify({"ok": False, "error": "HEADROOM_GB must be zero or greater."}), 400
+            return jsonify({"ok": False, "error": "The Headroom target must be zero or greater."}), 400
 
         if cfg.get("REDLINE_GB") is not None:
             try:
@@ -11109,7 +11358,7 @@ def api_save_config():
             except (TypeError, ValueError):
                 return jsonify({"ok": False, "error": "Enter a Redline value or disable it."}), 400
             if redline_gb <= 0:
-                return jsonify({"ok": False, "error": "REDLINE_GB must be greater than zero, or disabled."}), 400
+                return jsonify({"ok": False, "error": "The Redline floor must be greater than zero, or turned off."}), 400
             # Under an ARMED Headroom (>= 1), Redline must sit STRICTLY below
             # its value — a tie would enforce the full target on every check.
             # With the trigger off there is no ceiling. Keyed to the VALUE,
@@ -11127,9 +11376,9 @@ def api_save_config():
         try:
             max_headroom_pct = float(cfg.get("MAX_HEADROOM_PCT", 15))
         except (TypeError, ValueError):
-            return jsonify({"ok": False, "error": "Enter a valid Headroom Safety Percentage."}), 400
+            return jsonify({"ok": False, "error": "Enter a valid safety percentage."}), 400
         if max_headroom_pct <= 0:
-            return jsonify({"ok": False, "error": "MAX_HEADROOM_PCT must be greater than zero."}), 400
+            return jsonify({"ok": False, "error": "The safety percentage must be greater than zero."}), 400
         if max_headroom_pct > 100:
             # The percentage caps how much of the disk one run may free; past 100 it
             # neutralizes that guardrail entirely.
@@ -11394,7 +11643,7 @@ def api_save_config():
         try:
             cfg["LOG_RETENTION_DAYS"] = max(0, int(float(cfg.get("LOG_RETENTION_DAYS", 30))))
         except (TypeError, ValueError):
-            return jsonify({"ok": False, "error": "Keep run logs for (days) must be a whole number (0 = keep forever)."}), 400
+            return jsonify({"ok": False, "error": "Keep run logs for: enter a whole number of days (0 = keep forever)."}), 400
         cfg["KEEP_INTERRUPTED_LOGS"] = bool(cfg.get("KEEP_INTERRUPTED_LOGS"))
         cfg["DEBUG_MODE"] = bool(cfg.get("DEBUG_MODE"))
 
@@ -12202,7 +12451,7 @@ def api_logs_deleted_clear():
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("", encoding="utf-8")
-        resp = jsonify({"ok": True, "message": "Deleted history erased.", "count": 0, "reclaimed_bytes": 0, "reclaimed_label": "0.0 GB", "entries": []})
+        resp = jsonify({"ok": True, "message": "Deletion history erased.", "count": 0, "reclaimed_bytes": 0, "reclaimed_label": "0.0 GB", "entries": []})
     except OSError as e:
         deleted = deleted_stats()
         resp = jsonify({"ok": False, "message": f"Could not erase deleted.log: {e}", "count": deleted["count"], "reclaimed_bytes": deleted["reclaimed_bytes"], "reclaimed_label": deleted["reclaimed_label"]})
@@ -12258,7 +12507,7 @@ def _archived_logs_state() -> dict:
         "ok": True,
         "count": count,
         "empty": count == 0,
-        "label": ("Archived log directory is empty."
+        "label": ("No archived logs."
                   if count == 0
                   else f"{count} archived run log{'s' if count != 1 else ''} · {size_label}"),
     }

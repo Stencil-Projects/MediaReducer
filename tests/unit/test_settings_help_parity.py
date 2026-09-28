@@ -9,7 +9,7 @@ What is pinned here:
 
   • Every help line leads with what the setting DOES when it is on. An "Off =
     …" note may follow, never open.
-  • The Cleanup scope pair — the same control for the two media types — stays
+  • The Cleanup Scope pair — the same control for the two media types — stays
     a matched pair: same shape, comparable length.
   • No line is a wall. A settings hint people actually read is a sentence or
     two, not a paragraph.
@@ -63,7 +63,7 @@ openers = {cid: h["text"] for cid, h in helps.items()
 check("no help line opens with what happens when the setting is OFF",
       not openers, openers)
 
-# 2) The Cleanup scope pair is one control in two flavours; it must read that
+# 2) The Cleanup Scope pair is one control in two flavours; it must read that
 #    way. Same opening move, and neither side may be several times the other.
 movies = helps.get("c-movies-on", {}).get("text", "")
 tv = helps.get("c-tv-on", {}).get("text", "")

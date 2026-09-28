@@ -128,6 +128,19 @@ check("a dry run's Would delete counts the seasons its merge took",
 with db.transaction(E.DB_FILE) as conn:
     db.set_meta(conn, "tv_takes", {})
 
+# ── A dry run's disk-after counts the seasons its merge took ──────────────
+# The movie plan covers only the movies' share of the deficit once seasons take
+# part, so used-after from the movies alone sat above the Headroom limit and
+# the summary warned "headroom unreachable" for a target movies and seasons
+# together reached.
+_usage = {"used": 100_000_000_000, "free": 50_000_000_000}
+check("a dry run's disk-after spends its movies and the seasons its merge took",
+      E._sim_disk_after(_usage, 6_000_000_000, 4_000_000_000) == (90.0, 60.0),
+      E._sim_disk_after(_usage, 6_000_000_000, 4_000_000_000))
+_src = (ROOT / "engine.py").read_text(encoding="utf-8")
+check("...and the Simulate path reads it from there, takes included",
+      "final_gb, final_free_gb = _sim_disk_after(usage_info, _would_bytes, _take_b)" in _src)
+
 # ── Out-of-scope is not a fault ─────────────────────────────────────────────
 check("path issues count only real problems",
       "Path/disk issues: 19" in text, text)

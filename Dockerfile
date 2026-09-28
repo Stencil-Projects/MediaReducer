@@ -1,3 +1,14 @@
+# The commit this image is built from, for the welcome guide. The build context
+# is copied into this throwaway stage (.dockerignore lets in only .git's HEAD
+# and refs of .git) and only the answer leaves it: the image below takes BUILD
+# and nothing else. A plain COPY rather than a BuildKit mount, so the legacy
+# builder of an older Docker or docker-compose v1 builds it too. From a context
+# with no .git (a source archive) BUILD comes out empty, and the guide shows the
+# version alone.
+FROM python:3.11-slim AS build-info
+COPY . /ctx
+RUN python3 /ctx/build_info.py /ctx > /BUILD
+
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -5,11 +16,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY engine.py app.py db.py notify.py run_issues.py cli.py entrypoint.py scoring_constants.py shared.py default_config.json ./
+COPY engine.py app.py db.py notify.py run_issues.py cli.py entrypoint.py scoring_constants.py shared.py build_info.py default_config.json ./
 COPY templates/ templates/
 # Bootstrap + the Inter webfont, served from here rather than a CDN so the UI
 # loads at full speed on a host with no outbound internet.
 COPY static/ static/
+COPY --from=build-info /BUILD BUILD
 
 # In-container CLI: `mediareducer` (short alias: `mr`) drives the running
 # service over its local API, e.g. `docker exec -it mediareducer mr status`.

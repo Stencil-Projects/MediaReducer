@@ -132,5 +132,42 @@ check("the abort message spends no more than four decimals on a figure",
 check("...and still names the cap, the library and the floor",
       "2.45 GB" in msg and "8.18 GB" in msg and "6.95 GB" in msg, msg)
 
+# ── A library that grew while marks waited out the delay ────────────────────
+# The app nets the marks already waiting out the delay out of the floor: a
+# legal cap, marks waiting, a library that grows meanwhile must not trip it.
+# The engine checked the raw library, so the app kept Automatic Cleanup armed
+# while every daily run refused and the waiting marks never deleted. One
+# function now (shared.cap_floor), and both sides call it.
+GB = 10 ** 9
+_saved_lp = E.load_pending
+E.load_pending = lambda: {"/lib/a.mkv": {"marked_at": 1.0, "size_bytes": 10 * GB},
+                          "/lib/b.mkv": {"marked_at": None, "size_bytes": 40 * GB}}
+try:
+    stop, logs, _ = refused(library_gb=120.0, cap=100.0, pct=15)
+    check("marks waiting out the delay are netted out of the floor, as the app nets them",
+          stop is False, logs)            # (120 − 10) × 85% = 93.5; the eligible 40 GB is not a mark
+    stop, logs, _ = refused(library_gb=120.0, cap=90.0, pct=15)
+    check("...which cannot excuse a cap the queue does not cover",
+          stop is True and any("less the 10.0 GB already marked" in x for x in logs), logs)
+    E.load_pending = lambda: {"/lib/a.mkv": {"marked_at": 1.0, "size_bytes": 60 * GB}}
+    check("...and a queue bigger than one pass nets only one pass",
+          refused(library_gb=120.0, cap=85.0, pct=15)[0] is True)   # (120 − 18) × 85% = 86.7
+finally:
+    E.load_pending = _saved_lp
+
+import shared  # noqa: E402
+check("the floor function: net of the queue, clamped, None without a measurement",
+      shared.cap_floor(120, 10, 15) == (93.5, 10.0)
+      and shared.cap_floor(120, 60, 15) == ((120 - 18) * 0.85, 18.0)
+      and shared.cap_floor(None, 10, 15) == (None, 0.0) and shared.cap_floor(120, 10, 0) == (None, 0.0),
+      [shared.cap_floor(120, 10, 15), shared.cap_floor(120, 60, 15)])
+ROOT = Path(__file__).resolve().parents[2]
+_app, _eng = (ROOT / "app.py").read_text(encoding="utf-8"), (ROOT / "engine.py").read_text(encoding="utf-8")
+check("the app and the engine take the floor and the queue sum from shared.py",
+      "shared.cap_floor(library_gb_val, queued_gb" in _app
+      and "shared.cap_floor(library_gb, _queued_gb" in _eng
+      and "shared.marked_awaiting_bytes(_pending_raw()" in _app
+      and "shared.marked_awaiting_bytes(load_pending())" in _eng)
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

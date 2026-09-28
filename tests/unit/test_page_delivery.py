@@ -79,6 +79,35 @@ _head = client.get("/").get_data(as_text=True)
 for rel in ('rel="icon" type="image/svg+xml"', 'rel="icon" type="image/x-icon"',
             'rel="apple-touch-icon"'):
     check(f"the page declares {rel}", rel in _head)
+# Without sizes= on the .ico, Chrome fetched the 106 KB .ico over the 0.5 KB
+# SVG: a third of every first page load.
+check("the .ico link says its size, so Chrome takes the SVG instead",
+      'rel="icon" type="image/x-icon" sizes="32x32"' in _head)
+_icon_urls = re.findall(r'<link rel="(?:icon|apple-touch-icon)"[^>]*href="([^"]+)"', _head)
+check("the icons are content-stamped, so a navigation doesn't recheck them",
+      len(_icon_urls) == 3 and all("?v=" in u for u in _icon_urls))
+_icon = client.get(_icon_urls[0]) if _icon_urls else None
+check("...and a stamped icon is cached for good",
+      _icon is not None and "immutable" in (_icon.headers.get("Cache-Control") or ""))
+check("the bare /favicon.ico, which carries no stamp, is kept for a day",
+      "max-age=86400" in (r.headers.get("Cache-Control") or ""))
+# Each page fetches the other pages' scripts while idle, so a first visit to a
+# page finds its script already cached — stamped URLs, so the copy is current.
+# Not its own: a page that prefetched the script it loads anyway sent a second
+# request for it on every load.
+_scripts = {"/": "/static/js/dashboard.js", "/config": "/static/js/config.js",
+            "/explorer": "/static/js/explorer.js"}
+for _path, _own in _scripts.items():
+    _page = _head if _path == "/" else client.get(_path).get_data(as_text=True)
+    _prefetch = re.findall(r'<link rel="prefetch" href="([^"]+)"', _page)
+    _loaded = re.findall(r'<script defer src="(/static/js/(?:dashboard|config|explorer)\.js[^"]*)"', _page)
+    check(f"{_path} prefetches the other pages' scripts, stamped",
+          sorted(u.split("?")[0] for u in _prefetch) == sorted(set(_scripts.values()) - {_own})
+          and all("?v=" in u for u in _prefetch))
+    check("...and loads its own, stamped the same way",
+          [u.split("?")[0] for u in _loaded] == [_own] and "?v=" in _loaded[0])
+    check("...and never prefetches a page itself (Chrome would reuse it unchecked)",
+          not any(u.rstrip("/").split("?")[0] in ("", "/config", "/explorer") for u in _prefetch))
 
 # ── The page names the build it is running ──────────────────────────────────
 # The welcome guide shows the version so a bug report can quote it. It has to
@@ -132,6 +161,39 @@ check("and arrives byte-identical to the file on disk",
       == (ROOT / "static/vendor/bootstrap-5.3.3.min.css").read_bytes())
 check("vendored assets are immutable, so a repeat page load doesn't refetch them",
       "immutable" in (css.headers.get("Cache-Control") or ""))
+
+# A revalidation answers with the same promise as the file it confirms.
+_etag = css.headers.get("ETag")
+again = client.get("/static/vendor/bootstrap-5.3.3.min.css",
+                   headers=dict(GZIP, **({"If-None-Match": _etag} if _etag else {})))
+check("a 304 for an immutable file says immutable too",
+      again.status_code == 304 and "immutable" in (again.headers.get("Cache-Control") or ""))
+
+# A range request gets that range, not the gzip of the whole file under the
+# range's headers (which is what it got: a malformed 206).
+part = client.get("/static/vendor/bootstrap-5.3.3.min.css",
+                  headers=dict(GZIP, Range="bytes=0-99"))
+check("a byte-range request is answered with exactly that range, uncompressed",
+      part.status_code == 206 and "Content-Encoding" not in part.headers
+      and part.get_data() == (ROOT / "static/vendor/bootstrap-5.3.3.min.css").read_bytes()[:100])
+
+# ── Our own files: stamped by content ────────────────────────────────────────
+# The stamp was size+mtime, and an image's files carry the build's checkout
+# time, so every release restamped every file and browsers re-downloaded
+# scripts that had not changed.
+_probe = ROOT / "static" / "js" / "_stamp_probe.js"
+try:
+    _probe.write_text("// probe\n", encoding="utf-8")
+    with A.app.test_request_context():
+        first = A.asset_url("js/_stamp_probe.js")
+        os.utime(_probe, (1_000_000_000, 1_000_000_000))
+        touched = A.asset_url("js/_stamp_probe.js")
+        _probe.write_text("// changed\n", encoding="utf-8")
+        changed = A.asset_url("js/_stamp_probe.js")
+finally:
+    _probe.unlink(missing_ok=True)
+check("an unchanged file keeps its stamp when only its timestamp moves", first == touched)
+check("...and a changed file gets a new one", changed != first)
 
 font = client.get("/static/vendor/fonts/inter-latin.woff2", headers=GZIP)
 check("woff2 is left alone (already compressed; re-gzipping only costs CPU)",

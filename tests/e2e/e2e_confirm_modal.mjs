@@ -202,7 +202,7 @@ check('the delay dialog says the existing marks keep their old delay',
   /already marked/.test(delayText.body) && /future marks only/.test(delayText.body)
   && /\b25 items\b/.test(delayText.body) && !/\b3 items\b/.test(delayText.body));
 check('...and offers to re-date them instead',
-  !!delayText.extra && /re-date/.test(delayText.extra));
+  !!delayText.extra && /restart the delay/.test(delayText.extra));
 
 POSTS.length = 0;
 await armDelay();
@@ -256,7 +256,7 @@ check('a threshold change in the same save keeps the doomed count out of the dia
   !/\b25\b/.test(rebuildText.body) && /deletion plan is rebuilt/.test(rebuildText.body));
 check('...and out of the re-date button, which still offers the re-date',
   !!rebuildText.extra && !/\b25\b/.test(rebuildText.extra)
-  && /re-date/.test(rebuildText.extra));
+  && /restart the delay/.test(rebuildText.extra));
 
 // ...and the re-date waits for that rebuild. The endpoint refuses (409) while a
 // reconcile owns the queue, so firing it the moment the save returns loses the

@@ -469,7 +469,7 @@ for (const w of [320, 360, 390]) {
   const p = await b.newPage();
   try {
     await p.goto(BASE + '/explorer', { waitUntil: 'networkidle', timeout: 20000 });
-    // Both toggles live in Eligibility filters, which starts collapsed — a
+    // Both toggles live in Eligibility Filters, which starts collapsed — a
     // hover needs the row on screen.
     await p.click('[data-bs-target="#fs-eligibility"]');
     await p.waitForSelector('#fs-eligibility.show', { timeout: 5000 });

@@ -1,7 +1,7 @@
 // Dashboard <-> shared.py deficit parity: the GB figure the delete confirmation
 // puts on its own button.
 //
-// "Run a cleanup now?" says "Delete ~N GB", and N comes from _currentDeficits()
+// "Run Cleanup now?" says "Delete ~N GB", and N comes from _currentDeficits()
 // in dashboard.js — a third implementation of arithmetic shared.pool_deficit_gb
 // already owns for the engine and the app. It is the number a user weighs
 // before authorising an irreversible deletion, so it has to be the same number,

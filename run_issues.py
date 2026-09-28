@@ -68,25 +68,24 @@ CATEGORIES = {
         "severity": ERROR,
         "label": "IMDb ratings download failed",
         "unit": None,
-        "note": ("Scoring falls back to whatever ratings data is already on "
-                 "disk. Check the container's internet access."),
+        "note": ("Unless title.ratings.tsv.gz was placed in the config folder by "
+                 "hand, the run stops here. Check the container's internet access."),
     },
     "imdb_load_failed": {
         "severity": ERROR,
         "label": "IMDb ratings file unreadable",
         "unit": None,
-        "note": ("Every movie scores as though it had no rating, which changes "
-                 "the deletion order. Clear the IMDb cache in Advanced to "
+        "note": ("The run stopped: the ratings file on disk can't be read. Delete "
+                 "title.ratings.tsv from the config folder and run again to "
                  "re-download it."),
     },
     "tv_inventory_unavailable": {
         "severity": ERROR,
         "label": "TV inventory unavailable",
         "unit": None,
-        "note": ("The season side is fail-closed, so a media server that did not "
-                 "answer means no season was planned or deleted this run and the "
-                 "movie side carried the whole target. Check the Jellyfin/Plex "
-                 "connection, then run again."),
+        "note": ("The media server didn't return the TV library, so no season was "
+                 "planned or deleted this run and movies covered the whole target. "
+                 "Check the Plex/Jellyfin connection, then run again."),
     },
 
     # ── Warnings: the run carried on, but you should know ───────────────────

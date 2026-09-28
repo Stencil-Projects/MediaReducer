@@ -127,7 +127,7 @@ check("the dashboard words the batch by type",
       and "movies: d.marked_event_movies, seasons: d.marked_event_seasons" in js)
 src = (ROOT / "engine.py").read_text(encoding="utf-8")
 check("a dry run's closing line names the seasons its merge took",
-      'f"Dry run — would mark {_what} for deletion."' in src
+      'f"Dry run — marked {_what} for deletion; nothing was deleted."' in src
       and "_take_n, _take_b = _season_takes_this_run()" in src)
 check("a scheduled Cleanup's closing line counts the seasons it marks as it ends",
       "_tk = 0 if _manual_cleanup else _season_takes_this_run()[0]" in src)

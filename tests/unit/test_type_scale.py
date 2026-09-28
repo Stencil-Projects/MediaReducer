@@ -7,14 +7,18 @@ Filtering & Scoring page was worse than untidy, being built entirely in px: it
 alone ignored a reader's browser font-size setting while every other page
 honoured it.
 
-This is a lint, not a rendering check — it reads the templates rather than a
-browser, so it runs in the fast tier and fails on the line that reintroduces
-the problem. The rendered side is covered by the pages' own e2e tests.
+This is a lint, not a rendering check — it reads the stylesheets and the
+templates (for their inline styles) rather than a browser, so it runs in the
+fast tier and fails on the line that reintroduces the problem. The rendered side
+is covered by the pages' own e2e tests.
 """
 import re, sys, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TEMPLATES = sorted((ROOT / "templates").glob("*.html"))
+# The styles live in static/css now (moved out so browsers cache them); the
+# templates keep only inline styles and the welcome guide's small block.
+SHEETS = sorted((ROOT / "static" / "css").glob("*.css")) + TEMPLATES
 
 ok = True
 
@@ -25,16 +29,16 @@ def check(name, cond, extra=None):
     ok = ok and cond
 
 
-base = (ROOT / "templates" / "base.html").read_text()
+base = (ROOT / "static" / "css" / "base.css").read_text()
 scale = set(re.findall(r'(--fs-[a-z0-9]+):', base))
-check("base.html defines a type scale", len(scale) >= 6, sorted(scale))
+check("base.css defines a type scale", len(scale) >= 6, sorted(scale))
 
 # Anything below 1rem is body text, and body text is what drifted. At 1rem and
 # up the sizes are display figures and page titles — few, far apart, and each
 # deliberately its own; a scale there would be invented rather than observed.
 literal = []
 px_literal = []
-for f in TEMPLATES:
+for f in SHEETS:
     for m in re.finditer(r'font-size:\s*([^;{}"\']+)', f.read_text()):
         raw = m.group(1).strip()
         if raw.startswith("var(--fs") or raw.startswith("var(--log-line"):

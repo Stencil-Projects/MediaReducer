@@ -60,7 +60,7 @@ unit = dash.split('id="pruned-count-unit">')[1].split("</span>")[0]
 check("the Lifetime tile counts files and says so", "'FILES'" in unit and "ITEM" not in unit, unit)
 check("...in its live redraw and the history summary too",
       "unit.textContent = safe === 1 ? 'FILE' : 'FILES';" in dash_js
-      and "'file has' : 'files have'} been pruned" in dash_js
+      and "${count === 1 ? 'file' : 'files'} deleted" in dash_js
       and "items have been pruned" not in dash_js)
 
 print("RESULT:", "PASS" if ok else "FAIL")

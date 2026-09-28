@@ -38,8 +38,10 @@ for (let i = 0; i < 20; i++) {
   await p.keyboard.press('Escape');
   await p.waitForTimeout(200);
 }
-// The Notifications section ships collapsed; open it the way a user does.
+// The Notifications section ships collapsed; open it the way a user does, and
+// let its height transition finish before clicking anything inside it.
 await p.click('button[data-bs-target="#s-notify"]');
+await p.waitForSelector('#s-notify.show:not(.collapsing)', { timeout: 5000 });
 
 // ── It is a debug tool, so it lives and dies with Debug mode ────────────────
 // Same rule as every other debug control (.debug-mode-control), and keyed to
@@ -62,7 +64,29 @@ check('turning Debug mode on reveals it',
         ?.classList.contains('d-none')) === false);
 
 await p.waitForSelector('#btn-notify-preview', { state: 'visible', timeout: 10000 });
-await p.click('#btn-notify-preview');
+// Click and wait for the request the button sends. In one full --e2e run in
+// four on the BuilderBot node (B24) the click reached no handler: the box never
+// opened and no POST reached the app, and it never reproduced in isolation (0
+// of 15 against the same fixture). A click that sends nothing is retried once,
+// and the page's state at that moment is printed as a NOTE, which the runner
+// shows even on a pass, so the next one can be read rather than guessed at.
+const clickPreview = async () => {
+  const sent = p.waitForRequest(r => r.url().includes('/api/debug/notify-preview'), { timeout: 4000 })
+    .then(() => true, () => false);
+  await p.click('#btn-notify-preview');
+  return sent;
+};
+if (!await clickPreview()) {
+  const state = await p.evaluate(() => {
+    const b = document.getElementById('btn-notify-preview');
+    return { disabled: !!b?.disabled, title: b?.title || '', runActive: _configRunActive,
+             previewReason: _notifyPreviewReason, box: !!document.getElementById('pr-debug-overlay') };
+  });
+  console.log(`NOTE the first click on Debug sent no preview request; retrying once — ${JSON.stringify(state)}`);
+  await p.waitForFunction(() => !document.getElementById('btn-notify-preview')?.disabled, null,
+                          { timeout: 10000 }).catch(() => {});
+  await clickPreview();
+}
 let box = null;
 for (let waited = 0; waited < 8000; waited += 150) {
   box = await p.evaluate(() => ({

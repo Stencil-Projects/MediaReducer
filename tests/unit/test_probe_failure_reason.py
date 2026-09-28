@@ -49,13 +49,31 @@ def free_port():
     return port
 
 
+ARR_API = (401, b'{"error": "Unauthorized"}', {})
+
+
+def page(title):
+    return (200, f"<html><head><title>{title}</title></head></html>".encode(), {})
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        code, body = {"/401": (401, b'{"error": "Invalid apikey"}'),
-                      "/404": (404, b"not here"),
-                      "/html": (200, b"<html>some other web app</html>")}.get(
-            self.path.split("?")[0], (200, b"{}"))
-        self.send_response(code); self.end_headers(); self.wfile.write(body)
+        code, body, hdrs = {
+            "/401": (401, b'{"error": "Invalid apikey"}', {}),
+            "/404": (404, b"not here", {}),
+            "/html": (200, b"<html>some other web app</html>", {}),
+            # *arr apps: the API refuses a foreign key before saying what it
+            # is; the web UI's page names the app, and needs no key.
+            "/sonarr/api/v3/system/status": ARR_API, "/sonarr/": page("Sonarr"),
+            "/radarr/api/v3/system/status": ARR_API, "/radarr/": page("Radarr"),
+            "/basic/api/v3/system/status": ARR_API,
+            "/basic/": (401, b"", {"WWW-Authenticate": 'Basic realm="Sonarr"'}),
+            "/plain/api/v3/system/status": ARR_API, "/plain/": page("Home"),
+        }.get(self.path.split("?")[0], (200, b"{}", {}))
+        self.send_response(code)
+        for k, v in hdrs.items():
+            self.send_header(k, v)
+        self.end_headers(); self.wfile.write(body)
 
     def log_message(self, *a):
         pass
@@ -71,8 +89,12 @@ REFUSED = f"127.0.0.1:{free_port()}"
 
 
 def probe(url, **kw):
-    good, msg = A._probe_json(url, timeout=1, **kw)
+    good, msg, kind = A._probe_json(url, timeout=1, **kw)
+    KINDS[url] = kind
     return good, msg
+
+
+KINDS = {}
 
 
 cases = [
@@ -95,6 +117,34 @@ for label, url, kw, want in cases:
     good, msg = probe(url, **kw)
     check(f"{label}: fails and says so", good is False and all(w in msg for w in want), msg)
     check(f"{label}: without the key in the message", KEY not in msg, msg)
+    # The field the message sends the person to is the one Configuration
+    # outlines: the key only when it was refused, the address otherwise.
+    want_kind = "key" if "refused the" in msg else "address"
+    check(f"{label}: sends the person to the {'key' if want_kind == 'key' else 'URL'}",
+          KINDS[url] == want_kind, KINDS[url])
+
+check("a refused key outlines the key field alone, an address failure the URL alone",
+      A._probe_fields("key", "U", "K") == ["K"] and A._probe_fields("address", "U", "K") == ["U"]
+      and A._probe_fields(None, "U", "K") == ["U", "K"])
+check("a prefetched result from before the kind was carried still reads",
+      A._probe_result({"x": (False, "old")}, "x") == (False, "old", None)
+      and A._probe_result({"x": RuntimeError("boom")}, "x")[2] == "address")
+
+# ── Radarr's URL on another *arr app's port ───────────────────────────────
+# Radarr and Sonarr reject each other's key, so this read as a refused key —
+# for a key that was fine. The refusal is checked against the app the
+# address actually serves before the key is blamed.
+for label, base, want, want_kind in [
+    ("Radarr's URL on Sonarr's port names Sonarr and the port",
+     "sonarr", f"{HTTP} is Sonarr, not Radarr — check the port", "address"),
+    ("...found through a Basic-auth prompt as well", "basic", f"{HTTP} is Sonarr, not Radarr", "address"),
+    ("Radarr itself refusing the key is still the key",
+     "radarr", f"{HTTP} refused the API key (HTTP 401)", "key"),
+    ("a page that names no *arr app leaves the key message", "plain", "refused the API key", "key"),
+]:
+    good, msg, kind = A._probe_json(f"http://{HTTP}/{base}/api/v3/system/status",
+                                    headers={"X-Api-Key": KEY}, timeout=1, servarr="Radarr")
+    check(label, good is False and want in msg and kind == want_kind and KEY not in msg, (msg, kind))
 
 good, msg = probe(f"http://{HTTP}/ok")
 check("a server that answers JSON is reachable", good is True and msg == "reachable", msg)
@@ -112,6 +162,9 @@ errs = [e for e in (body.get("errors") or []) if "Tautulli" in e]
 check("Check for Errors names the host, the port and the cause",
       any(f"Tautulli did not connect: nothing is listening at {REFUSED}" in e for e in errs), errs)
 check("...and never the key", KEY not in json.dumps(body))
+check("...outlining the URL it could not reach, not the key beside it",
+      "TAUTULLI_URL" in (body.get("highlights") or [])
+      and "TAUTULLI_API_KEY" not in (body.get("highlights") or []), body.get("highlights"))
 
 srv.shutdown(); silent.close()
 print("RESULT:", "PASS" if ok else "FAIL")

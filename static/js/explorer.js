@@ -264,6 +264,10 @@ function updateCfgButtons(){
   const revertBtn=document.getElementById('btn-cfg-revert');
   if(saveBtn){
     saveBtn.disabled=cfgSaving||!dirty||expRunActive||invalid;
+    // Accent while there is something to save, as Configuration's Save does.
+    const saveHot=cfgSaving||(dirty&&!invalid&&!expRunActive);
+    saveBtn.classList.toggle('btn-success',saveHot);
+    saveBtn.classList.toggle('btn-outline-secondary',!saveHot);
     // "Saving" with an ANIMATED ellipsis (.pending-ellipsis ::after) — the same
     // affordance the Config page's Save uses — so it's unmistakable that the save
     // is still in flight (and why leaving the page is being guarded). The label
@@ -537,20 +541,20 @@ function seasonScore(m,cfg){
   return hist+imdb+shelfPts*w.h*ramp;
 }
 const FILTER_REASONS={
-  mov_off:'Movie cleanup is turned off in Cleanup scope — no movie is eligible',
+  mov_off:'Movie cleanup is turned off in Cleanup Scope — no movie is eligible',
   protected:'In a protected collection — never deleted',
-  favorite:'A Jellyfin user favorited this movie',
+  favorite:'A Jellyfin user favorited this title',
   nodata:'No IMDb rating or votes found — not enough data to judge it',
   cutoff:'Above the IMDb rating cutoff',
   grace:'Within the grace period',
-  unplayed:'Unplayed movies are skipped',
-  tv_off:'TV cleanup is turned off in Cleanup scope — no season is eligible',
+  unplayed:'Unplayed titles are skipped',
+  tv_off:'TV cleanup is turned off in Cleanup Scope — no season is eligible',
   tv_oos:'This series folder is not under a monitored directory, so cleanup will never touch it',
   tv_ambiguous:'Two library entries claim this series folder (the servers may title or date the show differently), or its name is under more than one monitored directory — cleanup leaves it alone until one show owns the folder',
   tv_latest:'The latest season of a show not known to be ended — the household may be keeping up with it',
   tv_not_oldest:'Season eligibility is "only the oldest season" — this one waits its turn',
   tv_newest:'Season eligibility holds back the show\'s most recently added season',
-  tv_bigseason:'More episodes than the season episode cap — a show filed under one season number, not a season',
+  tv_bigseason:'More episodes than the season episode cap — likely a whole show filed as one season',
 };
 // The facts a row's own score reads. A season row is scored on the SEASON's
 // plays, watchers, last watch and added date, so those are what its columns
@@ -818,8 +822,8 @@ function renderT(){
     const unrated=raw.length>0&&raw.every(m=>!(Number.isFinite(m.rating)&&m.rating>0));
     if(unrated&&imdbInUse(cfg)){
       note.style.display='';
-      note.textContent='This snapshot has no IMDb ratings — the last run was scored on watch history alone. '
-        +'Save an IMDb-weighted balance (or a rating cutoff) and run Simulate to annotate ratings.';
+      note.textContent='This library data has no IMDb ratings — the last run scored on watch history alone. '
+        +'Save a balance that uses IMDb (or a rating cutoff), then run Simulate to add ratings.';
     }else{
       note.style.display='none';
     }
@@ -827,10 +831,10 @@ function renderT(){
   const ps=document.getElementById('prunestat');
   if(ps){
     if(appliedPruneGb>0){
-      ps.textContent=plan.count+' row'+(plan.count===1?'':'s')+' marked · '+plan.freed.toFixed(1)+' / '+appliedPruneGb.toFixed(0)+' GB'+(plan.complete?'':' · not enough eligible space');
+      ps.textContent=plan.count+' would be deleted · '+plan.freed.toFixed(1)+' / '+appliedPruneGb.toFixed(0)+' GB'+(plan.complete?'':' · not enough eligible space');
       ps.className='prunestat active';
     }else{
-      ps.textContent='No target set';ps.className='prunestat';
+      ps.textContent='Enter GB to preview';ps.className='prunestat';
     }
   }
   // One bracket: the tie group the target lands inside, drawn only while
@@ -927,7 +931,7 @@ function sb(col){
   if(sc===col)sd*=-1;else{sc=col;sd=1;}
   tablePage=0;
   const map={order:'th-o',title:'th-t',type:'th-m',year:'th-y',rating:'th-r',votes:'th-v',plays:'th-p',users:'th-u',eng:'th-e',added:'th-a',size:'th-z',score:'th-s',status:'th-x'};
-  const nm={order:'#',title:'Title',type:'Type',year:'Year',rating:'IMDB',votes:'Votes',plays:'Plays',users:'Users',eng:'Last watched',added:'Added',size:'Size',score:'Retention',status:'Eligibility'};
+  const nm={order:'#',title:'Title',type:'Type',year:'Year',rating:'IMDb',votes:'Votes',plays:'Plays',users:'Users',eng:'Last watched',added:'Added',size:'Size',score:'Retention',status:'Eligibility'};
   Object.keys(map).forEach(k=>{
     const el=document.getElementById(map[k]);
     el.className=sc===k?'sc':'';
@@ -1007,7 +1011,7 @@ function go(){
   document.getElementById('v-hist-weight').textContent=hPct+'% of the score';
   document.getElementById('v-hist-detail').textContent=
     'frequency '+b.usage.toFixed(1)+' · recency '+b.recency.toFixed(1)+' · users '+b.multi_user.toFixed(1)
-    +(b.shelf>0.05?' · soft shelf '+b.shelf.toFixed(1):'')
+    +(b.shelf>0.05?' · recency past the window '+b.shelf.toFixed(1):'')
     +' — out of '+hPct+' max at this balance';
 
   document.getElementById('v-imdb').textContent='+'+b.imdb.toFixed(1);
@@ -1024,11 +1028,9 @@ function go(){
 
   document.getElementById('v-overall').textContent=retention.toFixed(1);
   const ve=document.getElementById('v-verd');
-  const V=retention<10?['First to go','var(--text-danger)','var(--bg-danger)','var(--border-danger)']:
-           retention<40?['Deletion target','var(--text-warning)','var(--bg-warning)','var(--border-warning)']:
-           retention<80?['Mid-range','var(--text-secondary)','var(--surface-0)','var(--border)']:
-           ['Kept longest','var(--text-accent)','var(--bg-accent)','var(--border-accent)'];
-  ve.textContent=V[0];ve.style.color=V[1];ve.style.background=V[2];ve.style.borderColor=V[3];
+  const V=retention<10?['First to go','is-danger']:retention<40?['Deletion target','is-warning']:
+           retention<80?['Mid-range','is-neutral']:['Kept longest','is-accent'];
+  ve.textContent=V[0];ve.className='pr-pill pr-pill--state '+V[1];
 }
 function all(){go();renderT();}
 // poolImdbOnDisk: an IMDb dataset exists server-side — the unrated-snapshot
@@ -1047,7 +1049,7 @@ async function loadPool(){
     const d=await fetch('/api/library-snapshot?_='+Date.now(),{cache:'no-store'}).then(r=>r.json());
     if(!d||!d.ok){
       raw=[];
-      poolState={loaded:false,message:(d&&d.message)||'No library snapshot available — run a Simulate to build it.'};
+      poolState={loaded:false,message:(d&&d.message)||'No library data yet — run Simulate to load it.'};
       renderT();
       return;
     }

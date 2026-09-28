@@ -1,0 +1,1995 @@
+/* Moved out of templates/base.html so browsers cache it: inline, it rode
+   along in every page load, about 24 KB gzipped on every page. Linked with asset_url's content stamp,
+   so an edit is a new URL and an unchanged file is never refetched. */
+
+    /* ════════════════════════════════════════════════════════════════
+       THEME TOKENS
+       Dark is the default; light applies via :root[data-theme="light"].
+       Every surface/border/text color reads from these, so the toggle
+       re-skins the whole app from one place.
+       ════════════════════════════════════════════════════════════════ */
+    :root {
+      color-scheme: dark;
+      /* Shared motion tokens so same-purpose animations don't drift page by page. */
+      --pr-anim-in: .22s ease-out;
+      --pr-anim-out: .18s ease;
+      --pr-pulse-period: 1.5s;
+      --pr-spin-period: .8s;
+      /* The page entrance, in three numbers — the whole of what a navigation
+         looks like. Tune them here; see the keyframe below for what each does
+         and what a slow deep fade costs. */
+      --pr-enter-rise: 8px;    /* how far the content slides up into place */
+      --pr-enter-fade: .15;    /* the opacity it starts from; 1 = no fade */
+      --pr-enter-time: .7s;    /* how long the whole thing takes */
+      /* Muted glass palette, paired to the light reference theme. */
+      --surface-0:     #12161d;  /* deepest inset surfaces */
+      --surface-1:     rgba(30,35,43,.88);  /* glass cards */
+      --surface-2:     rgba(39,45,55,.82);  /* headers, inputs, sub-panels */
+      --surface-3:     rgba(53,61,74,.78);  /* hover / raised */
+      --border:        rgba(124,119,108,.34);
+      --border-strong: rgba(160,153,139,.48);
+      --border-accent: #8ea3ce;  /* steel blue */
+      --border-danger: #b36a6f;
+      --border-warning:#b98968;   /* clay */
+      --text-primary:  #ece8df;
+      --text-secondary:#c9c3b8;
+      --text-muted:    #938d82;
+      --text-accent:   #a8b8dc;   /* muted steel blue */
+      --text-warning:  #d2a77f;
+      --text-danger:   #e7a0a3;
+      --accent:        #8ea3ce;
+      --bg-accent:        rgba(110,132,183,.16);
+      --bg-accent-strong: rgba(110,132,183,.26);
+      --bg-warning:       rgba(185,137,104,.16);
+      --bg-danger:        rgba(179,106,111,.16);
+      --bg-neutral:       rgba(201,195,184,.10);
+      --bg-sage:          rgba(126,155,132,.16);
+      --popup-bg:         #20262f;
+      --popup-bg-2:       #29313b;
+      --toast-info-bg:    color-mix(in srgb, var(--popup-bg) 88%, var(--text-accent) 12%);
+      --toast-success-bg: color-mix(in srgb, var(--popup-bg) 84%, var(--accent) 16%);
+      --toast-warning-bg: color-mix(in srgb, var(--popup-bg) 82%, var(--text-warning) 18%);
+      --toast-danger-bg:  color-mix(in srgb, var(--popup-bg) 82%, var(--text-danger) 18%);
+      /* Single shared tinted control surface (outline buttons, neutral/accent
+         pills, mode badge, input add-ons, focused fields) so the tint can't
+         drift; color-mix resolves per-theme at use time, like the toasts above. */
+      --surface-tint: color-mix(in srgb, var(--surface-2) 82%, var(--bg-accent) 18%);
+      /* Pressed fills: each button family settles into its own border color a
+         shade darker, so a click reads as the control seating instead of a stock
+         Bootstrap accent flashing through. Declared once — the var()s resolve
+         against whichever theme is on :root, like --surface-tint above. The
+         neutral family borrows --text-muted, the opaque sibling of the same warm
+         gray: --border/--border-strong are translucent, and a see-through press
+         washes out over the light theme's pale surfaces. */
+      /* Each pressed fill keeps a little transparency (the 86% step) so the
+         blur behind the button still reads — a fully opaque fill would look
+         like a flat chip sitting on the glass rather than part of it. */
+      --press-accent:  color-mix(in srgb, color-mix(in srgb, var(--border-accent) 68%, #000) 86%, transparent);
+      --press-warning: color-mix(in srgb, color-mix(in srgb, var(--border-warning) 68%, #000) 86%, transparent);
+      --press-neutral: color-mix(in srgb, color-mix(in srgb, var(--text-muted) 68%, #000) 86%, transparent);
+      --press-danger:  color-mix(in srgb, var(--text-danger) 86%, transparent);
+      /* Glass: a light edge along the top fading to a shadow at the bottom,
+         and shadows that lift on hover then sink under the press. */
+      --btn-sheen: linear-gradient(180deg, rgba(255,255,255,.15), rgba(255,255,255,.03) 45%, rgba(0,0,0,.06));
+      --btn-shadow:       inset 0 1px 0 rgba(255,255,255,.16), 0 1px 2px rgba(0,0,0,.22);
+      --btn-shadow-hover: inset 0 1px 0 rgba(255,255,255,.22), 0 3px 8px rgba(0,0,0,.26);
+      --btn-shadow-press: inset 0 2px 5px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.05);
+      /* Fields are the same material as the buttons, lit the other way: a
+         button is raised (highlight on top, shadow beneath), a field is sunk
+         (shadow along the top inner edge, a hair of light along the bottom).
+         That pairing is what makes a field and its add-on button read as one
+         object instead of two things parked together. */
+      --field-inset: inset 0 1px 2px rgba(0,0,0,.26), inset 0 -1px 0 rgba(255,255,255,.045);
+      --press-text:    #f6f4ef;
+      /* Hover is the exact midpoint between a button's resting fill and its
+         pressed one, so hovering reads as the button already moving toward the
+         press rather than as a third unrelated color. Each mixes that family's
+         OWN resting fill — a tinted outline button, a solid Save, a transparent
+         Stop all rest differently, so one formula cannot serve them all. */
+      --surface-tint-warning: color-mix(in srgb, var(--surface-2) 82%, var(--bg-warning) 18%);
+      --hover-primary: color-mix(in srgb, var(--surface-tint) 50%, var(--press-accent));
+      --hover-save:    color-mix(in srgb, var(--bg-accent) 50%, var(--press-accent));
+      --hover-warning: color-mix(in srgb, var(--surface-tint-warning) 50%, var(--press-warning));
+      --hover-neutral: color-mix(in srgb, var(--surface-tint) 50%, var(--press-neutral));
+      --hover-revert:  color-mix(in srgb, var(--bg-warning) 50%, var(--press-warning));
+      --hover-danger:  color-mix(in srgb, var(--bg-danger) 50%, var(--press-danger));
+      --hover-stop:    color-mix(in srgb, transparent 50%, var(--press-danger));
+      /* A midpoint fill lands mid-tone by definition, which is the one place a
+         near-white label struggles. The hover label therefore follows the THEME
+         rather than the press: light-on-dark here, dark-on-light below. */
+      --hover-text:    var(--press-text);
+
+      --page-bg:   #171a1f;
+      /* Fields/tracks inside a raised sub-panel ("bubble") take the outer
+         card's tone so bubble contents read as windows back to the main card. */
+      --bubble-field-bg: var(--surface-1);
+      --term-bg:   #151922;
+      --term-text: #d7d1c7;
+      --shadow:    0 18px 42px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04);
+      --glass-blur: blur(16px) saturate(118%);
+
+      /* ── Type scale ───────────────────────────────────────────────────────
+         Every font size below 1rem comes from one of these. They were written
+         per rule before, and had drifted to 31 distinct sizes with seven of
+         them inside a single 0.8px band — differences too small to read as
+         hierarchy and just large enough to look unsteady. The steps are the
+         values that were already doing the most work, so most text does not
+         move; what moves, moves by well under a pixel.
+
+         rem, never px. The Filtering & Scoring page had been built in px,
+         which meant it alone ignored a reader's browser font-size setting
+         while every other page honoured it. */
+      --fs-3xs: .6rem;
+      --fs-2xs: .68rem;
+      --fs-xs:  .72rem;
+      --fs-sm:  .78rem;
+      --fs-md:  .82rem;
+      --fs-lg:  .85rem;
+      --fs-xl:  .88rem;
+      --fs-2xl: .95rem;
+      /* The log terminal's line box. One token because two places have to
+         agree on it exactly — see contain-intrinsic-size on .log-line. */
+      --log-line: 1.25rem;
+
+      --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-mono: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
+      /* Success: the sage fill of finished steps and bars, and a text shade of it
+         that reads at 4.5:1 or better on the cards. */
+      --success:       #7e9b84;
+      --text-success:  #a3c1a9;
+      /* Bootstrap reads its own palette from these: card and accordion text,
+         links, <code>, .text-muted, range tracks, and the unchecked face of
+         checkboxes, radios and the switch. Left unmapped, its stock grays, blue
+         and pink showed through both themes. The -rgb twins are what Bootstrap
+         actually reads for links and some text, so they carry the same colors
+         as triplets. */
+      --bs-body-color: var(--text-primary);
+      --bs-body-color-rgb: 236, 232, 223;
+      --bs-emphasis-color: var(--text-primary);
+      --bs-emphasis-color-rgb: 236, 232, 223;
+      --bs-secondary-color: var(--text-muted);
+      --bs-secondary-color-rgb: 147, 141, 130;
+      --bs-body-bg: var(--popup-bg);
+      --bs-body-bg-rgb: 32, 38, 47;
+      --bs-border-color: var(--border-strong);
+      --bs-secondary-bg: var(--surface-2);
+      --bs-tertiary-bg: var(--surface-3);
+      --bs-code-color: var(--text-accent);
+      --bs-link-color: var(--text-accent);
+      --bs-link-color-rgb: 168, 184, 220;
+      --bs-link-hover-color: var(--text-primary);
+      --bs-link-hover-color-rgb: 236, 232, 223;
+      --bs-primary-rgb: 142, 163, 206;
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      /* Dimmed-stone counterpart of the dark palette: same hues (steel blue /
+         clay / sage) and tonal ladder — page darkest, cards raised, insets sunk —
+         luminance pulled down so nothing glares. */
+      --surface-0:     #cdc8bd;  /* deepest inset surfaces */
+      --surface-1:     rgba(233,230,222,.88);  /* glass cards */
+      --surface-2:     rgba(225,221,212,.85);  /* headers, inputs, sub-panels */
+      --surface-3:     rgba(214,209,198,.85);  /* hover / raised */
+      --border:        rgba(148,141,129,.50);
+      --border-strong: rgba(120,113,101,.62);
+      --border-accent: #5f75a7;  /* steel blue */
+      --border-danger: #b3706c;
+      --border-warning:#a8794f;  /* clay */
+      --text-primary:  #242c35;  /* deep slate */
+      --text-secondary:#4c565f;
+      --text-muted:    #67665e;
+      --text-accent:   #54689a;  /* steel blue */
+      --text-warning:  #8f6244;
+      --text-danger:   #a25458;
+      --accent:        #5f75a7;
+      --bg-accent:        rgba(95,117,167,.16);
+      --bg-accent-strong: rgba(95,117,167,.26);
+      --bg-warning:       rgba(168,121,79,.16);
+      --bg-danger:        rgba(162,84,88,.14);
+      --bg-neutral:       rgba(90,86,78,.12);
+      --bg-sage:          rgba(106,135,112,.18);
+      --popup-bg:         #e9e6df;
+      --popup-bg-2:       #ded9d0;
+      --toast-info-bg:    color-mix(in srgb, var(--popup-bg) 88%, var(--text-accent) 12%);
+      --toast-success-bg: color-mix(in srgb, var(--popup-bg) 84%, var(--accent) 16%);
+      --toast-warning-bg: color-mix(in srgb, var(--popup-bg) 82%, var(--text-warning) 18%);
+      --toast-danger-bg:  color-mix(in srgb, var(--popup-bg) 82%, var(--text-danger) 18%);
+
+      /* A shade deeper than --text-primary: the neutral midpoint is the
+         lightest hover fill of the set, and the body text color lands
+         just under 4.5:1 on it. */
+      --hover-text: color-mix(in srgb, var(--text-primary) 88%, #000);
+      /* The light theme's glass is lit from a paler surface: a brighter top
+         edge, and shadows in the palette's warm brown rather than black. */
+      --btn-sheen: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,.12) 45%, rgba(60,54,44,.07));
+      --btn-shadow:       inset 0 1px 0 rgba(255,255,255,.6), 0 1px 2px rgba(60,54,44,.16);
+      --btn-shadow-hover: inset 0 1px 0 rgba(255,255,255,.7), 0 3px 8px rgba(60,54,44,.2);
+      --btn-shadow-press: inset 0 2px 5px rgba(60,54,44,.26), inset 0 1px 0 rgba(255,255,255,.28);
+      --field-inset: inset 0 1px 2px rgba(60,54,44,.13), inset 0 -1px 0 rgba(255,255,255,.55);
+      --page-bg:   #d8d4ca;
+      --bubble-field-bg: var(--surface-1);
+      --term-bg:   rgba(233,230,222,.92);
+      --term-text: #242c35;
+      --shadow:    0 18px 42px rgba(60,54,44,.18), 0 1px 0 rgba(255,255,255,.5) inset;
+      --glass-blur: blur(16px) saturate(112%);
+      --text-success:  #4d6953;
+      --bs-body-color-rgb: 36, 44, 53;
+      --bs-emphasis-color-rgb: 36, 44, 53;
+      --bs-secondary-color-rgb: 103, 102, 94;
+      --bs-body-bg-rgb: 233, 230, 223;
+      --bs-link-color-rgb: 84, 104, 154;
+      --bs-link-hover-color-rgb: 36, 44, 53;
+      --bs-primary-rgb: 95, 117, 167;
+    }
+    /* Gentle lift and glass treatment so panels feel tactile without changing layout. */
+    :root[data-theme="light"] .card,
+    :root[data-theme="light"] .accordion-item,
+    :root[data-theme="light"] .config-status-box,
+    :root[data-theme="light"] .subcard,
+    :root[data-theme="light"] .scoreblock {
+      box-shadow: var(--shadow);
+    }
+
+    /* clip, not hidden — hidden would break position:sticky — so full-bleed
+       strips (e.g. the Config save bar) can span 100vw without a horizontal
+       scrollbar. */
+    html { overflow-x: clip; }
+    /* Theme scrollbars site-wide so every page matches (terminals override). */
+    * { scrollbar-color: var(--border-strong) var(--surface-0); }
+    /* Base page color on html; the hue washes live on a VIEWPORT-FIXED layer
+       (body::before) so they render identically on every page — painted on the
+       body itself they sized to the page's height, and a tall page (Config)
+       showed visibly stretched/diluted washes next to a short one. */
+    html { background: var(--page-bg); }
+    body {
+      background: transparent;
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+    }
+    /* Light glow mirrors dark's — same three hue washes (steel blue / clay /
+       sage) in the same corners, a touch stronger so they read on stone. */
+    body::before {
+      content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background:
+        radial-gradient(circle at 18% 0%, rgba(110,132,183,.16), transparent 28%),
+        radial-gradient(circle at 80% 0%, rgba(185,137,104,.12), transparent 30%),
+        radial-gradient(circle at 78% 92%, rgba(126,155,132,.12), transparent 32%);
+    }
+    :root:not([data-theme="light"]) body::before {
+      background:
+        radial-gradient(circle at 18% 0%, rgba(110,132,183,.10), transparent 28%),
+        radial-gradient(circle at 80% 0%, rgba(185,137,104,.08), transparent 30%),
+        radial-gradient(circle at 78% 92%, rgba(126,155,132,.08), transparent 32%);
+    }
+    /* Re-skin smoothly when the theme flips, but never animate layout. html
+       carries the page color now (the washes moved to body::before). */
+    html, body, .site-header, .card, .card-header, .form-control,
+    .accordion-item, .accordion-button, .log-term {
+      transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+    }
+    /* Only the elements listed above ease; every other surface, border and
+       label repaints instantly. That is fine when a color changes on its own,
+       but a THEME flip changes all of them at once — and for the 150ms the
+       listed ones spend easing, the page wears both palettes: a light hairline
+       drawn over a still-dark header, a card that has already flipped carrying
+       text that has not. Those are the seams. prSetTheme holds every
+       transition off for the duration of the swap, so the DOM's own colors
+       change in ONE frame and no element can be caught between palettes.
+       Transitions only — animations (toasts, progress) are left to finish. */
+    :root.pr-theme-swap,
+    :root.pr-theme-swap *,
+    :root.pr-theme-swap *::before,
+    :root.pr-theme-swap *::after {
+      transition: none !important;
+    }
+    /* The flip is still ANIMATED, just not element by element: prSetTheme runs
+       it inside a view transition, so the browser cross-fades a snapshot of the
+       whole old page into the whole new one. Every surface therefore changes
+       together — including the ones CSS could never ease between, like the
+       header washes and card-header gradients, which is what made the
+       element-by-element version seam no matter which properties it listed.
+       The old snapshot holds opaque underneath while the new one fades in over
+       it: two semi-transparent layers would let the page background show
+       through mid-fade, a wash of its own. */
+    :root.pr-theme-swap::view-transition-old(root) {
+      animation: none; opacity: 1;
+    }
+    :root.pr-theme-swap::view-transition-new(root) {
+      animation: pr-theme-fade .22s ease both;
+      mix-blend-mode: normal;
+    }
+    @keyframes pr-theme-fade { from { opacity: 0; } to { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; animation: none !important; }
+    }
+
+    /* ═══════ Visual effects off ═══════
+       An Advanced setting (Reduce visual effects), stamped on <html> by the
+       server so the FIRST paint is already plain — a page that animated once
+       and then settled would defeat the point of asking for no animation.
+       Off by default.
+
+       The same blanket as reduced motion, which covers most of it: the page
+       entrance, hover and press fades, the run badge's pulse, the toasts, the
+       progress bar's stripes and sweep. Nothing changes color or position by
+       a different amount — it changes at once instead of over 150ms.
+
+       What a blanket cannot do is the handful of effects that are ELEMENTS
+       rather than animations. Killing their animation alone would freeze each
+       one mid-effect: the tab wave would sit as a permanent gradient, the
+       sliding underline would strand itself under whichever tab was hovered
+       last. Those are removed outright below, and what they were drawn over
+       has to come back — hence the static underline being restored. */
+    :root[data-effects="off"] *,
+    :root[data-effects="off"] *::before,
+    :root[data-effects="off"] *::after {
+      transition: none !important;
+      animation: none !important;
+    }
+    /* The sliding underline is a JS-created bar (initTabIndicator does not run
+       at all in this mode, so this is the belt to that braces) — and with it
+       gone, the per-tab border-bottom that it suppresses has to come back, or
+       the current tab is left unmarked. */
+    :root[data-effects="off"] .header-tab-indicator { display: none !important; }
+    :root[data-effects="off"] .header-tabs.has-indicator a.active {
+      border-bottom-color: var(--text-accent) !important;
+    }
+    :root[data-effects="off"] .header-tabs.has-indicator a.active.config-needs-onboarding {
+      border-bottom-color: var(--text-danger) !important;
+    }
+    /* The click wave, and the underline it left behind while navigating: both
+       are the effect, not information — the page arriving is the feedback. */
+    :root[data-effects="off"] .header-tabs a.is-navigating::after,
+    :root[data-effects="off"] .header-tabs a.is-arriving::after {
+      display: none !important;
+    }
+    :root[data-effects="off"] .header-tabs a.is-navigating:not(.active) {
+      color: var(--text-muted);
+      border-bottom-color: transparent;
+    }
+    /* Hover stays — it says the thing is clickable — it just lands at once
+       instead of over 150ms. Press lands on the SAME color as hover rather
+       than a third, darker one, per family: --press-* cannot simply be
+       redefined as --hover-*, because each --hover-* is derived FROM its
+       --press-* (hover is the midpoint between rest and press), so aliasing
+       them makes both circular and neither resolves. Each family's press is
+       pointed at its own hover value instead, matching the blocks above.
+       The raised/sunk shadows go with them: a press that neither moves nor
+       recolors should not still be pressing a hole in the surface. */
+    :root[data-effects="off"] .btn-success:active,
+    :root[data-effects="off"] .btn-success.active,
+    :root[data-effects="off"] .btn-success.show,
+    :root[data-effects="off"] .btn-success:first-child:active {
+      background: var(--hover-save) !important;
+      border-color: var(--hover-save) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn-outline-primary:active,
+    :root[data-effects="off"] .btn-outline-primary.active,
+    :root[data-effects="off"] .btn-outline-primary.show,
+    :root[data-effects="off"] .btn-outline-primary:first-child:active {
+      background: var(--hover-primary) !important;
+      border-color: var(--hover-primary) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn-outline-warning:active,
+    :root[data-effects="off"] .btn-outline-warning.active,
+    :root[data-effects="off"] .btn-outline-warning.show,
+    :root[data-effects="off"] .btn-outline-warning:first-child:active {
+      background: var(--hover-warning) !important;
+      border-color: var(--hover-warning) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled):active,
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled).active,
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled).show,
+    :root[data-effects="off"] .btn-outline-secondary:not(:disabled):not(.disabled):first-child:active,
+    :root[data-effects="off"] .btn-icon:not(:disabled):active,
+    :root[data-effects="off"] .theme-toggle:active {
+      background: var(--hover-neutral) !important;
+      border-color: var(--hover-neutral) !important;
+      color: var(--hover-text) !important;
+    }
+    :root[data-effects="off"] .btn:not(.btn-close):active,
+    :root[data-effects="off"] .btn-icon:active:not(:disabled),
+    :root[data-effects="off"] .theme-toggle:active {
+      box-shadow: var(--btn-shadow-hover);
+    }
+
+    /* Page entrance, and the whole of what a navigation looks like: everything
+       below the header — title bar, actions and every card — rises into place
+       once per load, so switching between pages eases in instead of popping.
+       The header itself is identical on every page and is simply painted, not
+       animated, so it reads as one continuous surface across navigations — see
+       the note below on why it is NOT a view-transition group. Only a `from`
+       keyframe + backwards fill: the animation eases INTO the element's
+       natural style and leaves no animated transform behind once it ends (a
+       lingering identity transform would make #main the containing block for
+       any fixed-position descendant).
+       (Reduced-motion users get none of this via the kill switch above.)
+
+       All three numbers are tokens (--pr-enter-* at the top of this file), so
+       the whole entrance is tuned in one place and nothing here needs editing
+       to change how it feels.
+
+       What each costs, so a value can be picked rather than guessed:
+
+         --pr-enter-rise  free. Transform animation is compositor work.
+         --pr-enter-time  the window the other two are spent over.
+         --pr-enter-fade  the one that is not free. The page behind #main is
+           dark, so while the content is under full opacity the arriving page
+           paints DARKER than it settles — measured 28.9 of 255 against 38.5
+           at a full fade — and a browser may put one blank frame between two
+           documents (Chromium holds the old pixels and shows none; other
+           Chromium builds paint their own canvas color). Landing dim right
+           after a pale frame is what reads as a flash. Time to reach 92% of
+           settled brightness through a real navigation: a plain ease-out over
+           .28s never did inside 150ms; this curve took 43ms at .24s and 85ms
+           at .38s. Starting nearer 1, or over a shorter time, spends less of
+           that. `1` opts out of the fade entirely and costs nothing.
+
+       Note the curve is deliberately front-loaded rather than a keyword ease:
+       it is what keeps most of the fade out of the way early, and it is why a
+       longer --pr-enter-time is affordable at all. */
+    @keyframes pr-page-enter {
+      from {
+        opacity: var(--pr-enter-fade);
+        transform: translateY(var(--pr-enter-rise));
+      }
+    }
+    #main {
+      animation: pr-page-enter var(--pr-enter-time) cubic-bezier(.16,.9,.3,1) backwards;
+    }
+
+    /* Navigation deliberately does NOT use a cross-document view transition.
+       One was tried, to hold the header still while the pages changed, and it
+       could not be made to sit still: a view transition renders from
+       SNAPSHOTS, and this header is translucent — 88% surface with a blur
+       behind it — so its snapshot composites over the fading page instead of
+       over live content and visibly dips, then comes back. Measured over the
+       header strip through a real tab click, the snapshot path swings its
+       brightness by ~11 of 255 and this path by 0. Cross-fading two different
+       pages had the matching problem in the body: both drawn at once is a
+       double exposure, every line of the old page showing through the new.
+       Without it the browser simply paints the arriving page — the header is
+       identical markup so it never moves, nothing is ever drawn twice, and
+       #main's entrance fade above eases the content in. Same-document view
+       transitions are untouched: the theme flip still cross-fades, where both
+       snapshots share a layout and dissolving is right. */
+
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-group(*), ::view-transition-image-pair(*),
+      ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+    }
+
+    /* ════════════════════════════════════════
+       HEADER — mobile: two rows, desktop: one
+       ════════════════════════════════════════ */
+    .site-header {
+      background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      box-shadow: 0 1px 0 rgba(255,255,255,.06) inset;
+    }
+    .header-inner { display: flex; flex-direction: column; }
+
+    /* Row 1 — brand */
+    /* The mark's square is drawn inset in its viewBox (units 2-22 of 24, stroke
+       included), so the box is sized 24/20 of the text block for the VISIBLE
+       square to match the text's height, and the left padding is 16px minus the
+       2/24 bleed so the visible edge sits on the tab underline's 16px. */
+    .header-brand { padding: 6px 20px 5px 13px; flex-shrink: 0; display: flex; align-items: center; }
+    .header-brand a { text-decoration: none; display: inline-flex; flex-direction: row; align-items: center; gap: 9px; }
+    .brand-text { display: inline-flex; flex-direction: column; line-height: 1.2; }
+    .brand-mark { width: 39px; height: 39px; flex-shrink: 0; color: var(--text-warning); }
+    .brand-name { font-size: 1.05rem; font-weight: 700; color: var(--text-warning); letter-spacing: -.01em; }
+    .brand-sub  { font-size: var(--fs-3xs); font-weight: 500; color: var(--text-muted);
+                  letter-spacing: .08em; text-transform: uppercase; margin-top: 1px; }
+
+    /* Header running badge — geometry from .pr-pill; here we add only the fade
+       and default-hide. Hide is scoped to .site-header so it beats the base
+       .pr-pill display. Color is the shared .pr-pill--state tone that
+       prSetHeaderRunning applies, so the badge, the dashboard's run pill and
+       the Last Run pill name the same run in the same color. */
+    .header-run-badge { animation: pr-pulse var(--pr-pulse-period) ease-in-out infinite; }
+    .site-header .header-run-badge { display: none; }
+    a.header-run-badge { text-decoration: none; }
+    @keyframes pr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+    /* Mobile: badge sits next to the brand instead of competing with the theme
+       toggle. Its right margin clears BOTH header buttons, pinned over the
+       brand row's right end (theme at 24px, "?" at 70px, 32px wide): 56px
+       cleared one, and at 375px and below the badge ran under the "?". */
+    .run-badge-mobile { margin-left: 12px; margin-right: 88px; }
+    @media (max-width: 409px) {
+      /* No room beside the brand for the word: the dot's color carries the
+         state, and the label stays for screen readers. */
+      .run-badge-mobile .run-badge-label {
+        position: absolute; width: 1px; height: 1px; overflow: hidden;
+        clip-path: inset(50%); white-space: nowrap;
+      }
+    }
+    .site-header.is-running .run-badge-mobile { display: inline-flex; }
+
+    /* Row 2 — tabs (compact). The row scrolls sideways itself on screens too
+       narrow for all three tabs — never the whole page. */
+    .header-tabs {
+      position: relative;
+      display: flex; gap: 2px; padding: 0 16px;
+      border-top: 1px solid var(--surface-2);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .header-tabs::-webkit-scrollbar { display: none; }
+    /* JS-added sliding underline (hover-capable pointers only): one bar glides
+       to whichever tab is hovered and returns on leave. The static per-tab
+       underline is the fallback everywhere else. */
+    .header-tab-indicator {
+      position: absolute; height: 2px; border-radius: 2px;
+      background: var(--text-accent); pointer-events: none;
+      transition: left .22s cubic-bezier(.4, 0, .2, 1), width .22s cubic-bezier(.4, 0, .2, 1),
+                  top .22s ease, background-color .15s ease, opacity .15s ease;
+    }
+    /* Beat the per-theme underline colors, which carry :root specificity. */
+    .header-tabs.has-indicator a.active,
+    :root[data-theme="light"] .header-tabs.has-indicator a.active,
+    :root:not([data-theme="light"]) .header-tabs.has-indicator a.active,
+    :root[data-theme="light"] .header-tabs.has-indicator a.active.config-needs-onboarding,
+    :root:not([data-theme="light"]) .header-tabs.has-indicator a.active.config-needs-onboarding {
+      border-bottom-color: transparent;
+    }
+    .header-tabs a {
+      font-size: var(--fs-sm); font-weight: 500; color: var(--text-muted);
+      text-decoration: none; padding: 7px 14px; white-space: nowrap;
+      border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    .header-tabs a:hover  { color: var(--text-secondary); }
+    .header-tabs a.active { color: var(--text-accent); border-bottom-color: var(--text-accent); }
+    /* Small phones (e.g. 360px-wide Pixels, iPhone SE/mini): tighter tab
+       padding so all three tabs fit without scrolling. */
+    @media (max-width: 400px) {
+      .header-tabs { padding: 0 8px; }
+      .header-tabs a { padding: 7px 9px; }
+      /* Keep the mark's visible edge on the underline's edge here too. */
+      .header-brand { padding-left: 5px; }
+    }
+    /* A broken connection is a standing fact, so it reads as one: a steady red
+       tab with a dot. Motion in this theme belongs to things that are actually
+       happening — the run badge while a run is live, the progress stripes, this
+       tab's own click ripple — and a 1.5s loop in the header put a state that
+       wasn't changing in that company, on every page, until it was fixed. */
+    .header-tabs a.config-needs-onboarding {
+      color: var(--text-danger);
+      border-bottom-color: var(--text-danger);
+      border-radius: 9px 9px 0 0;
+      background: color-mix(in srgb, var(--bg-danger) 55%, transparent);
+    }
+    /* The dot sits in the tab's existing padding so the tab keeps its width:
+       the sliding underline measures offsetWidth, and it would jump when the
+       state flipped mid-poll. ::after belongs to the click ripple. */
+    .header-tabs a.config-needs-onboarding::before {
+      content: "";
+      position: absolute;
+      top: 7px;
+      right: 5px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    /* Small phones cut the tab padding to 9px, which is not enough room beside
+       "Configuration" — the dot landed on the final n. Lift it clear of the cap
+       height instead of widening the tab, which has to fit three tabs at 320. */
+    @media (max-width: 400px) {
+      .header-tabs a.config-needs-onboarding::before { top: 3px; right: 2px; }
+    }
+    .header-tabs a.config-needs-onboarding:hover {
+      color: var(--text-danger);
+      background: color-mix(in srgb, var(--bg-danger) 70%, transparent);
+    }
+    /* Click feedback on tab navigation: the clicked tab takes the underline
+       immediately and a single quick wave ripples up from it; the underline
+       then stays on until the next page arrives, so a slow (VPN) load still
+       reads as "in progress" after the wave finishes. The ripple is drawn
+       from currentColor, so the red attention tab keeps its red identity
+       while navigating. */
+    .header-tabs a { position: relative; overflow: hidden; }
+    .header-tabs a.is-navigating {
+      color: var(--text-accent);
+      border-bottom-color: currentColor;
+    }
+    .header-tabs a.config-needs-onboarding.is-navigating { color: var(--text-danger); }
+    /* .is-arriving replays the REMAINDER of the wave on the next page: a fast
+       (LAN) load swaps documents mid-ripple, and since the header is pinned
+       across the view transition, finishing the wave over here reads as one
+       continuous animation instead of a cut-off. --pr-wave-offset is the
+       negative delay for however much already played on the previous page. */
+    .header-tabs a.is-navigating::after,
+    .header-tabs a.is-arriving::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 100%;
+      background: linear-gradient(to top,
+        color-mix(in srgb, currentColor 48%, transparent),
+        color-mix(in srgb, currentColor 16%, transparent) 65%,
+        transparent 100%);
+      transform-origin: bottom;
+      animation: pr-tab-ripple .32s ease-out 1 both;
+      animation-delay: var(--pr-wave-offset, 0ms);
+      pointer-events: none;
+    }
+    @keyframes pr-tab-ripple {
+      0%   { transform: scaleY(0); opacity: 1; }
+      60%  { transform: scaleY(1); opacity: .55; }
+      100% { transform: scaleY(1); opacity: 0; }
+    }
+    /* Reduced motion: the global kill switch stops the wave animation, which
+       would leave the overlay's STATIC state (a full-strength gradient) stuck
+       on screen with no animationend to clean it up — hide the overlay
+       entirely. The persistent navigating underline remains as the
+       motion-free feedback. */
+    @media (prefers-reduced-motion: reduce) {
+      .header-tabs a.is-navigating::after,
+      .header-tabs a.is-arriving::after { display: none !important; }
+    }
+
+    /* Desktop: collapse into one row */
+    @media (min-width: 768px) {
+      .header-inner {
+        flex-direction: row; align-items: stretch; height: 52px;
+        max-width: 1280px; margin: 0 auto; width: 100%;  /* align with #main */
+      }
+      .header-brand {
+        padding: 0 20px 0 24px; display: flex; align-items: center;
+        border-right: 1px solid var(--border); border-bottom: none;
+      }
+      .header-tabs {
+        border-top: none; padding: 0 12px;
+        align-items: stretch;
+      }
+      .header-tabs a { display: flex; align-items: center; padding: 0 16px; }
+      .run-badge-mobile { display: none !important; }
+      .run-badge-desktop { align-self: center; margin-left: 4px; }
+      .site-header.is-running .run-badge-desktop { display: inline-flex; }
+    }
+
+    /* ═══════ Content ═══════ */
+    #main { max-width: 1280px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ═══════ Cards ═══════
+       No backdrop-filter here, deliberately. A card is 88% opaque over the page
+       background and its own fixed gradient wash, so blurring the remaining 12%
+       of an already-smooth backdrop changes almost nothing — measured at 0.06
+       of 255 mean difference. What it does do is make every card its own
+       composited layer, and a browser's "capture page" feature, which flattens
+       a scrolling page in pieces, smears each of those layers at its bottom
+       edge. Glass is kept where it is actually doing work: the sticky header
+       and title bar, which really do sit over moving content, and the buttons. */
+    .card {
+      background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden; background-clip: padding-box; isolation: isolate;
+    }
+    .card-header {
+      background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 86%, white 6%), var(--surface-2));
+      border-bottom: 1px solid var(--border);
+      border-radius: 16px 16px 0 0 !important; font-size: var(--fs-xl); font-weight: 600; padding: 12px 16px;
+    }
+
+    /* ═══════ Stat cards ═══════ */
+    .stat-card {
+      padding: 18px 22px;
+      min-height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(145deg, var(--surface-1), color-mix(in srgb, var(--surface-2) 70%, transparent));
+      background-clip: padding-box;
+    }
+    .stat-card .label { font-size: var(--fs-2xs); font-weight: 500; color: var(--text-muted);
+                        text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; }
+    .stat-card .value { font-size: 1.55rem; font-weight: 700; line-height: 1.15; }
+    .stat-card .value .unit { font-size: 1rem; font-weight: 400; color: var(--text-muted); }
+    .stat-card .sub   { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 3px; }
+    /* Storage bar: media library is the brand-colored segment of the used fill
+       (rest of used neutral, free is the track), right-aligned by JS to the used
+       edge. Markers show the Headroom/Redline free targets and the used edge if
+       the library is trimmed to its cap. left/width are set per frame in
+       _positionStorageBar; values here are just the start state. */
+    .disk-bar { position: relative; height: 8px; margin-top: 10px; overflow: visible; }
+    .disk-bar-clip { position: absolute; inset: 0; border-radius: 3px; overflow: hidden;
+                     background: var(--surface-3); }
+    .disk-bar-fill { position: absolute; left: 0; top: 0; height: 100%;
+                     background: color-mix(in srgb, var(--text-muted) 42%, var(--surface-3));
+                     transition: width .5s; }
+    .disk-bar-library { position: absolute; left: 0; top: 0; height: 100%;
+                        background: linear-gradient(90deg, var(--text-accent), var(--success));
+                        transition: width .5s, left .5s; }
+    .disk-bar-mark { position: absolute; top: -3px; bottom: -3px; width: 2px;
+                     transform: translateX(-50%); border-radius: 1px; z-index: 2; }
+    .disk-bar-mark[hidden] { display: none; }
+    .disk-bar-mark--headroom { background: var(--text-warning); }
+    .disk-bar-mark--redline  { background: var(--text-danger); }
+    /* Cap marker is accent blue like the library it measures, so it would blend
+       into the gradient's blue end; a hairline keeps it legible. */
+    .disk-bar-mark--cap      { background: var(--text-accent);
+                               box-shadow: 0 0 0 1px color-mix(in srgb, var(--page-bg) 78%, transparent); }
+    .disk-bar-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px;
+                       font-size: var(--fs-3xs); letter-spacing: .04em; text-transform: uppercase;
+                       color: var(--text-muted); }
+    .disk-bar-legend .dbl-item { display: inline-flex; align-items: center; gap: 5px; }
+    .disk-bar-legend .dbl-item[hidden] { display: none; }
+    .dbl-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+    .dbl-key--library  { background: linear-gradient(90deg, var(--text-accent), var(--success)); }
+    .dbl-key--headroom { width: 2px; height: 11px; border-radius: 1px; background: var(--text-warning); }
+    .dbl-key--redline  { width: 2px; height: 11px; border-radius: 1px; background: var(--text-danger); }
+    .dbl-key--cap      { width: 2px; height: 11px; border-radius: 1px; background: var(--text-accent); }
+
+    /* ═══════ Pills / badges — one shared family ═══════
+       Buttons, pills, and badges share the theme-toggle geometry; color
+       variants still mark meaningful states. */
+    .pr-pill {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px; vertical-align: middle;
+      height: 32px; min-height: 32px; padding: 0 12px; border-radius: 10px; white-space: nowrap;
+      font-family: inherit; font-size: var(--fs-xs); font-weight: 600; line-height: 1;
+      letter-spacing: .01em; text-transform: none;
+      border: 1px solid transparent;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
+    }
+    .pr-pill[hidden] { display: none; }
+    /* Status dot: a real circle (not the ● glyph, whose baseline sits off-center)
+       so it aligns cleanly with the label. Inherits the pill's text color. */
+    .pr-pill-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    /* Phones: pills shrink to label size, but interactive ones (links, jump
+       targets) keep a finger-sized tap area via an invisible ::after, without
+       growing visually. */
+    @media (max-width: 640px) {
+      .pr-pill {
+        height: 24px; min-height: 24px; padding: 0 9px;
+        font-size: var(--fs-2xs); border-radius: 8px; gap: 5px;
+      }
+      .pr-pill-dot { width: 6px; height: 6px; }
+      a.pr-pill, .pr-pill[onclick], .pr-pill[role="button"] { position: relative; }
+      a.pr-pill::after, .pr-pill[onclick]::after, .pr-pill[role="button"]::after {
+        content: ""; position: absolute; left: -4px; right: -4px; top: -9px; bottom: -9px;
+      }
+    }
+    /* ── Status pills: the header badge, Last Run's mode pill, the run pill ──
+       All three answer "what is happening, or what is armed", and each one
+       borrows the color of the BUTTON that does that thing, so the meaning is
+       learnable in one place: red is the Cleanup button, blue is the primary
+       action button (Open Configuration), neutral is Simulate.
+
+       Flat, not glassy — the inset highlight belongs to things you press, and
+       on a pill it read as a small button. For the same reason hover and press
+       move the BORDER only: these are status, and one that filled in under the
+       pointer looked clickable in a way that mattered.
+
+       .pr-pill--state carries the shape; one of the four tones carries the
+       color. Every tone is (border, text, dim fill) copied from its button's
+       rest state, and its hover and press borders come from that button's own
+       hover and press tokens, so a pill cannot drift from the button it names. */
+    .pr-pill--state { box-shadow: none; }
+    .pr-pill--state.is-danger  { border-color: var(--text-danger);    color: var(--text-danger);    background: var(--bg-danger); }
+    .pr-pill--state.is-accent  { border-color: var(--border-accent);  color: var(--text-accent);    background: var(--surface-tint); }
+    .pr-pill--state.is-neutral { border-color: var(--border);         color: var(--text-secondary); background: var(--surface-tint); }
+    .pr-pill--state.is-warning { border-color: var(--border-warning); color: var(--text-warning);   background: var(--surface-tint-warning); }
+    /* Only the interactive ones react: the Last Run pill and the header badge
+       are links, and the run pill takes a jump target in its error states. */
+    a.pr-pill--state.is-danger:hover,  a.pr-pill--state.is-danger:focus-visible,
+    .pr-pill--state.is-danger.log-jumpable:hover  { border-color: var(--hover-danger); }
+    a.pr-pill--state.is-accent:hover,  a.pr-pill--state.is-accent:focus-visible,
+    .pr-pill--state.is-accent.log-jumpable:hover  { border-color: var(--hover-primary); }
+    a.pr-pill--state.is-neutral:hover, a.pr-pill--state.is-neutral:focus-visible,
+    .pr-pill--state.is-neutral.log-jumpable:hover { border-color: var(--hover-neutral); }
+    a.pr-pill--state.is-warning:hover, a.pr-pill--state.is-warning:focus-visible,
+    .pr-pill--state.is-warning.log-jumpable:hover { border-color: var(--hover-warning); }
+    a.pr-pill--state.is-danger:active  { border-color: var(--press-danger); }
+    a.pr-pill--state.is-accent:active  { border-color: var(--press-accent); }
+    a.pr-pill--state.is-neutral:active { border-color: var(--press-neutral); }
+    a.pr-pill--state.is-warning:active { border-color: var(--press-warning); }
+    /* …except the header badge, which is a link only so the run is one click
+       away. It reports what the app is doing rather than offering to do
+       something, and it sits in the chrome instead of beside the thing it
+       describes, so it holds still under the pointer. The keyboard focus ring
+       above is deliberately left alone — it is still a link.
+       The three tones prSetHeaderRunning can apply, and only those: it never
+       paints the badge neutral, so a fourth rule here would be answering a
+       question nothing asks. */
+    a.header-run-badge.is-danger:hover,  a.header-run-badge.is-danger:active  { border-color: var(--text-danger); }
+    a.header-run-badge.is-accent:hover,  a.header-run-badge.is-accent:active  { border-color: var(--border-accent); }
+    a.header-run-badge.is-warning:hover, a.header-run-badge.is-warning:active { border-color: var(--border-warning); }
+
+
+    /* ═══════ Log terminal ═══════ */
+    .log-term {
+      background: var(--term-bg); color: var(--term-text);
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm); line-height: var(--log-line); min-height: 200px; height: 440px;
+      overflow-y: auto; overflow-x: hidden;
+      padding: 14px 16px; margin: 0; border-radius: 0 0 16px 16px;
+      border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+      scrollbar-color: var(--border-strong) var(--term-bg);
+      /* The log is where the pointer is, so the wheel gesture stops here.
+         Without this, reaching the end hands the rest of it to the page, which
+         scrolls underneath the floating log window. */
+      overscroll-behavior: contain;
+    }
+    /* Each log line is its own block: long lines wrap in place with a hanging
+       indent so continuations read as part of their line, and copying still
+       yields the original one-line-per-entry text — the indent is styling, not
+       characters, and each block copies as its own line. */
+    .log-term .log-line {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      padding-left: 2.25em;
+      text-indent: -2.25em;
+      /* One div per line means a big log is tens of thousands of boxes, and
+         laying them all out is what made opening one hang: 30,000 lines cost
+         2,443ms, mostly layout. Skipping the off-screen ones brings that to
+         556ms, and the 900-line live tail (re-rendered every 750ms during a
+         run) from 58ms to 5.7ms.
+
+         The placeholder is the line box itself, --log-line, the same token
+         the terminal sets line-height from. It has to match EXACTLY: this was
+         a literal 19.5px, and when the terminal's font-size joined the shared
+         scale the two fell out of step by half a pixel — which over 8,000
+         lines put "jump to latest" 3,647px above the real bottom. Deriving it
+         (font-size x 1.6) still missed by 126px, because a line box is rounded
+         to 1/64px and the calculation is not. One shared token cannot drift.
+         `auto` still lets the browser learn the real height of a WRAPPED line;
+         this only has to be right for an ordinary single-line entry.
+         Selecting the log still copies every line, since off-screen content
+         stays in the DOM.
+
+         Ignored by browsers that don't support it, which then behave as before. */
+      content-visibility: auto;
+      contain-intrinsic-size: auto var(--log-line);
+    }
+
+    /* ═══════ Accordion ═══════ */
+    .accordion-button {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--surface-2) 88%, var(--bg-accent) 12%), var(--surface-2));
+      color: var(--text-primary); font-weight: 600; font-size: var(--fs-xl);
+    }
+    .accordion-button:not(.collapsed) {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--surface-3) 78%, var(--bg-accent-strong) 22%), var(--surface-3));
+      color: var(--text-primary); box-shadow: none;
+    }
+    .accordion-button::after { filter: saturate(.75) opacity(.7); }
+    .accordion-item {
+      background: var(--surface-1); border-color: var(--border); border-radius: 16px;
+      box-shadow: var(--shadow); overflow: hidden; backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    }
+    .accordion-body  { padding-top: 20px; }
+
+    /* One connected tab stack instead of separate rounded pills. Configuration
+       and Filtering & Scoring both use it, so a category reads the same on
+       either page. */
+    .pr-accordion {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      background: var(--surface-1);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      isolation: isolate;
+    }
+    .pr-accordion .accordion-item {
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0 !important;
+      box-shadow: none;
+      overflow: visible;
+      background: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .pr-accordion .accordion-item:last-child { border-bottom: 0; }
+    .pr-accordion .accordion-header,
+    .pr-accordion .accordion-button,
+    .pr-accordion .accordion-collapse,
+    .pr-accordion .accordion-body {
+      border-radius: 0 !important;
+    }
+    .pr-accordion .accordion-button {
+      margin: 0;
+      border: 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .pr-accordion .accordion-item:first-child .accordion-button {
+      box-shadow: none;
+    }
+    .pr-accordion .accordion-button:not(.collapsed) {
+      border-bottom: 1px solid var(--border);
+    }
+    .pr-accordion .accordion-body {
+      background: color-mix(in srgb, var(--surface-1) 82%, var(--surface-0) 18%);
+    }
+    :root[data-theme="light"] .pr-accordion .accordion-body {
+      background: color-mix(in srgb, var(--surface-1) 84%, white 5%);
+    }
+    /* Marker for a section holding a field that needs attention (see
+       prSectionIssues): visible only on a flagged header. */
+    .pr-accordion .accordion-button .pr-section-issue {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      width: 1.15rem;
+      height: 1.15rem;
+      margin-left: auto;
+      margin-right: .55rem;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--text-danger) 78%, transparent);
+      background: var(--bg-danger);
+      color: var(--text-danger);
+      font-size: var(--fs-xs);
+      line-height: 1;
+      font-weight: 800;
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg-danger) 65%, transparent);
+    }
+    .pr-accordion .accordion-button.section-has-issue .pr-section-issue {
+      display: inline-flex;
+    }
+    .pr-accordion .accordion-button.section-has-issue::after { margin-left: 0; }
+    .pr-accordion .accordion-button.section-has-issue {
+      box-shadow: inset 3px 0 0 var(--text-danger);
+    }
+
+    /* ═══════ Form controls ═══════ */
+    /* Fields use the raised tone (--surface-3) — a step lighter than surrounding
+       panels in dark (darker in light), matching slider tracks — for contrast
+       inside sub-panels. */
+    .form-control {
+      background: color-mix(in srgb, var(--surface-3) 92%, transparent); border-color: var(--border);
+      color: var(--text-primary); font-size: var(--fs-lg); border-radius: 10px;
+    }
+    .form-control:focus {
+      background: var(--surface-3); border-color: var(--border-accent);
+      color: var(--text-primary); box-shadow: 0 0 0 2px var(--bg-accent);
+    }
+    /* Dropdown matched to the text fields with a custom caret. Self-contained
+       (no Bootstrap .form-select) so the caret shorthand can't override theming. */
+    .app-select {
+      display: block; width: 100%;
+      appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      font-size: var(--fs-lg); line-height: 1.5;
+      padding: .375rem 2.1rem .375rem .75rem;
+      color: var(--text-primary);
+      background-color: var(--surface-2);
+      border: 1px solid var(--border-strong); border-radius: 10px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b93a1' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right .7rem center; background-size: 14px 14px;
+      cursor: pointer;
+      text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+    }
+    .app-select:focus {
+      outline: none; border-color: var(--border-accent);
+      box-shadow: 0 0 0 2px var(--bg-accent);
+    }
+    .app-select:disabled { color: var(--text-muted); opacity: .72; cursor: default; }
+    /* Inside a form the field inset below outranked the ring above, so a focused
+       dropdown showed nothing. Added to the inset, as the text fields do. */
+    .app-form .app-select:focus { box-shadow: var(--field-inset), 0 0 0 2px var(--bg-accent); }
+    /* Pager/toolbar variant: the same config-page dropdown look, but sized to
+       sit inline beside .btn-sm buttons instead of filling a form row. */
+    .app-select-inline {
+      display: inline-block; width: auto; min-height: 32px;
+      font-size: var(--fs-sm); font-weight: 600;
+      padding: .3rem 1.9rem .3rem .7rem;
+      background-position: right .6rem center;
+    }
+    .input-group-text { background: color-mix(in srgb, var(--surface-3) 92%, transparent); border-color: var(--border); color: var(--text-muted); border-radius: 10px; font-size: var(--fs-lg); }
+    .input-group-text .form-check-input {
+      margin: 0;
+      flex: 0 0 auto;
+      align-self: center;
+    }
+
+    .app-form .form-control {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text-primary);
+    }
+    .app-form .form-control::placeholder {
+      color: var(--text-muted);
+      opacity: .88;
+    }
+    .app-form .form-control:focus {
+      background: var(--surface-2);
+      border-color: var(--border-accent);
+      color: var(--text-primary);
+      /* The focus ring is added TO the inset, not instead of it — dropping the
+         inset on focus made the field pop forward the moment it was clicked. */
+      box-shadow: var(--field-inset), 0 0 0 2px var(--bg-accent);
+    }
+    .app-form .form-control:disabled {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text-muted);
+      opacity: .72;
+    }
+    .app-form .input-group-text {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text-muted);
+    }
+
+    /* ── Fields, add-ons and buttons as one control ─────────────────────────
+       The sunk face goes on everything that is a FIELD — the text inputs, the
+       dropdowns, and the non-interactive add-ons like the "GB" ender and the
+       checkbox cap. The add-ons deliberately get the field's treatment and not
+       the button's: they carry the field's fill and its inset, no sheen and no
+       drop shadow, so they read as the end of the field rather than something
+       to press. The buttons keep their raised face; the contrast between the
+       two is what joins them. */
+    .app-form .form-control,
+    .app-form .input-group-text,
+    .app-form .app-select {
+      box-shadow: var(--field-inset);
+    }
+    /* Bootstrap already laps the borders inside a group, so only one line shows
+       at each seam; matching the colors keeps that line from changing tone
+       halfway along the control. */
+    .app-form .input-group > .btn {
+      border-color: var(--border-strong);
+    }
+    /* A disabled field is out of play, so it flattens rather than staying sunk. */
+    .app-form .form-control:disabled,
+    .app-form .app-select:disabled,
+    .app-form .input-group:has(.form-control:disabled) > .input-group-text {
+      box-shadow: none;
+    }
+    /* Fields inside a lighter bubble (filter cards, sub-panels, score blocks,
+       config cards) sink to the outer card's tone — see --bubble-field-bg. */
+    .app-form .filter-score-card .form-control,
+    .app-form .filter-score-card .input-group-text,
+    .app-form .subcard .form-control,
+    .app-form .subcard .input-group-text,
+    .app-form .scoreblock .form-control,
+    .app-form .scoreblock .input-group-text,
+    .app-form .config-card .form-control,
+    .app-form .config-card .input-group-text {
+      background: var(--bubble-field-bg);
+    }
+    .app-form .filter-score-card .form-control:focus,
+    .app-form .subcard .form-control:focus,
+    .app-form .scoreblock .form-control:focus,
+    .app-form .config-card .form-control:focus {
+      background: var(--bubble-field-bg);
+    }
+    .app-form .filter-score-card .form-control:disabled,
+    .app-form .subcard .form-control:disabled,
+    .app-form .scoreblock .form-control:disabled,
+    .app-form .config-card .form-control:disabled {
+      background: var(--surface-2);
+    }
+    /* Only the disabled look differs from the general .btn-outline-secondary
+       rules further down — an add-on button sits against a field, so it ghosts
+       a little less. Its resting and hover states are those rules' job. */
+    .app-form .input-group .btn-outline-secondary:disabled {
+      background: var(--surface-tint);
+      border-color: var(--border);
+      color: var(--text-muted);
+      opacity: .72;
+    }
+    .form-check-input:checked { background-color: var(--text-accent); border-color: var(--text-accent); }
+    .form-range::-webkit-slider-thumb { background: var(--text-accent); }
+    .form-text  { color: var(--text-muted); font-size: var(--fs-sm); }
+    /* Filesystem paths in help text are one unbreakable token — wrap anywhere
+       rather than pushing a narrow phone screen sideways. */
+    code { overflow-wrap: anywhere; }
+
+    /* ═══════ Buttons ═══════ */
+    /* Inherit the page font; touch-action lets controls act on every tap — no
+       double-tap-zoom eating the second tap of two-click confirmations. */
+    button, input, select { font: inherit; }
+    button, .btn, input[type=checkbox], select { touch-action: manipulation; }
+    /* Sliders: pan-y hands VERTICAL touch gestures to the page scroller, so
+       scrolling a finger down a slider-heavy page (Filtering & Scoring) can't
+       nudge the thumbs — only a horizontal drag (or a tap) adjusts a slider.
+       A JS guard near prCommaNum undoes the value jump some mobile browsers
+       apply on the initial touch before the scroll takes over. */
+    input[type=range] { touch-action: pan-y; }
+    /* Shared dirty-state affordance for Revert buttons (Config + Filtering). */
+    .btn-revert-active {
+      border-color: var(--border-warning) !important;
+      color: var(--text-warning) !important;
+      background: var(--bg-warning) !important;
+    }
+    .btn:not(.btn-close) {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: .01em;
+      text-transform: none;
+    }
+    /* ═══════ Button glass ═══════
+       The same treatment the cards get: a translucent fill over a blur, a lit
+       top edge fading to a shadowed bottom, and a shadow that lifts on hover
+       then sinks under the press. The sheen is a pseudo-element, not a
+       background-image — three dozen rules set the `background` shorthand for
+       one state or another, and every one of them would reset an image.
+       isolation guarantees the stacking context that keeps the sheen above the
+       fill but behind the label, whether or not backdrop-filter is supported. */
+    .btn:not(.btn-close),
+    .btn-icon,
+    .theme-toggle {
+      position: relative;
+      isolation: isolate;
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      box-shadow: var(--btn-shadow);
+    }
+    /* `.btn:not(.btn-close)` outweighs a plain single-class selector, so the
+       position: relative above quietly overrode any button that positions
+       ITSELF — dropping it back into flow. That is what made the log's "Jump to
+       latest" pill grow to the full height of the log pane: as a flex child of
+       .log-window-body it stretched. A button with its own position already
+       gives the sheen the containing block it needs, so it just has to win the
+       property back. Any future self-positioning button belongs on this line. */
+    .btn.log-jump { position: absolute; }
+    .btn:not(.btn-close)::after,
+    .btn-icon::after,
+    .theme-toggle::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      pointer-events: none;
+      background: var(--btn-sheen);
+    }
+    .btn:not(.btn-close):hover,
+    .btn-icon:hover:not(:disabled),
+    .theme-toggle:hover {
+      box-shadow: var(--btn-shadow-hover);
+    }
+    .btn:not(.btn-close):active,
+    .btn-icon:active:not(:disabled),
+    .theme-toggle:active {
+      box-shadow: var(--btn-shadow-press);
+    }
+    /* A disabled button is not a surface you can press — it sits flat. */
+    .btn:not(.btn-close):disabled,
+    .btn:not(.btn-close).disabled,
+    .btn-icon:disabled {
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .btn-sm:not(.btn-close) {
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 10px;
+      font-size: var(--fs-xs);
+    }
+    .btn-success {
+      --bs-btn-color: var(--text-accent);
+      --bs-btn-bg: var(--bg-accent);
+      --bs-btn-border-color: var(--border-accent);
+      --bs-btn-hover-color: var(--text-accent);
+      --bs-btn-hover-bg: var(--bg-accent-strong);
+      --bs-btn-hover-border-color: var(--border-accent);
+      --bs-btn-focus-shadow-rgb: 110, 132, 183;
+      --bs-btn-active-color: var(--press-text);
+      --bs-btn-active-bg: var(--press-accent);
+      --bs-btn-active-border-color: var(--press-accent);
+      --bs-btn-disabled-color: var(--text-muted);
+      --bs-btn-disabled-bg: var(--surface-2);
+      --bs-btn-disabled-border-color: var(--border-strong);
+      background: var(--bg-accent);
+      border-color: var(--border-accent);
+      color: var(--text-accent);
+    }
+    .btn-success:hover,
+    .btn-success:focus-visible {
+      background: var(--hover-save);
+      border-color: var(--hover-save);
+      color: var(--hover-text);
+    }
+    .btn-outline-primary { border-color: var(--border-accent); color: var(--text-accent); background: var(--surface-tint); }
+    /* Bootstrap paints a button's --bs-btn-hover-* on :focus-visible. Unset, a
+       tabbed-to outline button filled stock blue, #0d6efd, in both themes. */
+    .btn-outline-primary {
+      --bs-btn-hover-bg: var(--hover-primary); --bs-btn-hover-border-color: var(--hover-primary);
+      --bs-btn-hover-color: var(--hover-text);
+    }
+    .btn-outline-secondary {
+      --bs-btn-hover-bg: var(--hover-neutral); --bs-btn-hover-border-color: var(--hover-neutral);
+      --bs-btn-hover-color: var(--hover-text);
+    }
+    .btn-outline-warning {
+      --bs-btn-hover-bg: var(--hover-warning); --bs-btn-hover-border-color: var(--hover-warning);
+      --bs-btn-hover-color: var(--hover-text);
+    }
+    .btn-outline-primary:hover {
+      background: var(--hover-primary);
+      border-color: var(--hover-primary);
+      color: var(--hover-text);
+    }
+    .btn-outline-warning {
+      border-color: var(--border-warning);
+      color: var(--text-warning);
+      background: var(--surface-tint-warning);
+    }
+    .btn-outline-warning:hover,
+    .btn-outline-warning:focus-visible {
+      border-color: var(--hover-warning);
+      color: var(--hover-text);
+      background: var(--hover-warning);
+    }
+    /* One pressed treatment for every button family: fill with the button's own
+       --press-* tone (its border color, a shade darker) and label it in
+       --press-text. Bootstrap spreads its active state over several selectors of
+       differing specificity, so each family lists all of them and wins with
+       !important — otherwise a stock blue/gray/yellow fill flashes on click. */
+    .btn-success:active,
+    .btn-success.active,
+    .btn-success.show,
+    .btn-success:first-child:active,
+    .btn-outline-primary:active,
+    .btn-outline-primary.active,
+    .btn-outline-primary.show,
+    .btn-outline-primary:first-child:active {
+      background: var(--press-accent) !important;
+      border-color: var(--press-accent) !important;
+      color: var(--press-text) !important;
+    }
+    .btn-outline-warning:active,
+    .btn-outline-warning.active,
+    .btn-outline-warning.show,
+    .btn-outline-warning:first-child:active {
+      background: var(--press-warning) !important;
+      border-color: var(--press-warning) !important;
+      color: var(--press-text) !important;
+    }
+    .btn-outline-secondary:not(:disabled):not(.disabled):active,
+    .btn-outline-secondary:not(:disabled):not(.disabled).active,
+    .btn-outline-secondary:not(:disabled):not(.disabled).show,
+    .btn-outline-secondary:not(:disabled):not(.disabled):first-child:active,
+    .btn-icon:not(:disabled):active,
+    .theme-toggle:active {
+      background: var(--press-neutral) !important;
+      border-color: var(--press-neutral) !important;
+      color: var(--press-text) !important;
+    }
+    /* A dirty Revert wears the warning border via .btn-revert-active, so both
+       its hover and its press follow that color instead of its
+       .btn-outline-secondary family. !important is what carries them past the
+       neutral rules further down, which .btn-revert-active already outranks
+       the same way for its resting look. */
+    .btn.btn-revert-active:not(:disabled):hover,
+    .btn.btn-revert-active:not(:disabled):focus-visible {
+      background: var(--hover-revert) !important;
+      border-color: var(--hover-revert) !important;
+      color: var(--hover-text) !important;
+    }
+    .btn.btn-revert-active:not(:disabled):active,
+    .btn.btn-revert-active:not(:disabled):first-child:active {
+      background: var(--press-warning) !important;
+      border-color: var(--press-warning) !important;
+      color: var(--press-text) !important;
+    }
+    .btn-danger-action {
+      --bs-btn-color: var(--text-danger);
+      --bs-btn-bg: var(--bg-danger);
+      --bs-btn-border-color: var(--text-danger);
+      --bs-btn-hover-color: var(--text-danger);
+      --bs-btn-hover-bg: var(--bg-danger);
+      --bs-btn-hover-border-color: var(--text-danger);
+      --bs-btn-focus-shadow-rgb: 179, 106, 111;
+      --bs-btn-active-color: #fff7f7;
+      --bs-btn-active-bg: var(--text-danger);
+      --bs-btn-active-border-color: var(--text-danger);
+      background: var(--bg-danger) !important;
+      border-color: var(--text-danger) !important;
+      color: var(--text-danger) !important;
+      font-weight: 700;
+    }
+    /* Hover fills solid red as an "armed and dangerous" cue, deeper than the
+       press so the button lightens under the click like every other family. */
+    .btn-danger-action:hover,
+    .btn-danger-action:focus-visible {
+      background: var(--hover-danger) !important;
+      border-color: var(--hover-danger) !important;
+      color: var(--hover-text) !important;
+      filter: none;
+    }
+    /* Through the token like every other family, rather than a raw color with
+       a brightness filter: the filter dimmed the sheen and the label along with
+       the fill, and it left the pressed red outside the rest/hover/press
+       relationship the other buttons keep. */
+    .btn-danger-action:active,
+    .btn-danger-action.active,
+    .btn-danger-action:first-child:active {
+      background: var(--press-danger) !important;
+      border-color: var(--press-danger) !important;
+      color: #fff7f7 !important;
+      filter: none;
+    }
+    .btn-danger-action:disabled {
+      opacity: .38;
+      filter: grayscale(.35);
+      cursor: not-allowed;
+    }
+    .btn-icon {
+      box-sizing: border-box;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      padding: 0 !important;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-tint);
+      color: var(--text-secondary);
+      line-height: 1;
+      cursor: pointer;
+      transition: color .15s ease, border-color .15s ease, background .15s ease,
+                  box-shadow .15s ease, opacity .15s ease, filter .15s ease;
+    }
+    .btn-icon:hover:not(:disabled),
+    .btn-icon:focus-visible:not(:disabled) {
+      color: var(--hover-text);
+      border-color: var(--hover-neutral);
+      background: var(--hover-neutral);
+    }
+    .btn-icon.is-active {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--surface-2);
+    }
+    .btn-icon:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+    a.btn-icon { text-decoration: none; }
+    /* Narrow screens: shrink the shared buttons and inline selects together so
+       toolbar/pager rows stay on one line instead of wrapping. Everything keeps
+       the same look — the whole control family just scales down in step. Must
+       sit AFTER the base .btn/.btn-sm/.btn-icon rules (equal specificity, last
+       wins). Deliberate touch-size overrides like the explorer's .ttop controls
+       still win on specificity and keep their larger tap targets. */
+    @media (max-width: 520px) {
+      .btn:not(.btn-close), .btn-sm:not(.btn-close) {
+        min-height: 28px; padding: 0 9px; font-size: var(--fs-2xs);
+      }
+      .btn-icon { width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0 !important; }
+      .app-select-inline {
+        min-height: 28px; font-size: var(--fs-xs);
+        padding: .2rem 1.6rem .2rem .55rem;
+        background-position: right .5rem center;
+      }
+    }
+    @media (max-width: 390px) {
+      .btn:not(.btn-close), .btn-sm:not(.btn-close) {
+        min-height: 26px; padding: 0 7px; font-size: var(--fs-2xs);
+      }
+      .btn-icon { width: 26px; height: 26px; min-width: 26px; min-height: 26px; padding: 0 !important; }
+      .app-select-inline {
+        min-height: 26px; font-size: var(--fs-2xs);
+        padding: .15rem 1.45rem .15rem .5rem;
+        background-position: right .45rem center;
+      }
+    }
+
+    .btn-morph {
+      position: relative;
+      overflow: hidden;
+      white-space: nowrap;
+      transition:
+        width .18s cubic-bezier(.2, .8, .2, 1),
+        min-width .18s cubic-bezier(.2, .8, .2, 1),
+        background-color .16s ease,
+        border-color .16s ease,
+        color .16s ease,
+        box-shadow .16s ease;
+    }
+    .btn-morph .btn-morph-label {
+      display: inline-block;
+    }
+    /* Dependent blocks (protected collections, Radarr cleanup, Jellyfin favorites
+       filter) stay visible but ghosted when their API isn't connected; the
+       "Connect … to unlock" note stays fully readable. */
+    .connection-ghost > :not(.connection-unlock-note) {
+      opacity: .55;
+    }
+    .connection-ghost .btn,
+    .connection-ghost input,
+    .connection-ghost .form-check-input {
+      cursor: not-allowed;
+    }
+    /* A queued/in-flight button drops to the disabled ghost look until it
+       resolves, overriding any lit accent state it carried when clicked. */
+    .btn.btn-busy,
+    .btn.btn-pending-ellipsis,
+    .dashboard-refresh-btn.is-spinning {
+      background: var(--surface-tint) !important;
+      border-color: var(--border) !important;
+      color: var(--text-muted) !important;
+      opacity: .65 !important;
+      cursor: progress !important;
+    }
+    .dashboard-refresh-btn.is-spinning .dashboard-refresh-icon {
+      animation: pr-spin var(--pr-spin-period) linear infinite;
+    }
+    @keyframes pr-spin { to { transform: rotate(360deg); } }
+    .btn-pending-ellipsis .btn-morph-label::after,
+    .pending-ellipsis::after {
+      content: "";
+      display: inline-block;
+      width: 1.15em;
+      text-align: left;
+      animation: pr-ellipsis 1.1s steps(4, end) infinite;
+    }
+    /* ═══════ Debug output popup ═══════ */
+    .pr-debug-overlay {
+      position: fixed; inset: 0; z-index: 1090; display: none;
+      background: rgba(0, 0, 0, .55);
+      align-items: center; justify-content: center; padding: 22px;
+    }
+    .pr-debug-overlay.show { display: flex; animation: pr-fade-in var(--pr-anim-in); }
+    .pr-debug-overlay.show .pr-debug-box { animation: pr-rise-in var(--pr-anim-in); }
+    @keyframes pr-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    /* Fade in while rising into place. `translate` (not transform) so it
+       composes with transform-positioned elements. */
+    @keyframes pr-rise-in {
+      from { opacity: 0; translate: 0 -14px; }
+      to   { opacity: 1; translate: 0 0; }
+    }
+    .pr-debug-box {
+      background: var(--surface-0); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+      width: min(980px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+    }
+    .pr-debug-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+    }
+    .pr-debug-title { font-weight: 600; font-size: var(--fs-xl); margin-right: auto; }
+    /* The dialog itself takes focus on open (for Escape and Tab), and that
+       must not paint a focus ring on the whole panel. */
+    .pr-debug-box:focus { outline: none; }
+    .pr-debug-box pre {
+      margin: 0; padding: 12px 14px; overflow: auto; flex: 1 1 auto;
+      font-size: var(--fs-sm); line-height: 1.5;
+      white-space: pre-wrap; word-break: break-word;
+      color: var(--text-secondary);
+    }
+    /* Every debug trigger shares one look (small amber outline button). */
+    .pr-debug-btn { white-space: nowrap; }
+    /* Phones: true fullscreen — a centered box taller than the viewport would
+       push its header (and the Copy/Close buttons) off-screen. */
+    @media (max-width: 640px) {
+      .pr-debug-overlay { padding: 0; }
+      .pr-debug-box {
+        width: 100%; height: 100%; max-height: none;
+        border: none; border-radius: 0;
+      }
+      .pr-debug-box pre { font-size: var(--fs-2xs); padding: 10px 12px; }
+      .pr-debug-head { padding: 8px 12px; }
+    }
+
+    @keyframes pr-ellipsis {
+      0%   { content: ""; }
+      25%  { content: "."; }
+      50%  { content: ".."; }
+      75%,
+      100% { content: "..."; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      /* The dots must still READ as pending when their animation is killed. */
+      .btn-pending-ellipsis .btn-morph-label::after,
+      .pending-ellipsis::after { content: "..."; }
+    }
+
+    /* ═══════ Misc ═══════ */
+    .section-desc { font-size: var(--fs-md); color: var(--text-muted); margin-bottom: 18px; }
+    .input-label  { font-size: var(--fs-md); color: var(--text-secondary); margin-bottom: 4px; display: block; }
+    .filter-score-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+    .filter-score-card {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+    .filter-score-card > .input-label {
+      margin-bottom: 8px;
+    }
+    .filter-score-card .input-group,
+    .filter-score-card .form-control {
+      max-width: 100%;
+    }
+    .filter-score-card .input-group,
+    .filter-score-control-row,
+    .filter-score-toggle-row {
+      min-height: 42px;
+    }
+    .filter-score-card .input-group > .form-control,
+    .filter-score-card .input-group > .input-group-text {
+      min-height: 42px;
+    }
+    .filter-score-control-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+    .filter-score-control-row .form-control {
+      width: 100%;
+      min-height: 42px;
+    }
+    .filter-score-card .form-range {
+      margin: 0;
+      min-height: 30px;
+    }
+    .filter-score-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+    /* Only the rows you can actually toggle react. A disabled checkbox (an
+       unconnected server, a run lock) left its label lighting up under the
+       pointer, which reads as clickable. Adjacent-sibling rather than :has(),
+       since the label always follows its input here. */
+    .filter-score-toggle-row:hover .form-check-input:not(:disabled) + .form-check-label {
+      color: var(--text-accent);
+    }
+    .filter-score-toggle-row:has(.form-check-input:disabled) {
+      cursor: default;
+    }
+    .filter-score-toggle-row .form-check-input {
+      flex: 0 0 auto;
+      margin: 0;
+    }
+    .filter-score-toggle-row .form-check-label {
+      color: var(--text-primary);
+      font-size: var(--fs-2xl);
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    .filter-score-help {
+      font-size: var(--fs-sm);
+      color: var(--text-muted);
+      line-height: 1.35;
+      margin-top: 8px;
+    }
+    /* Checkbox/radio labels get the same hover affordance as the Filtering &
+       Scoring toggle rows (disabled inputs stay inert). */
+    .form-check-input:not(:disabled) + .form-check-label {
+      cursor: pointer;
+      transition: color .15s ease;
+    }
+    .form-check-input:not(:disabled) + .form-check-label:hover {
+      color: var(--text-accent);
+    }
+    /* Run-mode cards carry whole card bodies inside their labels — they keep
+       their own hover treatment instead of recoloring all that text. */
+    .run-mode-card .form-check-input + .form-check-label,
+    .run-mode-card .form-check-input + .form-check-label:hover {
+      color: inherit;
+    }
+    @media (max-width: 575.98px) {
+      .filter-score-grid {
+        grid-template-columns: 1fr;
+      }
+      .filter-score-card {
+        padding: 11px;
+      }
+    }
+    .page-title   { font-size: 1.3rem; font-weight: 700; color: var(--text-primary); }
+    /* Title row sticks below the variable-height site header (JS keeps
+       --pr-header-h in sync with the real height). While stuck, a full-bleed
+       ::before backdrop makes it read as a strip popping out of the header,
+       keeping any row actions (e.g. Config's Revert/Save) reachable at any
+       scroll depth. */
+    .page-title-bar {
+      position: sticky;
+      top: var(--pr-header-h, 58px);
+      z-index: 60;
+      padding: 10px 0;
+    }
+    .page-title-bar::before {
+      content: "";
+      position: absolute;
+      top: 0; bottom: 0; left: 50%;
+      width: 100vw;
+      transform: translateX(-50%);
+      z-index: -1;
+      background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      opacity: 0;
+      transition: opacity .15s ease;
+      pointer-events: none;
+    }
+    .page-title-bar.is-stuck::before { opacity: 1; }
+    /* Toasts stack bottom-right on desktop; on phones every toast spans the
+       same full-width footprint so mixed-length messages stay uniform. */
+    .toast-wrap   { position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+                    display: flex; flex-direction: column; align-items: flex-end; }
+    @media (max-width: 640px) {
+      .toast-wrap { left: 12px; right: 12px; bottom: 14px; align-items: stretch; }
+    }
+
+    /* ═══════ Theme toggle ═══════ */
+    .theme-toggle {
+      margin-left: auto;            /* push to the far right of the header row */
+      align-self: center;
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 7px; height: 32px; padding: 0 12px;
+      background: var(--surface-tint); color: var(--text-secondary);
+      border: 1px solid var(--border); border-radius: 10px;
+      font-size: var(--fs-xs); font-weight: 600; letter-spacing: .01em;
+      cursor: pointer; transition: background-color .15s, color .15s, border-color .15s, box-shadow .15s;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.20);
+    }
+    .theme-toggle:hover { background: var(--hover-neutral); color: var(--hover-text); border-color: var(--hover-neutral); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--border-accent); outline-offset: 2px; }
+    /* ═══════ Keyboard focus ═══════
+       One ring for everything you can tab to, the theme toggle's outline above.
+       The buttons' own shadows (sheen and lift) left no room for Bootstrap's
+       focus shadow, so no .btn showed focus at all, while checkboxes, radios,
+       the switch and range thumbs glowed stock Bootstrap blue. Fields and
+       dropdowns keep their in-field ring in the same accent. */
+    .btn:focus-visible, .btn-close:focus-visible, .btn-icon:focus-visible,
+    .form-check-input:focus-visible, .form-range:focus-visible,
+    .header-tabs a:focus-visible, a.pr-pill:focus-visible {
+      outline: 2px solid var(--border-accent); outline-offset: 2px;
+    }
+    .btn-close:focus, .form-check-input:focus, .form-range:focus { box-shadow: none; }
+    .form-check-input:focus { border-color: var(--border-accent); }
+    .form-range:focus::-webkit-slider-thumb { box-shadow: none; }
+    .form-range:focus::-moz-range-thumb { box-shadow: none; }
+    .theme-toggle svg { width: 15px; height: 15px; display: block; }
+    .theme-toggle .tt-label { display: none; }
+    /* Show the icon for the theme you'd switch TO. */
+    :root[data-theme="light"] .theme-toggle .icon-to-dark  { display: block; }
+    :root[data-theme="light"] .theme-toggle .icon-to-light { display: none; }
+    :root:not([data-theme="light"]) .theme-toggle .icon-to-dark  { display: none; }
+    :root:not([data-theme="light"]) .theme-toggle .icon-to-light { display: block; }
+
+    @media (min-width: 768px) {
+      .theme-toggle { margin-right: 24px; }   /* line up with the page content's right edge */
+      .theme-toggle .tt-label { display: inline; }
+      .about-toggle { margin-right: 8px; }    /* sits just left of the theme toggle */
+    }
+    @media (max-width: 767px) {
+      /* Top row only has the brand; pin the toggles to the brand row's right edge. */
+      .site-header .theme-toggle { position: absolute; top: 9px; right: 24px; }
+      .site-header .about-toggle { position: absolute; top: 9px; right: 70px; }
+    }
+    /* "About & quick start" reuses the theme-toggle skin so the header controls match. */
+    .about-toggle { margin-left: auto; width: 32px; padding: 0; font-size: var(--fs-lg); }
+    .about-toggle + .theme-toggle { margin-left: 0; }
+
+
+    /* ═══════ Muted glass color polish ═══════ */
+    :root[data-theme="light"] .brand-name { color: #8f5f3e; }
+    :root:not([data-theme="light"]) .brand-name { color: #d0a178; }
+    :root[data-theme="light"] .brand-mark { color: #8f5f3e; }
+    :root:not([data-theme="light"]) .brand-mark { color: #d0a178; }
+    :root[data-theme="light"] .header-tabs a.active { color: #54689a; border-bottom-color: #5f75a7; }
+    :root:not([data-theme="light"]) .header-tabs a.active { color: #a8b8dc; border-bottom-color: #8ea3ce; }
+    /* The API-error state outranks the active-tab tint: the tab stays red
+       while the user is ON Configuration until the connections check out. */
+    :root[data-theme="light"] .header-tabs a.active.config-needs-onboarding,
+    :root:not([data-theme="light"]) .header-tabs a.active.config-needs-onboarding {
+      color: var(--text-danger);
+      border-bottom-color: var(--text-danger);
+    }
+    :root[data-theme="light"] .card-header,
+    :root[data-theme="light"] .accordion-button {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.42);
+    }
+    /* One steel-blue tint for card headers, from the tokens. The headers used to
+       rotate blue, sage and clay by position, so every third one wore the
+       warning color, and the same rules outranked the open-section style,
+       leaving an open section looking closed but for its chevron. Section
+       headers now keep their own resting and open looks above. */
+    .card .card-header {
+      background: linear-gradient(135deg, var(--bg-accent), var(--surface-2));
+    }
+    .btn-outline-secondary {
+      border-color: var(--border); color: var(--text-secondary);
+      background: var(--surface-tint);
+    }
+    .btn-outline-secondary:not(:disabled):not(.disabled):hover,
+    .btn-outline-secondary:not(:disabled):not(.disabled):focus-visible {
+      border-color: var(--hover-neutral); color: var(--hover-text);
+      background: var(--hover-neutral);
+    }
+    .btn-outline-secondary:disabled,
+    .btn-outline-secondary.disabled {
+      border-color: var(--border); color: var(--text-muted);
+      background: var(--surface-tint);
+      opacity: .65;
+    }
+
+    /* Opaque overlay surfaces. Cards can stay glassy; popups should not show
+       clashing page content through them. */
+    .modal-content {
+      background: var(--popup-bg) !important;
+      color: var(--text-primary);
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .modal-header,
+    .modal-footer {
+      background: var(--popup-bg-2);
+      border-color: var(--border);
+    }
+
+    /* Shared popup geometry: every dialog uses .pr-popup +
+       .modal-dialog-centered + .modal-dialog-scrollable for one width/position.
+       Add .pr-popup--fill for a fixed-height body so the file browser and
+       history windows stay the same size regardless of content. */
+    .pr-popup .modal-dialog { max-width: min(860px, calc(100vw - 24px)); }
+    .pr-popup .modal-content { border-radius: 14px; --bs-modal-inner-border-radius: 13px; }
+    .pr-popup--fill .modal-content { height: min(680px, calc(100vh - 96px)); }
+    .pr-popup--fill .modal-body { display: flex; flex-direction: column; min-height: 0; }
+    /* The confirm dialog asks one question, so it stays narrow — a full-width
+       popup makes a two-line question look like a document. */
+    .pr-confirm .modal-dialog { max-width: min(520px, calc(100vw - 24px)); }
+    .pr-confirm .modal-body p { margin: 0 0 .65rem; line-height: 1.55; }
+    .pr-confirm .modal-body p:last-child { margin-bottom: 0; }
+    /* The consequence of saying yes, in the same red the countdown and the
+       breach note use when a run is about to delete. */
+    .pr-confirm .pr-confirm-warn { color: var(--text-danger); }
+    .pr-confirm .modal-footer { gap: 8px; }
+    .pr-confirm .modal-footer > * { margin: 0; }
+    /* Modals use .btn-close-white for the dark theme; in light theme that
+       renders a white × on a light popup, so drop the invert filter. */
+    :root[data-theme="light"] .btn-close-white { filter: none; }
+
+    /* ═══════ Toast ═══════ */
+    .pr-toast {
+      box-sizing: border-box;
+      color: var(--text-primary);
+      padding: 10px 16px; border-radius: 8px; margin-top: 8px;
+      font-size: var(--fs-lg); box-shadow: var(--shadow); min-width: 220px;
+      max-width: min(420px, calc(100vw - 48px));
+      border: 1px solid var(--border-strong);
+      background: var(--toast-info-bg);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    @media (max-width: 640px) {
+      .pr-toast { min-width: 0; max-width: none; width: 100%; }
+    }
+    /* Entrance pop / exit fade. Slide uses standalone translate so it can't
+       fight a transform. */
+    .pr-toast { animation: pr-toast-in .24s cubic-bezier(.21, 1.02, .55, 1.2); }
+    @keyframes pr-toast-in {
+      from { opacity: 0; translate: 0 14px; scale: .96; }
+      to   { opacity: 1; translate: 0 0;    scale: 1; }
+    }
+    .pr-toast--out { animation: pr-toast-out var(--pr-anim-out) forwards; }
+    @keyframes pr-toast-out {
+      to { opacity: 0; translate: 0 8px; }
+    }
+    .pr-toast--success { background: var(--toast-success-bg); border-color: var(--border-accent); }
+    .pr-toast--danger  { background: var(--toast-danger-bg);  border-color: var(--text-danger); }
+    .pr-toast--warning { background: var(--toast-warning-bg); border-color: var(--border-warning); }
+    .pr-toast--info    { background: var(--toast-info-bg);    border-color: var(--border-strong); }
+
+    /* ── Form validation, shared by Configuration and Filtering & Scoring:
+       .field-invalid on the field's wrapper paints the inputs red; the
+       .field-error line under it shows while .show is set. ──────────────── */
+    .field-invalid .form-control,
+    .field-invalid .input-group-text {
+      border-color: var(--text-danger) !important;
+    }
+    .field-invalid .form-control {
+      box-shadow: 0 0 0 2px var(--bg-danger);
+    }
+    .field-invalid .input-label {
+      color: var(--text-danger);
+    }
+    .field-error {
+      display: none;
+      color: var(--text-danger);
+      font-size: var(--fs-sm);
+      margin-top: 4px;
+    }
+    .field-error.show { display: block; }
+
+    /* Inline lock/warning notice, shared by Configuration and Filtering &
+       Scoring ("A run is active…", autopause reasons). */
+    .config-inline-warning {
+      border: 1px solid var(--border-warning);
+      background: var(--bg-warning);
+      color: var(--text-warning);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: var(--fs-md);
+    }
+    /* A note that reports something ALREADY DONE can be dismissed; one that
+       reports a condition still in effect cannot, because hiding it would not
+       change the condition and the page would then be lying by omission.
+       Amber is for the second kind — something to act on — so the dismissible
+       ones wear the accent instead: they are telling you what happened, not
+       asking for anything. Same shape, so a column of notes still reads as one
+       list, and the colour is what says which are still waiting on you. */
+    .config-inline-note {
+      border: 1px solid var(--border-accent);
+      background: var(--surface-tint);
+      color: var(--text-accent);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: var(--fs-md);
+    }
+    /* Page-level notes, above the sections they concern. The pinned ones come
+       first and the dismissible ones sit underneath — enforced here by `order`
+       rather than by markup, so a note added in the wrong place still lands in
+       the right half. Spacing stays on the notes themselves (mb-3), so a hidden
+       one takes up no room; a gap on this container would leave a hole where
+       every note happened to be hidden. */
+    .page-notes { display: flex; flex-direction: column; }
+    .page-notes > .is-dismissible { order: 1; }
+
+    /* The X sits on the right and never wraps under the text. */
+    .config-inline-warning.is-dismissible,
+    .config-inline-note.is-dismissible {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding-right: 8px;
+    }
+    /* …and `hidden` still wins over that display. Bootstrap's reboot happens to
+       carry [hidden]{display:none!important}, so this is currently a no-op —
+       but a note that reappears the day the vendored CSS changes is not a
+       dependency worth having. */
+    .config-inline-warning[hidden],
+    .config-inline-note[hidden] { display: none !important; }
+    .config-inline-warning.is-dismissible > :first-child,
+    .config-inline-note.is-dismissible > :first-child { flex: 1 1 auto; }
+    .config-inline-dismiss {
+      flex: 0 0 auto;
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; margin: -2px 0 0;
+      padding: 0; border: 0; border-radius: 6px;
+      background: transparent; color: inherit;
+      font-size: 1rem; line-height: 1; cursor: pointer;
+      opacity: .65; transition: opacity .12s ease, background-color .12s ease;
+    }
+    .config-inline-dismiss:hover  { opacity: 1; background: var(--surface-2); }
+    .config-inline-dismiss:active { opacity: .8; }
+    .config-inline-dismiss:disabled { opacity: .35; cursor: default; background: transparent; }
+
+    /* Locked-section ghosting: the pages decide what dims; the not-allowed
+       cursor on the controls is common to both. */
+    .section-run-ghost .form-control,
+    .section-run-ghost .form-range,
+    .section-run-ghost .form-check-input,
+    .section-run-ghost .secret-toggle,
+    .section-run-ghost .btn {
+      cursor: not-allowed;
+    }
+
+    /* ═══════ Print / Save as PDF ═══════
+       Browsers' own "capture full page" features flatten a scrolling page into
+       one tall image by compositing it in pieces, and two things in this design
+       do not survive that: a `position: sticky` bar is painted wherever it is
+       stuck, landing in the middle of the image over content it was never in
+       front of; and `backdrop-filter` blurs a backdrop that does not exist for
+       the parts of the page that were off-screen, which is what leaves a smear.
+       Printing is a separate, untiled render, so it is the reliable way to get
+       the whole page in one piece — provided we hand it a flat, unstuck layout.
+
+       Last in the sheet so these win on order alone; `!important` only where a
+       later same-specificity rule would otherwise re-stick something. */
+    /* Someone who has asked their OS to reduce transparency has asked for
+       exactly one thing: stop showing content through content. The glass on
+       the sticky header, the title bar and the buttons is the only place this
+       app does that, so it drops to the opaque surface underneath — same
+       colors, same layout, nothing moves. The blur was decoration; the
+       surfaces were always real. A browser without this query simply keeps the
+       glass, which is today's behavior. */
+    @media (prefers-reduced-transparency: reduce) {
+      *, *::before, *::after {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+      /* Dropping the blur is not enough on its own — every one of these
+         surfaces is a translucent tint, so the page still shows through at
+         ~12%. Each keeps its own tint but gets it composited over --page-bg
+         (the one opaque token) as a second background layer: same color it
+         already appeared as when sitting over the page, now with nothing
+         behind it. Layers paint first-listed on top, so the tint goes first. */
+      .site-header,
+      .page-title-bar::before {
+        background-image:
+          linear-gradient(var(--surface-1), var(--surface-1)),
+          linear-gradient(var(--page-bg), var(--page-bg));
+      }
+    }
+
+    /* The same drop, on the app's own switch, because the glass is not only
+       decoration — it is the most expensive thing on the page to scroll past.
+       A backdrop-filter makes the compositor re-read what is behind an element
+       and re-blur it every frame it moves, and this design puts one on both
+       stuck bars AND on every button, so a long page (Config) can be dragging
+       dozens of them down the screen at once. Firefox for Android is where
+       dropping it is worth the most.
+
+       Its own attribute, because it is worth having on its own: the blur is
+       the one piece of the decoration that costs frames rather than taste, so
+       it can go while the animations stay. Reduce visual effects stamps this
+       too (the server ORs them), so the rules below only ever need to read the
+       one attribute. Same compensation as above: the tints get composited over
+       --page-bg so the colors and the layout do not move, only the blur goes. */
+    :root[data-glass="off"] *,
+    :root[data-glass="off"] *::before,
+    :root[data-glass="off"] *::after {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    :root[data-glass="off"] .site-header,
+    :root[data-glass="off"] .page-title-bar::before {
+      background-image:
+        linear-gradient(var(--surface-1), var(--surface-1)),
+        linear-gradient(var(--page-bg), var(--page-bg));
+    }
+
+    @media print {
+      /* Chrome drops backgrounds when printing unless asked not to, which would
+         throw away every surface, border tint and meter fill on the page. */
+      *, *::before, *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+      /* Nothing sticks or floats: everything lands in document order, once. */
+      .site-header, .page-title-bar {
+        position: static !important;
+        box-shadow: none !important;
+      }
+      /* The stuck strip's blurred backdrop and drop shadow are the artifact
+         itself — there is nothing for them to sit over on a flat page. */
+      .page-title-bar::before { display: none !important; }
+      /* A fixed full-viewport wash would print on the first page only. */
+      body::before { display: none !important; }
+      /* Transient overlays are not part of the page being captured. */
+      .toast-wrap, .pr-debug-overlay, .modal, .modal-backdrop,
+      .dashboard-run-tooltip, .log-window { display: none !important; }
+      /* Keep a card whole rather than splitting it across a page break. */
+      .card, .config-card, .run-mode-card, .ts-panel, .stat-card {
+        break-inside: avoid;
+      }
+      /* Side-scrolling regions print clipped to their scroll position; letting
+         them lay out full-width is the only way the rest of the row is seen. */
+      .header-tabs, .table-responsive { overflow: visible !important; }
+      body { min-height: 0; }
+    }

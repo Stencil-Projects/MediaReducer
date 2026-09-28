@@ -851,7 +851,7 @@ function _applyGlassBlurAvailability() {
   const help = document.getElementById('glass-blur-help');
   if (help) {
     help.textContent = covered
-      ? 'Already off - Reduce visual effects includes it.'
+      ? 'Already off — Reduce visual effects includes it.'
       : _GLASS_HELP;
   }
 }
@@ -886,7 +886,7 @@ function _applySpaceThresholdLock() {
     } else if (!locked && _savedLiveModeLocked()) {
       // Not a lock — a heads-up that a threshold save reconciles the plan in place and
       // keeps automatic mode running, pausing only if the change leaves it over a limit.
-      note.textContent = 'Automatic Cleanup is on — a threshold change rebuilds the deletion plan in place and keeps running; it only pauses to Monitor Only if the change leaves the library over a limit.';
+      note.textContent = 'Automatic Cleanup is on. A threshold change rebuilds the deletion plan; if that leaves the library over a limit, Automatic Cleanup switches to Monitor Only until you turn it back on.';
       note.hidden = false;
     } else {
       note.hidden = true;
@@ -1438,8 +1438,8 @@ function _syncRedlineMax() {
 function _redlineErrorText() {
   if (_redlineExceedsHeadroom()) {
     return prBlankNumber('HEADROOM_GB') === 0
-      ? 'Headroom is 0 — untick it (redline-only mode) to run Redline on its own.'
-      : 'Redline must be lower than Headroom — for the full target on every check, untick Headroom instead.';
+      ? 'Headroom is 0 — uncheck it (redline-only mode) to run Redline on its own.'
+      : 'Redline must be lower than Headroom — for the full target on every check, uncheck Headroom instead.';
   }
   return 'Enter a Redline above 0 GB before saving, or uncheck this option.';
 }
@@ -2150,7 +2150,7 @@ function _updateThresholdStatus() {
       el.classList.add('is-off');
       el.classList.remove('is-near', 'is-over');
       if (state) state.textContent = row.off ? 'Off' : '';
-      if (note) note.textContent = row.off ? 'Not armed — this trigger is switched off.' : row.unknown;
+      if (note) note.textContent = row.off ? 'Check its box below to turn it on.' : row.unknown;
       continue;
     }
     anyArmed = true;
@@ -2294,7 +2294,7 @@ async function onResetInvalidClick() {
   if (btn) btn.disabled = false;
 }
 async function onBannerFullResetClick() {
-  if (!window.confirm('Reset MediaReducer to first-time setup? Settings, appearance, cache, and the library snapshot are wiped. Logs are kept.')) return;
+  if (!window.confirm('Reset MediaReducer to first-time setup? Settings, appearance, cache, and the library snapshot are wiped. Logs and deletion history are kept.')) return;
   if (await _bannerPost('/api/config/reset', 'message')) window.location.href = '/';
 }
 function _applyConfigHealth(d) {
@@ -2508,6 +2508,19 @@ function renderCollectionList(server) {
   });
 }
 
+// One POST answers for both servers (the endpoint scans each selected one), so
+// the Plex and Jellyfin scans started together share it: on every page load and
+// every Save they used to send two, each scanning both media servers.
+let _collectionsRequest = null;
+function _fetchCollections() {
+  if (!_collectionsRequest) {
+    _collectionsRequest = fetch('/api/collections', { method: 'POST' })
+      .then(r => r.json())
+      .finally(() => { _collectionsRequest = null; });
+  }
+  return _collectionsRequest;
+}
+
 async function scanCollections(server) {
   const statusEl = document.getElementById(server + '-collections-status');
   const btn = document.getElementById('btn-scan-' + server);
@@ -2519,7 +2532,7 @@ async function scanCollections(server) {
   if (btn) { btn.disabled = true; btn.classList.add('btn-busy'); }
   if (statusEl) { statusEl.textContent = 'Scanning…'; statusEl.style.color = 'var(--text-muted)'; }
   try {
-    const d = await fetch('/api/collections', { method: 'POST' }).then(r => r.json());
+    const d = await _fetchCollections();
     const info = (d && d[server]) || {};
     if (info.ok) {
       _collectionOptions[server] = info.names || [];
@@ -2640,11 +2653,11 @@ async function debugPlexCollections() {
   const statusEl = document.getElementById('plex-collections-status');
   const names = Array.from(_collectionSelections.plex || []);
   if (!names.length) {
-    showToast('Tick at least one Plex collection first.', 'warning');
+    showToast('Check at least one Plex collection first.', 'warning');
     return;
   }
   if (btn) btn.disabled = true;
-  if (statusEl) { statusEl.textContent = 'Debugging selected collection...'; statusEl.style.color = 'var(--text-muted)'; }
+  if (statusEl) { statusEl.textContent = 'Debugging the selected collection…'; statusEl.style.color = 'var(--text-muted)'; }
   const startedAt = performance.now();
   prShowDebugBox('Plex protected collections', 'Asking Plex what is inside: ' + names.join(', ') + '…',
                   { pending: true });
@@ -2728,11 +2741,11 @@ async function debugJellyfinCollections() {
   const statusEl = document.getElementById('jellyfin-collections-status');
   const names = Array.from(_collectionSelections.jellyfin || []);
   if (!names.length) {
-    showToast('Tick at least one Jellyfin collection first.', 'warning');
+    showToast('Check at least one Jellyfin collection first.', 'warning');
     return;
   }
   if (btn) btn.disabled = true;
-  if (statusEl) { statusEl.textContent = 'Debugging selected collection...'; statusEl.style.color = 'var(--text-muted)'; }
+  if (statusEl) { statusEl.textContent = 'Debugging the selected collection…'; statusEl.style.color = 'var(--text-muted)'; }
   const startedAt = performance.now();
   prShowDebugBox('Jellyfin protected collections', 'Asking Jellyfin what is inside: ' + names.join(', ') + '…',
                   { pending: true });
@@ -2895,8 +2908,8 @@ async function onResetClick() {
     }
     if (status) {
       status.textContent = _configActivityLocked()
-        ? 'This will cancel the active run and reset.'
-        : 'Ready to reset.';
+        ? 'Click again to cancel the active run and reset.'
+        : 'Click again to reset.';
       status.style.color = 'var(--text-muted)';
     }
     return;
@@ -2958,7 +2971,7 @@ async function refreshArchivedLogsStatus() {
     if (statusEl) {
       statusEl.textContent = _configActivityLocked()
         ? 'A run is active. Archived logs cannot be cleared right now.'
-        : (!_filesystemReady() ? _filesystemBlockingText() : (d.label || 'Archived log directory is empty.'));
+        : (!_filesystemReady() ? _filesystemBlockingText() : (d.label || 'No archived logs.'));
     }
     if (btn) {
       btn.disabled = !!d.empty || _configActivityLocked() || !_filesystemReady();
@@ -3246,13 +3259,19 @@ function _relabelDailyRunTimeOptions() {
   [...sel.options].forEach(opt => { opt.textContent = prTimeLabel(opt.value); });
 }
 
+let _statusLinesFormat = null;
 function _applyDisplayTimeFormat() {
   const fmt = document.getElementById('DISPLAY_TIME_FORMAT')?.value === '24h' ? '24h' : '12h';
   window.PR_DISPLAY_TIME_FORMAT = fmt;
   _relabelDailyRunTimeOptions();
   updateServerClockLine();
   // These lines are formatted server-side (they carry a time_format query), so
-  // they need a re-fetch rather than a re-render.
+  // they need a re-fetch rather than a re-render — when the format moved.
+  // populateForm lands here on load and on every Save and Revert, and a
+  // re-fetch in an unchanged format sent each request twice. This is also
+  // their first fetch on load.
+  if (fmt === _statusLinesFormat) return;
+  _statusLinesFormat = fmt;
   refreshImdbDownloadStatus();
   refreshCacheClearStatus();
   refreshArchivedLogsStatus();
@@ -3280,17 +3299,17 @@ updateServerClockLine();
 setInterval(updateServerClockLine, 1000);
 document.getElementById('DISPLAY_TIME_FORMAT')?.addEventListener('change', _applyDisplayTimeFormat);
 
-// Show the current monitored library size next to the Library Size Cap so the
+// The current monitored library size shows next to the Library Size Cap so the
 // cap can be set relative to it (same source the Dashboard storage card uses).
-// Ongoing updates ride the base layout's 4-second poll via prOnStatusPoll.
-refreshLibrarySize();
+// It rides the base layout's status poll via prOnStatusPoll, whose first
+// request waits for this script to register the hook: a fetch of its own here
+// asked for the same status twice on every load.
 // Pre-populate the lists by scanning any connected server on load; the Scan
 // buttons then just refresh. Saved selections stay checked either way.
 autoScanConnectedCollections();
 _updatePills();
-refreshImdbDownloadStatus();
-refreshCacheClearStatus();
-refreshArchivedLogsStatus();
+// The IMDb, cache and archived-log lines load with the form: populateForm's
+// _applyDisplayTimeFormat fetches them in the saved time format.
 _syncDirtyState();
 
 
@@ -3370,8 +3389,8 @@ function _immediatePruneWarning(cfg, nowCleanup) {
         + ' — so Cleanup will not delete anything until the cap or the safety percentage is raised.';
     }
     return nowCleanup
-      ? `Library Size Cap (${cap} GB) is below the current library (~${size} GB) — Automatic Cleanup prunes it at the next daily run.`
-      : `Library Size Cap (${cap} GB) is below the current library (~${size} GB) — the next Cleanup will prune down to it.`;
+      ? `Library Size Cap (${cap} GB) is below the current library (~${size} GB) — Automatic Cleanup deletes down to it at the next daily run.`
+      : `Library Size Cap (${cap} GB) is below the current library (~${size} GB) — the next Cleanup will delete down to it.`;
   })();
   if (capWarning) warnings.push(capWarning);
   // No lowered-delay warning: an existing mark keeps the delay it was
@@ -3411,8 +3430,8 @@ function _immediatePruneWarning(cfg, nowCleanup) {
 
   if (headDeficit > 0 && (headChanged || armingCleanup)) {
     warnings.push(armingCleanup
-      ? `Free space is already ${prGbAmount(headDeficit)} GB past the Headroom target — Automatic Cleanup prunes it at the next daily run.`
-      : `Free space is already ${prGbAmount(headDeficit)} GB past the Headroom target — the next Cleanup will prune ~that much.`);
+      ? `Free space is already ~${prGbAmount(headDeficit)} GB short of the Headroom target — Automatic Cleanup deletes about that much at the next daily run.`
+      : `Free space is already ~${prGbAmount(headDeficit)} GB short of the Headroom target — the next Cleanup will delete about that much.`);
   } else if (redDeficit > 0 && (redChanged || armingCleanup)) {
     warnings.push(armingCleanup
       ? `Free space is already ${prGbAmount(redDeficit)} GB below the Redline floor — Automatic Cleanup frees ~that much within ~15 minutes.`
@@ -3544,8 +3563,8 @@ async function saveConfig() {
       confirmText: 'Save',
       extraText: delayChanged
         ? (rebuildsPlan
-            ? 'Save and re-date the remaining marks'
-            : `Save and re-date ${_markedClockedCount === 1 ? 'the mark' : `all ${_markedClockedCount} marks`}`)
+            ? 'Save and restart the delay on the remaining marks'
+            : `Save and restart the delay on ${_markedClockedCount === 1 ? 'the mark' : `all ${_markedClockedCount} marks`}`)
         : '',
       danger: !!(armingCleanup || pruneWarning),
     });
@@ -3625,15 +3644,17 @@ async function saveConfig() {
         // the same files may stay deletable through Plex — that lapse is the
         // dangerous part, not the deselection itself.
         const jfDropped = d.server_software_auto_disabled.some(n => /jellyfin/i.test(String(n)));
+        const _two = d.server_software_auto_disabled.length > 1;
         showToast(d.server_software_auto_disabled.join(' and ')
-          + ' was deselected: the API connection failed or the key is blank. '
-          + 'Fix the connection, then re-enable it under Server software.'
+          + (_two ? ' were' : ' was') + ' deselected: the API connection failed or the key is blank. '
+          + `Fix the connection, then re-enable ${_two ? 'them' : 'it'} under Server software.`
           + (jfDropped ? ' Jellyfin favorite/collection protections are inactive until then.' : ''),
           'warning');
       }
       autoScanConnectedCollections();
       refreshImdbDownloadStatus();
       refreshCacheClearStatus();
+      refreshArchivedLogsStatus();
       if (d.radarr_section_detection) {
         _applyRadarrSectionDetection(d.radarr_section_detection);
       } else {
@@ -3663,8 +3684,9 @@ async function saveConfig() {
       } else if (d.api_config_changed && health && health.severity === 'warning') {
         showToast('Saved with connection warnings.', 'warning');
       } else if (d.pending_unscheduled > 0) {
-        showToast(`Saved. Space limits are satisfied — unscheduled ${d.pending_unscheduled} marked `
-          + `deletion${d.pending_unscheduled === 1 ? '' : 's'}; the eligible queue remains.`, 'success');
+        showToast(`Saved. Space limits are met, so ${d.pending_unscheduled} marked `
+          + `deletion${d.pending_unscheduled === 1 ? ' was' : 's were'} cancelled — `
+          + `${d.pending_unscheduled === 1 ? 'it stays' : 'they stay'} in the eligible order.`, 'success');
       } else {
         showToast('Configuration saved', 'success');
       }
@@ -3723,9 +3745,9 @@ function _applyImdbDownloadButtonState() {
   btn.classList.toggle('disabled', !canDownload);
   btn.setAttribute('aria-disabled', canDownload ? 'false' : 'true');
 
-  if (!status.exists) btn.textContent = 'Download IMDb Ratings';
+  if (!status.exists) btn.textContent = 'Download IMDb ratings';
   else if (locked) btn.textContent = `Available in ${_formatImdbDownloadWait(status.seconds_until_download)}`;
-  else btn.textContent = 'Download Latest IMDb Ratings';
+  else btn.textContent = 'Download latest IMDb ratings';
 
   if (statusEl) {
     if (_configActivityLocked()) {
@@ -3804,7 +3826,7 @@ function _applyClearCacheButtonState() {
       const mtime = status.mtime_ts ? prFormatEpoch(status.mtime_ts) : (status.mtime || 'unknown date');
       const suffix = _configActivityLocked()
         ? ' A run is active.'
-        : (!_filesystemReady() ? ` ${_filesystemBlockingText()}` : (status.can_clear ? ' Cache can be cleared.' : ` ${status.reason || 'Cache cannot be cleared right now.'}`));
+        : (!_filesystemReady() ? ` ${_filesystemBlockingText()}` : (status.can_clear ? '' : ` ${status.reason || 'Cache cannot be cleared right now.'}`));
       statusEl.textContent = `Local cache file: ${size}, last updated ${mtime}.${suffix}`;
     } else {
       statusEl.textContent = _configActivityLocked() ? 'A run is active. Cache is locked.' : (!_filesystemReady() ? _filesystemBlockingText() : (status.reason || 'No cache file found.'));
@@ -3850,7 +3872,7 @@ async function clearCache() {
   }
 }
 
-// ── Revert / Section Reset to Default ─────────────────────────────────────────
+// ── Revert / Section Reset to defaults ─────────────────────────────────────────
 
 function revertForm() {
   populateForm(_savedConfig);
@@ -3889,9 +3911,9 @@ async function resetMarkDelays() {
     });
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.ok) {
-      showToast(d.message || 'Delay clocks reset.', d.reset ? 'success' : 'info');
+      showToast(d.message || 'Delay restarted.', d.reset ? 'success' : 'info');
     } else {
-      showToast(d.message || 'Could not reset the delay clocks.', 'warning');
+      showToast(d.message || 'Could not restart the delay.', 'warning');
     }
   } catch (e) {
     showToast('Could not reach the server.', 'danger');

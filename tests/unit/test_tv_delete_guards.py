@@ -262,5 +262,51 @@ check("the right show, the right season, and only that season",
       and [s for s in PUTS[0][1]["seasons"] if s["seasonNumber"] == 2][0]["monitored"] is True,
       PUTS)
 
+# ── Sonarr: finding the show when Sonarr names it differently ─────────────
+# The lookup matched the title alone. A show Sonarr calls "The Office (US)"
+# and the media server "The Office" read as not in Sonarr: the files went and
+# the season stayed monitored, for Sonarr to download again. The series
+# FOLDER is what ties the two together — Sonarr's path names the folder the
+# files are deleted from — then the IMDb id, then every name the row has.
+OFFICE = {"id": 7, "title": "The Office (US)", "year": 2005, "path": "/tv/A Show",
+          "imdbId": "tt0386676",
+          "seasons": [{"seasonNumber": 1, "monitored": True}]}
+done, rep = sonarr_run([dict(OFFICE)])
+check("a show Sonarr titles differently is found by its series folder",
+      done is True and len(PUTS) == 1 and PUTS[0][0].endswith("/series/7")
+      and PUTS[0][1]["seasons"][0]["monitored"] is False, (done, PUTS, rep["skipped"]))
+
+done, rep = sonarr_run([dict(OFFICE, path="/data/Somewhere Else")],
+                       entry={**ENTRY, "imdb_id": "tt0386676"})
+check("...and, in another folder, by the IMDb id both sides carry",
+      done is True and len(PUTS) == 1 and PUTS[0][0].endswith("/series/7"), (done, PUTS))
+
+done, rep = sonarr_run([dict(OFFICE, path="/data/Somewhere Else", imdbId=None)],
+                       entry={**ENTRY, "year": 2005, "alt_titles": ["The Office (US)"]})
+check("...and, with neither, by the name the other media server uses",
+      done is True and len(PUTS) == 1 and PUTS[0][0].endswith("/series/7"), (done, PUTS))
+
+done, rep = sonarr_run([dict(OFFICE), dict(OFFICE, id=8)])
+check("two Sonarr series claiming our folder are refused, not guessed between",
+      done is False and "could not unmonitor" in why(rep) and not PUTS, (rep["skipped"], PUTS))
+check("...and no file deleted", (SHOW / "Season 01" / "ep1.mkv").exists())
+
+done, rep = sonarr_run([dict(OFFICE, path="/data/Somewhere Else", imdbId="tt9999999")])
+check("a show Sonarr has under no matching folder, id or name is still not ours",
+      done is True and not PUTS and rep["deleted_files"] == 2, (done, PUTS, rep))
+
+# The plan entry is what the pass hands the deletion, so it has to carry them.
+plan = A._tv_season_plan([{
+    "media_type": "tv", "title": "The Office (US)", "alt_titles": ["The Office"],
+    "imdb_id": "tt0386676", "year": 2005, "tv_in_scope": True, "tv_status": "ended",
+    "rating": 8.0, "votes": 1000,
+    "source_id": "plex:1", "path": str(SHOW), "added_at": 1,
+    "tv_seasons": [{"n": 1, "size_bytes": 10, "eps": 6, "added_at": 1},
+                   {"n": 2, "size_bytes": 10, "eps": 6, "added_at": 1}]}],
+    {"TV_SEASON_ELIGIBILITY": "all", "GRACE_PERIOD_DAYS": 0})
+check("the plan's season entries carry the IMDb id and the other names",
+      plan["order"] and all(e.get("imdb_id") == "tt0386676" and e.get("alt_titles") == ["The Office"]
+                            for e in plan["order"]), plan["order"][:1])
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

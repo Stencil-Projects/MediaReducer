@@ -113,7 +113,6 @@ import gzip
 import hashlib
 import io
 import json
-import math
 import re
 import shutil
 import signal
@@ -5981,6 +5980,21 @@ def _season_deletions_this_run() -> tuple:
     return (len(rep.get("deleted_seasons") or []), int(rep.get("freed_bytes") or 0))
 
 
+def _sim_disk_after(usage_info: dict, would_bytes, take_bytes) -> tuple:
+    """(used GB, free GB) a dry run's plan would leave: its movies AND the
+    seasons its merge took, which the season side deletes. With the seasons
+    left out, a Simulate whose seasons covered part of the deficit estimated
+    more used space than the run would leave, and warned "headroom
+    unreachable" when movies and seasons together reached the target.
+
+    free is statvfs's own figure, and total − used differs from it by the
+    filesystem's reserved blocks. After = before + freed, on the same base the
+    before came from; mixing them makes a 0-byte dry run report a change."""
+    freed = int(would_bytes or 0) + int(take_bytes or 0)
+    return (round(bytes_to_gb(usage_info["used"] - freed), 1),
+            round(bytes_to_gb(usage_info["free"] + freed), 1))
+
+
 def _season_takes_this_run() -> tuple:
     """(seasons, bytes) THIS run's merge gave the season side — the seasons the
     app marks as the run ends. A dry run counts them in its closing line and
@@ -6783,10 +6797,13 @@ def _redline_fast_path(to_free_bytes, *, trigger="REDLINE", do_radarr=False,
     # standing preview grows back to full strength after the emergency; only
     # when marks were actually consumed (a knife-edge free==floor firing has a
     # 0-byte deficit and must not spawn rebuild runs every tick).
-    _removed = ([f"{deleted_count} movie(s)"] if deleted_count else []) + (
-        [f"{_sn} season(s)"] if _sn else [])
-    _fp_msg = (f"Cleared from the marked queue — deleted {' and '.join(_removed)}, "
-               f"~{bytes_to_gb(bytes_freed + _sb):.1f} GB (no rescan)."
+    # The same shape the full scan's Cleanup ends with: which route the button
+    # took ("from the marked queue", "no rescan") is not something the person
+    # pressing it needs to read.
+    _removed = ([f"{deleted_count:,} movie{'' if deleted_count == 1 else 's'}"] if deleted_count else []) + (
+        [f"{_sn} season{'' if _sn == 1 else 's'}"] if _sn else [])
+    _fp_msg = (summary_message(f"Cleanup finished — freed {bytes_to_gb(bytes_freed + _sb):.1f} GB.",
+                               ("Deleted", " + ".join(_removed)))
                if _removed else
                "Free space already met the target — nothing needed deleting.")
     # The fast path skips log_run_summary, so print the issue block here; a
@@ -7357,7 +7374,7 @@ def log_run_summary(*, is_sim, trigger, to_free_gb, used_gb, free_before_gb,
     if is_sim:
         if final_gb >= max_gb:
             record_issue("headroom_unreachable",
-                         f"deleting every eligible movie only reaches {final_gb:.1f} GB, "
+                         f"deleting every eligible title only reaches {final_gb:.1f} GB, "
                          f"still above the headroom limit of {max_gb:.1f} GB")
         if library_cap_hit and effective_library_gb is not None:
             # The cap measures every monitored directory, TV included, so the
@@ -7660,11 +7677,8 @@ def _run_simulation(*, candidates, build_stats, total_scanned, usage_info,
     # tracked in the loop) plus the full eligible queue as its own row.
     _queued_count, _queued_bytes = simulated_count, simulated_freed_bytes
 
-    final_gb = round(bytes_to_gb(usage_info["used"] - _would_bytes), 1)
-    # free is statvfs's own figure, and total − used differs from it by the
-    # filesystem's reserved blocks. After = before + freed, on the same base
-    # the before came from; mixing them makes a 0-byte dry run report a change.
-    final_free_gb = round(bytes_to_gb(usage_info["free"] + _would_bytes), 1)
+    _take_n, _take_b = _season_takes_this_run()
+    final_gb, final_free_gb = _sim_disk_after(usage_info, _would_bytes, _take_b)
     log_run_summary(
         is_sim=True, trigger=trigger, to_free_gb=to_free_gb,
         used_gb=used_gb, free_before_gb=round(bytes_to_gb(usage_info["free"]), 1),
@@ -7679,7 +7693,6 @@ def _run_simulation(*, candidates, build_stats, total_scanned, usage_info,
 
     log_blank()
     _rest = simulated_count - _would_count
-    _take_n, _take_b = _season_takes_this_run()
     if _redline_only_mode():
         _sim_msg = summary_message(
             "Dry run — Redline is breached." if _would_count
@@ -7705,7 +7718,7 @@ def _run_simulation(*, candidates, build_stats, total_scanned, usage_info,
             ([f"{_would_count:,} movie{'' if _would_count == 1 else 's'}"] if _would_count else [])
             + ([f"{_take_n} season{'' if _take_n == 1 else 's'}"] if _take_n else []))
         _sim_msg = summary_message(
-            f"Dry run — would mark {_what} for deletion.",
+            f"Dry run — marked {_what} for deletion; nothing was deleted.",
             ("Marked", f"~{bytes_to_gb(_would_bytes + _take_b):.1f} GB"),
             ("Deletes", f"after a {DELETE_DELAY_DAYS}-day delay" if DELETE_DELAY_DAYS > 0
                         else "at the next daily run"),
@@ -8319,20 +8332,26 @@ def _cap_floor_refusal(*, library_cap_hit, library_gb, _is_sim,
     # Fail-closed cap-floor check against TODAY's library size. The cap was
     # validated when Live was armed, but the library can grow afterwards
     # (files copied in), and a Cleanup may delete at most MAX_HEADROOM_PCT%
-    # of the library. Mirrors the app's arm-time rule; sim may preview past
-    # it, Live refuses.
+    # of the library. The app's arm-time rule, from the same function
+    # (shared.cap_floor) and net of the same marks waiting out the delay; sim
+    # may preview past it, Live refuses.
     if (library_cap_hit and isinstance(MAX_HEADROOM_PCT, (int, float))
             and 0 < MAX_HEADROOM_PCT <= 100):
+        try:
+            _queued_gb = shared.marked_awaiting_bytes(load_pending()) / 1e9
+        except Exception:
+            _queued_gb = 0.0   # an unreadable queue nets out nothing: the strict floor
         # Compare UNROUNDED: a floor rounded for display reads as 0.0 on a
         # small library, which would wave the deletion through.
-        _cap_floor_gb = library_gb * (100 - MAX_HEADROOM_PCT) / 100
-        if MAX_LIBRARY_GB < _cap_floor_gb:
+        _cap_floor_gb, _queued_gb = shared.cap_floor(library_gb, _queued_gb, MAX_HEADROOM_PCT)
+        if _cap_floor_gb is not None and MAX_LIBRARY_GB < _cap_floor_gb:
             # Shown through gb_text, not the raw float: the unrounded floor is
             # what the comparison needs, but a reader does not need eight
             # decimal places of it.
+            _net = f" less the {gb_text(_queued_gb)} GB already marked" if _queued_gb else ""
             _floor_msg = (
                 f"Library Size Cap {gb_text(MAX_LIBRARY_GB)} GB is below the safety floor "
-                f"({gb_text(library_gb)} GB library × {100 - MAX_HEADROOM_PCT:g}% = "
+                f"({gb_text(library_gb)} GB library{_net}, × {100 - MAX_HEADROOM_PCT:g}% = "
                 f"{gb_text(_cap_floor_gb)} GB) — reaching the cap would delete more than "
                 f"{MAX_HEADROOM_PCT:g}% of the library."
             )

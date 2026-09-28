@@ -5,7 +5,7 @@
 // weights (my-2, my-3, my-4) and two heading gaps — one of which depended on
 // something invisible in the markup, whether the heading shared a grid column
 // with its first field. Logging therefore sat twice as far from its fields as
-// IMDb Ratings Data did, on the same page, for no reason a reader could see.
+// IMDb ratings data did, on the same page, for no reason a reader could see.
 //
 // It is now set centrally, so this checks the result rather than the rules:
 // measure every heading and require one answer. A group added later with its
@@ -97,7 +97,7 @@ check('...and every rule sits the same distance above its heading',
 
 // The groups that were missing a heading entirely, which is what made the
 // spacing look arbitrary rather than merely uneven.
-for (const title of ['Appearance', 'Troubleshooting', 'Logging', 'IMDb Ratings Data']) {
+for (const title of ['Appearance', 'Troubleshooting', 'Logging', 'IMDb ratings data']) {
   check(`"${title}" is a named group`, groups.some(g => g.title === title),
         groups.map(g => g.title));
 }

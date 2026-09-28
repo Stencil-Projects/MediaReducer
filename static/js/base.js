@@ -880,6 +880,8 @@ initTabIndicator();
 (function pollHeaderRunBadge() {
   async function tick() {
     if (window.__prDashboardOwnsBadge) return;   // Dashboard updates it itself
+    // A hidden tab has nobody to show it to; it catches up when shown (below).
+    if (document.hidden) return;
     try {
       const r = await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' });
       if (r.ok) {
@@ -894,6 +896,13 @@ initTabIndicator();
       }
     } catch (_) { /* transient — try again next tick */ }
   }
-  tick();
+  // The first poll waits for DOMContentLoaded, by which time every deferred page
+  // script has run and registered its prOnStatusPoll hook, so this one request
+  // seeds the page. Polled immediately, it arrived before the hook existed:
+  // Configuration fetched its own copy, and Filtering & Scoring got nothing
+  // until the second tick.
+  if (document.readyState === 'complete') tick();
+  else document.addEventListener('DOMContentLoaded', tick, { once: true });
   setInterval(tick, 4000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 })();

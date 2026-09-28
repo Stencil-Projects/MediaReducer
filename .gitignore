@@ -4,6 +4,10 @@ __pycache__/
 # but only once that tool has run; naming them here doesn't depend on that.
 .pytest_cache/
 .ruff_cache/
+# bb map's index, which is 5 MB of generated JSON. Unlike the two above it
+# writes no .gitignore of its own despite saying it is ignored, so this line
+# is the only thing between `git add -A` and committing the whole index.
+.bb-map/
 # The install flow copies .env.example to .env in the clone — it holds the
 # user's local paths and must never be committed.
 .env

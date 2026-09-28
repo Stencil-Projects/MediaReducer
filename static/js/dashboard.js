@@ -598,7 +598,7 @@ function renderProgress(p) {
     label = failed ? 'Run failed' : 'Run stopped';
   } else {
     pct = 100;
-    label = withErrors ? 'Complete — with errors' : 'Complete';
+    label = withErrors ? 'Done — with errors' : 'Done';
   }
   const bar = document.getElementById('rp-bar');
   if (bar.dataset.stage !== stageKey) {
@@ -635,10 +635,10 @@ function renderProgress(p) {
     // the two halves apart.
     else if (phase === 'library') {
       current = isInfo ? 'Measuring library size on disk…'
-              : (Number(p.resolve_total) || 0) ? 'Resolving file paths…'
+              : (Number(p.resolve_total) || 0) ? 'Matching each title to its file…'
               : 'Measuring the library and fetching the movie list…';
     }
-    else if (phase === 'checking') current = 'Checking APIs, paths, disk and thresholds';
+    else if (phase === 'checking') current = 'Checking connections, paths, disk and thresholds';
   }
   document.getElementById('rp-current').textContent = current;
 
@@ -696,10 +696,10 @@ function _renderTargetRows(d) {
       : (d.redline_only ? 'Redline only' : 'Off');
   }
   const redlineVal = document.querySelector('#target-row-redline .value');
-  if (redlineVal) redlineVal.innerHTML = Number(d.redline_gb) > 0 ? gb(d.redline_gb) : 'Disabled';
+  if (redlineVal) redlineVal.innerHTML = Number(d.redline_gb) > 0 ? gb(d.redline_gb) : 'Off';
   const capVal = document.querySelector('#target-row-cap .dashboard-mini-value');
   if (capVal) capVal.innerHTML = Number(d.library_cap_gb) > 0
-    ? `<span>${prCommaNum(d.library_cap_gb, 0)}</span> <span class="unit">GB</span>` : 'Disabled';
+    ? `<span>${prCommaNum(d.library_cap_gb, 0)}</span> <span class="unit">GB</span>` : 'Off';
 }
 
 function _isMobileLogView() {
@@ -867,8 +867,8 @@ function _updateDeletedCounter(count, reclaimedBytes = 0, reclaimedLabel = '', m
     if (countEl) {
       // Same no-wrap chunks as the server-rendered markup (see dashboard.html).
       countEl.innerHTML =
-        `<span class="dh-stat-chunk"><span id="pruned-marked-hot" class="${imm > 0 ? 'marked-hot' : ''}">${prCommaNum(imm, 0)} <span class="unit">ITEMS</span></span></span> ` +
-        `<span class="dh-stat-chunk"><span class="unit" aria-hidden="true">·</span> ${prCommaNum(m, 0)} <span class="unit">ITEMS</span></span>`;
+        `<span class="dh-stat-chunk"><span id="pruned-marked-hot" class="${imm > 0 ? 'marked-hot' : ''}">${prCommaNum(imm, 0)} <span class="unit">MARKED</span></span></span> ` +
+        `<span class="dh-stat-chunk"><span class="unit" aria-hidden="true">·</span> ${prCommaNum(m, 0)} <span class="unit">ELIGIBLE</span></span>`;
     }
     document.getElementById('marked-label-word')?.classList.toggle('marked-hot', imm > 0);
   }
@@ -920,7 +920,11 @@ function _dhRenderRow(r) {
   const path = prHtmlEsc(r.path || '');
   if (r._kind === 'marked') {
     const bits = [];
-    if (r.score !== null && r.score !== undefined && r.score !== '') bits.push('score ' + prHtmlEsc(r.score));
+    // One decimal, as the deletion history and Filtering & Scoring show scores.
+    if (r.score !== null && r.score !== undefined && r.score !== '') {
+      const n = Number(r.score);
+      bits.push('score ' + (Number.isFinite(n) ? n.toFixed(1) : prHtmlEsc(r.score)));
+    }
     // A dated mark's "when" text would repeat the Deletes column — show the
     // marked-at timestamp instead. Undated rows (eligible, redline-only)
     // keep their explanatory "when" text.
@@ -968,7 +972,7 @@ function _dhRenderPage() {
       empty.hidden = false;
       empty.textContent = _dhView === 'marked'
         ? 'Nothing is marked or eligible yet — run Simulate to build the deletion plan.'
-        : 'Nothing has been pruned yet.';
+        : 'Nothing has been deleted yet.';
     }
     if (pager) pager.hidden = true;
     return;
@@ -1070,7 +1074,7 @@ async function loadDeletedHistory() {
         ? (imminentCount
             ? (_redlineOnly
                 ? `Redline is breached — ${imminentCount} marked to delete on the next Cleanup, ${marked.length - imminentCount} eligible behind them in the order they would go.`
-                : `${imminentCount} marked for deletion · ${marked.length - imminentCount} more eligible, in the order they would go if more space is needed.`)
+                : `${imminentCount} of ${marked.length} eligible ${marked.length === 1 ? 'item is' : 'items are'} marked for deletion; the rest follow in this order if more space is needed.`)
             : (_redlineOnly
                 // Redline-only above the floor marks nothing, so every row's
                 // Deletes cell reads "—". Without this the one window that
@@ -1078,7 +1082,7 @@ async function loadDeletedHistory() {
                 // all, in the mode whose whole premise is that it is the trigger.
                 ? `${marked.length} ${marked.length === 1 ? 'item is' : 'items are'} eligible, in the order they would go when free space hits the Redline floor.`
                 : `${marked.length} ${marked.length === 1 ? 'item is' : 'items are'} eligible, in the order they would go if space is needed — none marked yet.`))
-        : `${count} ${count === 1 ? 'file has' : 'files have'} been pruned · ${reclaimed} reclaimed.`;
+        : `${count} ${count === 1 ? 'file' : 'files'} deleted · ${reclaimed} freed.`;
     }
     // One list per view (both already come newest-first / in plan order from
     // the server): the left button shows the queue, the stats button the history.
@@ -1100,11 +1104,11 @@ async function loadDeletedHistory() {
     }
   } catch (err) {
     _dhLoading = false;
-    if (summary) summary.textContent = 'Could not load deleted.log.';
+    if (summary) summary.textContent = 'Could not load the deletion history.';
     _dhRows = [];
     _dhDeletedCount = 0;
     if (wrap) wrap.hidden = true;
-    if (empty) { empty.hidden = false; empty.textContent = `Could not load deleted.log: ${err}`; }
+    if (empty) { empty.hidden = false; empty.textContent = `Could not load the deletion history: ${err}`; }
     if (pager) pager.hidden = true;
     // Keep the actions ghosted — there is nothing valid to download or erase.
     if (dlBtn) dlBtn.disabled = true;
@@ -1154,8 +1158,8 @@ async function clearDeletedHistory() {
     _dhRenderPage();
     _updateDeletedCounter(0, 0, '0.0 GB');
     const summary = document.getElementById('deleted-history-summary');
-    if (summary) summary.textContent = '0 files have been pruned · 0 GB reclaimed.';
-    showToast(d.message || 'Deleted history erased.', 'success');
+    if (summary) summary.textContent = '0 files deleted · 0.0 GB freed.';
+    showToast(d.message || 'Deletion history erased.', 'success');
   } catch (err) {
     showToast(String(err.message || err), 'danger');
   } finally {
@@ -1388,7 +1392,7 @@ function _updateBreachNote() {
       // don't tell the user a cleanup can't run while the yellow button is live.
       text = _debugMode
         ? 'Over space limits — a target is past the safety percentage (a real Cleanup is blocked), but Debug Cleanup ignores it and previews what would be removed.'
-        : 'Over space limits — but a target is past the safety percentage, so Automatic Cleanup can\'t run.';
+        : 'Over space limits — but a threshold is past the safety percentage, so no Cleanup can run, manual or automatic. See Space Thresholds.';
     } else if (_simulateRequired) {
       // No current plan (e.g. the cache was wiped on a code update, or settings
       // changed since the last Simulate). The deficit is known from live disk, but
@@ -1425,7 +1429,7 @@ function _updateBreachNote() {
       // Nothing marked, but things ARE eligible — Simulate writes the plan, and
       // deletion (automatic OR the manual button) stays ghosted over limits
       // until it exists.
-      text = `Over space limits — run Simulate to mark the ~${prGbAmount(d.max)} GB deletion plan.`;
+      text = `Over space limits by ~${prGbAmount(d.max)} GB — run Simulate to build the deletion plan.`;
     } else if (!ev.on) {
       // The event batch is ripe now: the next deleting run removes exactly it.
       text = willRunItself
@@ -1568,7 +1572,7 @@ async function runCleanup(mode, btnId) {
   const deficit = _currentDeficits()?.max ?? null;
   const sized = deficit != null && deficit > 0;
   const answer = await prConfirm({
-    title: 'Run a cleanup now?',
+    title: 'Run Cleanup now?',
     body: [
       { text: sized
           ? `This deletes media files now — about ${prGbAmount(deficit)} GB, `
@@ -1580,11 +1584,11 @@ async function runCleanup(mode, btnId) {
       // A manual Cleanup is the one path that ignores the delay, so warn that
       // marks the user still thinks are protected by their clock can go too.
       (_deleteDelayDays || 0) > 0
-        ? 'The delay and daily schedule pace automatic runs only — a movie still '
-          + 'inside its delay can go in this one.'
+        ? 'The deletion delay and daily schedule apply to automatic runs only — a '
+          + 'movie or season still inside its delay can be deleted by this one.'
         : 'It deletes as soon as you confirm.',
     ],
-    confirmText: sized ? `Delete ~${prGbAmount(deficit)} GB` : 'Run cleanup',
+    confirmText: sized ? `Delete ~${prGbAmount(deficit)} GB` : 'Run Cleanup',
   });
   if (answer !== 'confirm') return;
   // The dialog can sit open for as long as the user takes to read it, and the
@@ -1917,7 +1921,7 @@ function _updateCountdown() {
     }
     return;
   }
-  el.title = willPrune ? 'Over space limits — this run will prune.' : '';
+  el.title = willPrune ? 'Over space limits — this run will delete.' : '';
   if (!_nextRunTime) {
     // Four different things null next_run_time: a run, a background Summary, a
     // down connection, unusable thresholds. Only the last two are a real state
@@ -1951,7 +1955,11 @@ _updateCountdown();
 
 // Status polling: keep UI state in sync even if a run started from the scheduler
 // or the browser suspended the tab and resumed later.
-_statusPollTimer = setInterval(() => syncStatus({refreshLog: _active}), 3000);
+// A hidden tab skips its polls; the visibilitychange handler below catches it
+// up the moment it is shown.
+_statusPollTimer = setInterval(() => {
+  if (!document.hidden) syncStatus({refreshLog: _active});
+}, 3000);
 syncStatus({refreshLog: _active});
 
 if (!_active) {

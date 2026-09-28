@@ -66,7 +66,7 @@ let ok = true;
 const check = (name, cond) => { console.log((cond ? 'PASS ' : 'FAIL ') + name); ok = ok && cond; };
 
 check('Headroom changed into a breach warns in Paused mode (next Cleanup will prune)',
-  /Headroom target/.test(R.headPaused) && /next Cleanup will prune/.test(R.headPaused));
+  /Headroom target/.test(R.headPaused) && /next Cleanup will delete/.test(R.headPaused));
 check('Redline changed into a breach warns in Paused mode (next Cleanup will free)',
   /Redline floor/.test(R.redPaused) && /next Cleanup will free/.test(R.redPaused));
 check('an unchanged breached threshold on an unrelated save does NOT nag',

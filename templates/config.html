@@ -1,5 +1,8 @@
 {% extends "base.html" %}
+{# The script this page loads below; the base leaves it out of its prefetches. #}
+{% set page_script = 'js/config.js' %}
 {% block title %}Configuration — MediaReducer{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ asset_url('css/config.css') }}">{% endblock %}
 
 {# A masked field with its Show toggle: every API key, token and webhook on this
    page — the server connections and each notification destination — is one of
@@ -26,464 +29,6 @@
   </div>
 </div>
 
-<style>
-  /* ── Shared Configuration UI primitives ────────────────────────────────── */
-  .config-card {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-  }
-  .config-card-danger {
-    background: var(--bg-danger);
-    border-color: var(--border-danger);
-  }
-  .config-card-danger .input-label,
-  .config-card-danger .form-text {
-    color: var(--text-danger);
-  }
-  .config-card-danger .form-control,
-  .config-card-danger .input-group-text {
-    border-color: var(--text-danger);
-  }
-  .config-card-danger .form-control:focus {
-    border-color: var(--text-danger);
-    box-shadow: 0 0 0 2px var(--bg-danger);
-  }
-  /* ── One rhythm for every group on the page ──────────────────────────────
-     A group is a rule, a heading, then its fields, and all three gaps are set
-     here rather than per-instance. They had been left to Bootstrap utilities
-     and drifted: three different divider weights (my-2, my-3, my-4) and two
-     different heading gaps, one of which depended on something invisible in
-     the markup — whether the heading shared a grid column with its first
-     field. That is why Logging sat twice as far from its fields as IMDb
-     Ratings Data did. Setting it centrally means a group added later cannot
-     land at its own spacing. */
-  .config-divider {
-    /* The subtler --border weight, matching the field-group dividers, so every
-       divider on the page reads as one style. */
-    border-color: var(--border);
-    opacity: 1;
-    margin: 1.5rem 0;
-  }
-  h6.config-group-title {
-    margin: 0 0 .5rem;
-  }
-  /* The two corrections a grid needs, both for the same reason: a row's gutter
-     is padding on the COLUMN, so it stacks with whatever margin is already
-     there instead of collapsing into it. Above a rule that opens a column, and
-     below a column holding nothing but the heading, that doubles the gap —
-     so each takes the gutter back out. Non-grid groups (Time, the cleanup
-     boxes) meet no gutter and are left alone. */
-  .col-12 > .config-divider:first-child {
-    margin-top: calc(1.5rem - var(--bs-gutter-y, 1rem));
-  }
-  .config-group-head {
-    /* The whole gutter, not the difference: it is padding on the NEXT column,
-       so it stacks under this column's own margin rather than replacing it.
-       Removing it leaves the heading's .5rem as the only gap, which is what
-       every heading elsewhere on the page has. */
-    margin-bottom: calc(-1 * var(--bs-gutter-y, 1rem));
-  }
-  .config-section-title {
-    font-weight: 600;
-  }
-  .config-small-muted {
-    font-size: var(--fs-md);
-    color: var(--text-muted);
-  }
-  .config-code-muted {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-  }
-  .config-details-summary {
-    cursor: pointer;
-    font-size: var(--fs-lg);
-    color: var(--text-muted);
-    margin-bottom: 16px;
-  }
-  /* No-server-selected highlight: connection-highlight only styles
-     form-control/input-label, so the checkboxes need their own rules. */
-  .server-software-row.connection-highlight .form-check-label,
-  .server-software-row.connection-highlight .server-req {
-    color: var(--text-danger) !important;
-  }
-  .server-software-row.connection-highlight .form-check-input {
-    border-color: var(--text-danger);
-    box-shadow: 0 0 0 2px var(--bg-danger);
-  }
-  /* Deselected-server connection fields dim but stay EDITABLE — the same
-     treatment the Notifications fieldset gets. The dim says "this isn't in use
-     yet", not "you can't touch it": you can paste a key in before enabling the
-     server, and it saves either way. Only a run makes these fields inert, and
-     that goes through the run lock (which disables them outright). No grayscale
-     and no pointer-events:none here — both read as permanently dead. */
-  .conn-field-ghost {
-    opacity: .5;
-    transition: opacity .15s ease;
-  }
-  /* The URL / API-key override fields sit two-up on desktop (each service's URL
-     + key side by side, no divider needed). When they stack on narrow screens,
-     add a hairline BEFORE each new service so its two fields stay grouped —
-     never a line between a URL and its own key. Every service is a URL+key pair,
-     so a new service always begins on an odd-numbered field. */
-  @media (max-width: 767.98px) {
-    #connections-section .row.g-3 > [class*="col-"]:nth-child(odd):not(:first-child) {
-      border-top: 1px solid var(--border);
-      /* Equal space above and below the line so the divider sits centered
-         between the two services (1rem replaces Bootstrap's row gutter above,
-         matching the padding below). */
-      margin-top: 1rem;
-      padding-top: 1rem;
-    }
-  }
-  /* Slide-open for the URLs and API Keys <details> (and the Custom Apprise URLs
-     one). JS drives the height; overflow hidden clips content mid-animation. */
-  #manual-overrides .details-anim,
-  #notify-custom-details .details-anim {
-    overflow: hidden;
-    transition: height .32s ease;
-  }
-  .config-status-list {
-    font-size: var(--fs-md);
-    color: var(--text-secondary);
-  }
-  .config-form-width-xs { max-width: 120px; }
-  .config-form-width-xl { max-width: 420px; }
-
-  .section-reset-row {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
-  }
-  .section-reset-row .section-desc {
-    flex: 1 1 auto;
-    max-width: calc(100% - 180px);
-  }
-  .section-reset-row .section-reset-btn {
-    flex: 0 0 auto;
-    margin-left: auto;
-  }
-  @media (max-width: 575.98px) {
-    .section-reset-row {
-      flex-direction: column;
-      align-items: stretch;
-    }
-    .section-reset-row .section-desc {
-      max-width: 100%;
-    }
-    .section-reset-row .section-reset-btn {
-      align-self: flex-start;
-      margin-left: 0;
-    }
-  }
-
-  .run-mode-card {
-    padding: 1rem;
-    margin-left: 0;
-    margin-bottom: 1rem;
-    transition: opacity .15s, filter .15s, border-color .15s;
-  }
-  .run-mode-card:not(.run-mode-disabled),
-  .run-mode-card:not(.run-mode-disabled) label,
-  .run-mode-card:not(.run-mode-disabled) input { cursor: pointer; }
-  /* Disabled mode card: dim the title so the card reads as unavailable while
-     the reason underneath stays legible. Opacity is per-part (a parent's can't
-     be undone on a child), and the label is lifted back from Bootstrap's
-     disabled-radio .5. A safety-percentage block shows its reason in danger red. */
-  .run-mode-card.run-mode-disabled label.form-check-label { opacity: 1; }
-  .run-mode-card.run-mode-disabled .run-mode-title { opacity: .55; filter: grayscale(.35); }
-  /* The radio is the ONE control that can't be ghosted with opacity: it is laid
-     ON the card's left border, so a translucent one had that line drawn straight
-     across the circle. Fill it opaquely with the outline's own tone instead —
-     --border is itself translucent, so it is layered over an opaque surface, the
-     same blend the card edge performs, which keeps the tone theme-driven rather
-     than hardcoded. Every other disabled control on the page keeps Bootstrap's
-     ordinary fade; none of them overlap anything. */
-  .run-mode-card.run-mode-disabled > .form-check-input {
-    opacity: 1;
-    background-color: var(--popup-bg);
-    background-image: linear-gradient(var(--border), var(--border));
-    border-color: var(--border);
-    box-shadow: none;
-  }
-  .run-mode-card.run-mode-disabled--alert .run-mode-desc { color: var(--text-danger); }
-  .run-mode-card.run-mode-disabled,
-  .run-mode-card.run-mode-disabled label,
-  .run-mode-card.run-mode-disabled input { cursor: not-allowed; }
-  .run-mode-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .run-mode-name {
-    font-weight: 600;
-  }
-  .run-mode-desc {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    display: block;
-    margin-top: 2px;
-  }
-  /* A setting that belongs to ONE mode, sitting at the bottom of its card. The
-     rule above it separates it from the mode's own description, so it does not
-     read as more of that sentence. Indented to the same column as the mode name
-     so it lines up under the text rather than under the radio. */
-  .run-mode-option {
-    margin: 10px 0 0;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-  }
-  .run-mode-option .form-check-label { font-size: var(--fs-md); }
-  .run-mode-option .form-text { margin-top: 3px; }
-  /* Ghosted with the rest of the card when the mode itself cannot be picked:
-     a setting for a mode you cannot select has nothing to act on. */
-  .run-mode-card.run-mode-disabled .run-mode-option { opacity: .55; }
-  /* Automatic Cleanup's settings summary: three label-over-value specs rather
-     than three pills. A pill reads as a status you might act on; these are just
-     the numbers the mode will use, so they sit quietly under the mode name and
-     wrap to two columns on a phone instead of crowding the title row. */
-  .mode-specs {
-    flex-basis: 100%;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, auto));
-    justify-content: start;
-    gap: 4px 22px;
-    /* The description below is a separate thought, and the 2px that sits under
-       a bare mode name leaves it touching the last value — especially on a
-       phone, where the specs wrap and Library cap lands directly above it. */
-    margin: 6px 0 10px;
-  }
-  .mode-spec-k {
-    display: block;
-    font-size: var(--fs-3xs); font-weight: 700; letter-spacing: .06em;
-    text-transform: uppercase; color: var(--text-muted);
-  }
-  .mode-spec-v {
-    display: block;
-    font-size: var(--fs-md); font-weight: 600; color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-  .mode-spec-v.is-off { color: var(--text-muted); font-weight: 500; }
-  .mode-spec-v.is-invalid { color: var(--text-warning); }
-  @media (max-width: 560px) {
-    .run-mode-title { row-gap: 6px; column-gap: 6px; }
-    .run-mode-title .run-mode-name { flex-basis: 100%; }
-    .mode-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
-  }
-
-  /* ── Where you stand ──────────────────────────────────────────────────────
-     The same disk bar the Dashboard's Storage card draws — one track, with the
-     library's share of used space and a marker per armed threshold — rendered
-     by the shared prRenderDiskBar in base.html so the two tabs cannot drift
-     apart. Underneath, each threshold states its trigger in words: the point is
-     to remove the arithmetic, computing the figure from the setting rather than
-     leaving the reader to work it out against free space.
-
-     The figures and the bar are drawn whether or not anything is armed, because
-     "how much space is there, and how much of it is the library" is the
-     question this section is answered against — and on a fresh install it is
-     the number that tells you monitored paths took effect. */
-  .ts-panel {
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface-tint);
-    padding: 12px 14px;
-    display: grid;
-    gap: 12px;
-  }
-  .ts-storage { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .ts-free { font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .ts-free .unit { font-size: var(--fs-xl); font-weight: 400; color: var(--text-muted); }
-  .ts-disk-sub { font-size: var(--fs-xs); color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
-  .ts-lib { text-align: right; }
-  .ts-lib-value { font-size: var(--fs-2xl); font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .ts-lib-value .unit { font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
-  .ts-lib-label { display: block; font-size: var(--fs-3xs); font-weight: 600; letter-spacing: .06em;
-                  text-transform: uppercase; color: var(--text-muted); margin-top: 1px; }
-  /* The bar sits between the figures and the per-threshold lines, so it needs
-     no top margin of its own here. */
-  .ts-panel .disk-bar { margin-top: 0; }
-  .ts-rows { display: grid; gap: 12px; }
-  .ts-row { display: grid; gap: 5px; }
-  .ts-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-  .ts-name { font-size: var(--fs-sm); font-weight: 600; color: var(--text-primary); }
-  .ts-state {
-    font-size: var(--fs-xs); font-weight: 700; letter-spacing: .02em;
-    color: var(--text-muted); white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
-  .ts-row.is-near  .ts-state { color: var(--text-warning); }
-  .ts-row.is-over  .ts-state { color: var(--text-danger); }
-  .ts-note { font-size: var(--fs-xs); line-height: 1.5; color: var(--text-muted); }
-  .ts-note b { color: var(--text-secondary); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .ts-row.is-off .ts-name, .ts-row.is-off .ts-note { color: var(--text-muted); }
-  .ts-row.is-off .ts-name { font-weight: 500; }
-
-  .gb-input-group {
-    max-width: 360px;
-  }
-  /* .field-invalid / .field-error styling is shared with Filtering &
-     Scoring — defined in base.html. */
-  .server-software-row { display: flex; gap: 2rem; flex-wrap: wrap; align-items: center; }
-  .server-software-row .form-check-label { font-weight: 600; }
-  .server-req { color: var(--text-muted); font-weight: 400; font-size: .85em; }
-  .collections-list { display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto;
-    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--surface-2); }
-  .collection-item { display: flex; align-items: center; gap: 9px; padding: 4px 2px; margin: 0; cursor: pointer; font-size: var(--fs-xl); }
-  .collection-item .form-check-input { margin: 0; flex-shrink: 0; }
-  .collection-name { color: var(--text-primary); }
-  .collection-missing { color: var(--text-muted); font-size: var(--fs-sm); font-style: italic; margin-left: auto; white-space: nowrap; }
-  .collections-empty { margin: 0; }
-  .library-browser-row {
-    background: var(--surface-2);
-    color: var(--text-primary);
-    border-color: var(--border);
-  }
-  .library-browser-row:hover, .library-browser-row:focus {
-    background: var(--surface-3);
-    color: var(--text-primary);
-  }
-  .monitor-remove-btn:hover, .monitor-remove-btn:focus {
-    background: var(--bg-danger);
-    border-color: var(--text-danger);
-    color: var(--text-danger);
-  }
-  .config-status-box {
-    padding: 14px;
-  }
-  .config-status-box.status-ok { border-color: var(--border-accent); }
-  .config-status-box.status-warning { border-color: var(--border); background: var(--surface-2); }
-  .config-status-box.status-error { border-color: var(--text-danger); background: var(--bg-danger); }
-  .connection-highlight .form-control,
-  .connection-highlight .input-label {
-    border-color: var(--text-danger) !important;
-    color: var(--text-danger) !important;
-  }
-  .connection-highlight .form-control {
-    box-shadow: 0 0 0 2px var(--bg-danger);
-  }
-  .secret-toggle {
-    min-width: 4.25rem;
-    font-size: var(--fs-sm);
-  }
-  /* Secret fields render as type=text (so password managers don't offer to save
-     them) but masked via -webkit-text-security; .secret-shown reveals. Browsers
-     without it (Firefox) fall back to a real type=password field in JS. */
-  .form-control.secret-field {
-    -webkit-text-security: disc;
-  }
-  .form-control.secret-field.secret-shown {
-    -webkit-text-security: none;
-  }
-  .connection-highlight .secret-toggle {
-    border-color: var(--text-danger) !important;
-    color: var(--text-danger) !important;
-  }
-  .connection-disabled {
-    opacity: .55;
-  }
-  /* Locked-section ghosting, shared by Connections, Media Library Paths and
-     Space Thresholds: dim the section's content but keep the inline lock
-     notice ("A run is active…") fully readable. */
-  /* Two selectors, one rule, and no assumption about how deep anything sits.
-     A .run-lock-passthrough wrapper (marked by prSetRunLock — it is an ancestor
-     of an exempt box) is skipped so its opacity can't gray out that box, and
-     its own other children are dimmed by the second selector instead. Recurses
-     naturally: exempt boxes can be nested anywhere in the layout. */
-  .section-run-ghost .accordion-body > :not(.config-inline-warning):not([data-run-lock-exempt]):not(.run-lock-passthrough),
-  .section-run-ghost .run-lock-passthrough > :not(.config-inline-warning):not([data-run-lock-exempt]):not(.run-lock-passthrough) {
-    opacity: .55;
-  }
-  /* Invalid config.json lockout: the whole accordion goes inert — the only
-     ways out are the banner's two reset actions. */
-  .config-invalid-lock { pointer-events: none; }
-  .config-invalid-lock .accordion-item { opacity: .5; }
-  #invalid-config-banner ul { padding-left: 1.1rem; margin: .45rem 0 .15rem; }
-  #invalid-config-banner code { color: inherit; font-weight: 600; }
-  /* The not-allowed cursor on ghosted controls comes from base.html. */
-  .connection-disabled .form-control,
-  .connection-disabled .secret-toggle {
-    cursor: not-allowed;
-  }
-  .connection-disabled .secret-toggle {
-    opacity: .72;
-  }
-  .mount-card {
-    display: flex;
-    align-items: center;
-    padding: 1rem;
-    margin-bottom: .5rem;
-  }
-  .mount-card-problem {
-    border-color: var(--text-danger) !important;
-    background: var(--bg-danger) !important;
-  }
-  .mount-card-optional {
-    font-size: var(--fs-xs);
-    color: var(--text-muted);
-    margin-left: 6px;
-  }
-  .optional-cleanup-box {
-    outline: 1px solid transparent;
-    border-radius: 10px;
-    padding: 0;
-    margin: 0;
-  }
-  .optional-cleanup-box + .optional-cleanup-box {
-    margin-top: 1.5rem;
-  }
-  /* .config-inline-warning is shared with Filtering & Scoring — base.html. */
-  .space-thresholds-locked .gb-input-group {
-    opacity: .72;
-  }
-  .space-thresholds-locked .input-label,
-  .space-thresholds-locked .form-text {
-    color: var(--text-muted);
-  }
-  .redline-only-note {
-    color: var(--text-accent);
-    font-weight: 500;
-  }
-  /* Soft amber advisory (not an error) — shown when a deletion delay is set with
-     no Redline floor to catch a fast-filling library during the delay window. */
-  .delay-redline-advisory {
-    color: var(--text-warning);
-    font-weight: 500;
-  }
-  .delay-redline-advisory[hidden] { display: none; }
-  /* The safety-percentage limit for a threshold: a plain statement of where the
-     line sits, not a warning — it reads the same whether or not you are near it. */
-  .safety-limit-note {
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-  .safety-limit-note[hidden] { display: none; }
-  #library-browser-current {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    font-family: monospace;
-  }
-  #library-browser-list {
-    --bs-list-group-bg: var(--surface-2);
-    --bs-list-group-border-color: var(--border);
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  /* The section-issue marker is in base.html, shared with Filtering & Scoring. */
-  /* Scroll targets must clear both sticky layers: the site header and the
-     page-title bar (heights kept in sync by the shared bar JS). */
-  #automatic-run-mode,
-  #connections-section,
-  #space-thresholds-section {
-    scroll-margin-top: calc(var(--pr-header-h, 58px) + var(--pr-titlebar-h, 54px) + 10px);
-  }
-</style>
 
 {% set connection_errors = connection_health.errors or [] %}
 {% set connection_warnings = connection_health.warnings or [] %}
@@ -543,7 +88,7 @@
      why it does not come back on the next load. #}
   {% if config.get('_RUN_MODE_AUTOPAUSE_REASON') and config.RUN_MODE == 'paused' %}
   <div class="config-inline-note is-dismissible mb-3" id="autopause-note">
-    <span>Automatic Cleanup was switched to Monitor Only automatically: {{ config.get('_RUN_MODE_AUTOPAUSE_REASON') }}</span>
+    <span>Automatic Cleanup was switched to Monitor Only: {{ config.get('_RUN_MODE_AUTOPAUSE_REASON') }}</span>
     <button type="button" class="config-inline-dismiss" data-dismiss-note="autopause"
             id="autopause-note-dismiss" aria-label="Dismiss this note" title="Dismiss">&times;</button>
   </div>
@@ -670,7 +215,7 @@
               <option value="12h" {{ 'selected' if (config.DISPLAY_TIME_FORMAT or '12h') == '12h' else '' }}>12-hour</option>
               <option value="24h" {{ 'selected' if config.DISPLAY_TIME_FORMAT == '24h' else '' }}>24-hour</option>
             </select>
-            <div class="form-text">AM/PM or 24-hour time.</div>
+            <div class="form-text">How every time in the app is written.</div>
           </div>
         </div>
       </div>
@@ -687,7 +232,7 @@
     <div id="s-conn" class="accordion-collapse collapse {{ 'show' if connection_section_open else '' }}">
       <div class="accordion-body">
         <p class="section-desc">
-          Connect the media services MediaReducer should use. Auto Detect fills API keys from your appdata, and each URL defaults to your server's address — only change one that isn't standard.
+          Connect the media services MediaReducer should use.
         </p>
         <div id="connections-lock-note" class="config-inline-warning mb-3" hidden></div>
 
@@ -761,12 +306,12 @@
             URLs and API Keys
           </summary>
           <div class="details-anim">
-          <div class="config-inline-warning mb-3">
+          <div class="config-inline-note mb-3">
             Each URL defaults to your server's address on the service's standard port — only fill one in if yours differs.
           </div>
           <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
             <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-auto-detect-connections" onclick="autoDetectConnections()">Auto Detect API Keys</button>
-            <span id="auto-detect-status" class="form-text">Fills API keys from your appdata. Leave a URL blank to use its default.</span>
+            <span id="auto-detect-status" class="form-text">Reads API keys from the appdata mounts above.</span>
           </div>
           {% set field_labels = {
             'TAUTULLI_URL': 'Tautulli URL', 'TAUTULLI_API_KEY': 'Tautulli API key',
@@ -958,10 +503,10 @@
         <div class="section-reset-row">
           <p class="section-desc mb-0">The disk and library limits that trigger cleanup — when one is crossed,
           the lowest-scoring movies and seasons are removed until you're back under it.</p>
-          <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-space" onclick="resetSectionToDefault('space')" {{ 'disabled' if space_thresholds_locked or not thresholds_have_library else '' }}>Reset to Default</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-space" onclick="resetSectionToDefault('space')" {{ 'disabled' if space_thresholds_locked or not thresholds_have_library else '' }}>Reset to defaults</button>
         </div>
 
-        <div id="space-threshold-lock-note" class="config-inline-warning mb-3" {{ '' if config.RUN_MODE == 'headroom' else 'hidden' }}>Automatic Cleanup is on — a threshold change rebuilds the deletion plan in place and keeps running; it only pauses to Monitor Only if the change leaves the library over a limit.</div>
+        <div id="space-threshold-lock-note" class="config-inline-warning mb-3" {{ '' if config.RUN_MODE == 'headroom' else 'hidden' }}>Automatic Cleanup is on. A threshold change rebuilds the deletion plan; if that leaves the library over a limit, Automatic Cleanup switches to Monitor Only until you turn it back on.</div>
         <div id="space-threshold-api-note" class="config-inline-warning mb-3" {{ 'hidden' if selected_media_apis_ready else '' }}>{{ 'Fix the /config read/write problem first.' if not filesystem_ready else ('Connect or uncheck the selected media server first.' if (use_plex or use_jellyfin) else 'Select Plex or Jellyfin under Server software first.') }}</div>
         <div id="space-threshold-paths-note" class="config-inline-warning mb-3" {{ 'hidden' if thresholds_have_library or not selected_media_apis_ready else '' }}>Save a monitored directory first.</div>
 
@@ -1033,15 +578,15 @@
                      {{ 'disabled' if space_thresholds_locked or not thresholds_have_library or not headroom_enabled else '' }}>
               <span class="input-group-text">GB</span>
             </div>
-            <div id="headroom-error" class="field-error">Enter a Headroom target of at least 1 GB, or untick it.</div>
-            <div class="form-text">Free space to keep available — the daily cleanup runs when free space falls below it. Untick to turn this trigger off.</div>
+            <div id="headroom-error" class="field-error">Enter a Headroom target of at least 1 GB, or uncheck it.</div>
+            <div class="form-text">Free space to keep available — the daily cleanup runs when free space falls below it. Uncheck to turn this trigger off.</div>
             {# Filled in by _applySafetyLimitNotes from the server's own numbers,
                so a safety refusal shows where the line sits instead of leaving
                the value to be moved until the app objects. #}
             <div id="headroom-safety-note" class="form-text safety-limit-note" hidden></div>
           </div>
           <div class="col-md-6" id="redline-field">
-            <label class="input-label" for="REDLINE_GB">Redline emergency floor</label>
+            <label class="input-label" for="REDLINE_GB">Redline floor</label>
             <div class="input-group gb-input-group">
               <div class="input-group-text">
                 <input class="form-check-input" type="checkbox" id="redline-enabled"
@@ -1083,7 +628,7 @@
 
         <div>
           <h6 class="config-group-title">Deletion delay</h6>
-          <p class="section-desc mb-3">A grace period before a marked movie or season is deleted — time to protect it or change the rules first.</p>
+          <p class="section-desc mb-3">Days between marking a movie or season and deleting it — time to protect it or change the rules first.</p>
           <div class="input-group gb-input-group mb-2" id="delete-delay-field">
             <input type="number" class="form-control" id="DELETE_DELAY_DAYS" name="DELETE_DELAY_DAYS"
                    value="{{ config.DELETE_DELAY_DAYS or 1 }}" min="1" max="365" step="1" inputmode="numeric"
@@ -1093,7 +638,7 @@
             <span class="input-group-text">days</span>
           </div>
           <div id="delete-delay-error" class="field-error">Must be a whole number of days, 1–365.</div>
-          <div class="form-text">How long a mark waits before it can be deleted. Redline and manual Cleanups skip it. Existing marks keep their original delay.</div>
+          <div class="form-text">Redline and manual Cleanups skip it. Existing marks keep the delay they were marked under.</div>
           <div id="delay-redline-only-note" class="form-text redline-only-note" {{ '' if (has_monitor_dirs and not headroom_enabled and not library_cap_enabled) else 'hidden' }}>Not used in redline-only mode — Redline deletes immediately at the floor.</div>
           <div id="delay-redline-advisory" class="form-text delay-redline-advisory" hidden></div>
           <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="btn-reset-delays" onclick="resetMarkDelays()">Reset marked delays</button>
@@ -1103,36 +648,6 @@
     </div>
   </div>
   <!-- ── Notifications ── -->
-  <style>
-    /* The master switch being off dims the SETTINGS, because they describe
-       alerts that aren't going out. It must not dim the two action buttons:
-       both still do their job with notifications disabled — testing
-       destinations is how you verify wiring BEFORE switching on, and the
-       preview is how you read a message the switch is the reason you never
-       received. Their own disabled state is the only thing that should gray
-       them.
-       Applied to the children rather than the fieldset itself: opacity on an
-       ancestor composites the whole subtree, so a child cannot opt back out of
-       it — .notify-actions would have stayed at .5 whatever it asked for. */
-    .notify-fieldset.notify-off > *:not(.notify-actions) { opacity: .5; }
-    .notify-subhead { font-weight: 700; margin: 1.25rem 0 .25rem; }
-    .notify-service-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: .75rem 1rem; }
-    /* Each service (a single field, or a URL+token pair) is one group. Services
-       are spaced apart; a service's own two fields always stay together. */
-    .notify-service + .notify-service { margin-top: 1rem; }
-    /* On narrow screens the pairs stack. Separate SERVICES with a hairline
-       (single-field services included, for consistency) — never a line between
-       a service's own two fields. */
-    @media (max-width: 575.98px) {
-      .notify-service-grid { grid-template-columns: minmax(0,1fr); }
-      .notify-service + .notify-service { padding-top: 1rem; border-top: 1px solid var(--border); }
-    }
-    #notify-test-result { min-height: 1.4em; margin-top: .35rem; }
-    #notify-test-result.ok { color: var(--text-success, #7e9b84); }
-    #notify-test-result.err { color: var(--text-danger, #b3696e); }
-    /* Inside the rate-limit window: nothing is wrong, so don't say it in red. */
-    #notify-test-result.wait { color: var(--text-secondary); }
-  </style>
   <div class="accordion-item" id="notifications-section">
     <h2 class="accordion-header">
       <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#s-notify">
@@ -1143,7 +658,7 @@
       <div class="accordion-body">
         <div class="section-reset-row mb-3">
           <p class="section-desc mb-0">Send alerts to Discord, Telegram, and more when runs finish or delete something.</p>
-          <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-notifications" onclick="resetSectionToDefault('notifications')">Reset to Default</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-notifications" onclick="resetSectionToDefault('notifications')">Reset to defaults</button>
         </div>
 
         <div class="form-check form-switch mb-2">
@@ -1158,7 +673,7 @@
           <div class="form-check mb-2">
             <input class="form-check-input" type="checkbox" id="NOTIFY_IN_MONITOR_ONLY" name="NOTIFY_IN_MONITOR_ONLY" {{ 'checked' if config.NOTIFY_IN_MONITOR_ONLY else '' }}>
             <label class="form-check-label" for="NOTIFY_IN_MONITOR_ONLY">Alert in Monitor Only</label>
-            <div class="form-text mt-0">Monitor Only never deletes. Leave this off and nothing below is sent until Automatic Cleanup is on.</div>
+            <div class="form-text mt-0">Also send the alerts below in Monitor Only. Off = nothing is sent until Automatic Cleanup is on.</div>
           </div>
           <div class="form-check mb-2">
             <input class="form-check-input" type="checkbox" id="NOTIFY_ON_RUN_SUMMARY" name="NOTIFY_ON_RUN_SUMMARY" {{ 'checked' if config.NOTIFY_ON_RUN_SUMMARY else '' }}>
@@ -1173,7 +688,7 @@
           <div class="form-check">
             <input class="form-check-input" type="checkbox" id="NOTIFY_ON_LOW_SPACE" name="NOTIFY_ON_LOW_SPACE" {{ 'checked' if config.NOTIFY_ON_LOW_SPACE else '' }}>
             <label class="form-check-label" for="NOTIFY_ON_LOW_SPACE">Low space warning</label>
-            <div class="form-text mt-0">Free space comes within the margin below of the Redline floor (sent once, re-arms after space recovers).</div>
+            <div class="form-text mt-0">Warns when free space gets within this many GB (below) of the Redline floor. Sent once, then again after space recovers.</div>
           </div>
           <div class="input-group mb-2 ms-4 config-form-width-xs">
             <input type="number" class="form-control" id="NOTIFY_LOW_SPACE_GB" name="NOTIFY_LOW_SPACE_GB"
@@ -1191,7 +706,7 @@
           <div class="form-check">
             <input class="form-check-input" type="checkbox" id="NOTIFY_ON_ERROR" name="NOTIFY_ON_ERROR" {{ 'checked' if config.NOTIFY_ON_ERROR else '' }}>
             <label class="form-check-label" for="NOTIFY_ON_ERROR">Failed runs and errors</label>
-            <div class="form-text mt-0">Alerts when a run stops dead, and lists what went wrong on runs that finished with errors.</div>
+            <div class="form-text mt-0">Alerts when a run fails, and lists what went wrong on runs that finished with errors.</div>
           </div>
 
           <div class="notify-subhead">Where to send</div>
@@ -1301,15 +816,15 @@
     <div id="s-adv" class="accordion-collapse collapse">
       <div class="accordion-body">
         <div class="section-reset-row mb-3">
-          <p class="section-desc mb-0">Rating data, display, logs, cache, and safety limits.</p>
-          <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-advanced" onclick="resetSectionToDefault('advanced')">Reset to Default</button>
+          <p class="section-desc mb-0">IMDb ratings, logs, appearance and troubleshooting — and the safety percentage, reset and force stop.</p>
+          <button type="button" class="btn btn-sm btn-outline-secondary section-reset-btn" id="btn-reset-advanced" onclick="resetSectionToDefault('advanced')">Reset to defaults</button>
         </div>
         <div id="advanced-run-lock-note" class="config-inline-warning mb-3" hidden></div>
         <div class="row g-4 align-items-stretch">
           <div class="col-lg-8">
             <div class="row g-3">
               <div class="col-12">
-                <h6 class="config-group-title">IMDb Ratings Data</h6>
+                <h6 class="config-group-title">IMDb ratings data</h6>
                 <label class="input-label" for="IMDB_RATINGS_URL">IMDb dataset URL</label>
                 <input type="url" class="form-control" id="IMDB_RATINGS_URL"
                        name="IMDB_RATINGS_URL" value="{{ config.IMDB_RATINGS_URL }}"
@@ -1329,7 +844,7 @@
                 <div class="input-label">Local ratings file</div>
                 <div class="form-text mb-2" id="imdb-download-status">Checking whether a local IMDb ratings file exists…</div>
                 <button type="button" class="btn btn-outline-secondary" id="btn-imdb-download" onclick="forceDownloadImdbRatings()" disabled>
-                  Download Latest IMDb Ratings
+                  Download latest IMDb ratings
                 </button>
               </div>
               <div class="col-12 config-group-head">
@@ -1426,7 +941,7 @@
             </div>
               <div class="config-card config-card-danger p-3">
               <label class="input-label" for="MAX_HEADROOM_PCT">
-                ⚠ Headroom safety cap (%)
+                ⚠ Safety percentage
               </label>
               <div id="max-headroom-pct-field">
                 {# 100 is the whole disk, which is the setting's off position: the
@@ -1434,13 +949,16 @@
                    zero. Past that the arithmetic stops meaning anything (a ceiling
                    above the disk can never trip; the cap floor goes negative), which
                    is why _maxHeadroomPctValid and shared.py both stop at 100. #}
-                <input type="number" class="form-control config-form-width-xs mt-1" id="MAX_HEADROOM_PCT"
-                       name="MAX_HEADROOM_PCT" value="{{ config.MAX_HEADROOM_PCT }}"
-                       min="1" max="100" aria-describedby="max-headroom-pct-error">
+                <div class="input-group config-form-width-xs mt-1">
+                  <input type="number" class="form-control" id="MAX_HEADROOM_PCT"
+                         name="MAX_HEADROOM_PCT" value="{{ config.MAX_HEADROOM_PCT }}"
+                         min="1" max="100" aria-describedby="max-headroom-pct-error">
+                  <span class="input-group-text">%</span>
+                </div>
                 <div class="field-error" id="max-headroom-pct-error">Enter a safety percentage greater than zero.</div>
               </div>
               <div class="form-text">
-                Blocks cleanup when Headroom is above this percent of total disk size. Simulate only warns.
+                Blocks Cleanup when the Headroom target (or the Redline floor, with Headroom off) is above this percent of the disk, or when the Library Size Cap would delete more than this percent of the library in one cleanup. Simulate only warns.
               </div>
               </div>
               <div class="config-card config-card-danger p-3">

@@ -86,7 +86,7 @@ const shape = await p.evaluate((sels) => {
 }, SECTIONS);
 check('the four groups are the four sections, in order',
       JSON.stringify(shape.names) === JSON.stringify(
-        ['Cleanup scope', 'Scoring & ordering', 'Eligibility filters', 'TV show scoring']),
+        ['Cleanup Scope', 'Scoring & Ordering', 'Eligibility Filters', 'TV Show Scoring']),
       shape.names);
 check('all four sections are in the DOM, with the settings folded into them',
       shape.ids.length === 4 && shape.settings >= 12, shape);
@@ -143,11 +143,11 @@ const marker = () => p.evaluate(() => {
 });
 const hidden = await marker();
 check('the closed section holding it is marked, so you know where to look',
-      hidden['Scoring & ordering'].flagged && hidden['Scoring & ordering'].shown
-      && /needs attention/.test(hidden['Scoring & ordering'].title), hidden);
+      hidden['Scoring & Ordering'].flagged && hidden['Scoring & Ordering'].shown
+      && /needs attention/.test(hidden['Scoring & Ordering'].title), hidden);
 check('...and only that one — a clean section carries no marker',
-      !hidden['Cleanup scope'].flagged && !hidden['Cleanup scope'].shown
-      && !hidden['Eligibility filters'].flagged && !hidden['TV show scoring'].flagged, hidden);
+      !hidden['Cleanup Scope'].flagged && !hidden['Cleanup Scope'].shown
+      && !hidden['Eligibility Filters'].flagged && !hidden['TV Show Scoring'].flagged, hidden);
 
 // Negative control for the marker: put the value back. If the mark did not
 // clear, it is painted on rather than tracking the field, and the check above
@@ -159,7 +159,7 @@ await p.waitForTimeout(300);
 await toggle('#fs-scoring', false);
 const cleared = await marker();
 check('fixing the field clears the marker (it tracks the field, not the event)',
-      !cleared['Scoring & ordering'].flagged && !cleared['Scoring & ordering'].shown, cleared);
+      !cleared['Scoring & Ordering'].flagged && !cleared['Scoring & Ordering'].shown, cleared);
 
 // ── A run locks the settings without locking the headers ───────────────────
 fakeRunActive = true;

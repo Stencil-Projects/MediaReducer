@@ -1,6 +1,11 @@
 # The Dockerfile COPYs only the runtime files explicitly, so this list just
 # keeps the build context small — nothing here could reach the image anyway.
-.git
+# .git stays out but for HEAD and the refs, which the Dockerfile's throwaway
+# build-info stage reads to name the commit it builds (build_info.py).
+.git/*
+!.git/HEAD
+!.git/refs
+!.git/packed-refs
 .gitignore
 .env
 .env.example
